@@ -5,7 +5,7 @@
 //! `cargo run -p icaro-ui --example launcher`.
 
 use icaro_ui::ajustes::{encabezado_ajustes, fila_ajuste, indice_ajustes};
-use icaro_ui::componentes::{self, Variante};
+use icaro_ui::componentes::{self, AvanceParte, Parte, Variante};
 use icaro_ui::capturas::{galeria, Captura};
 use icaro_ui::consola::{consola, Linea, MensajesConsola, Nivel};
 use icaro_ui::editor::{
@@ -23,11 +23,12 @@ use icaro_ui::instancias::{
 };
 use icaro_ui::laminas::{banda, Lamina};
 use icaro_ui::servidores::{red_privada, tarjeta_servidor, EstadoServidor, Servidor};
+use icaro_ui::scroll::desplazable;
 use icaro_ui::shell::{app_shell, Cuenta, DescargasActivas, MensajesShell, Seccion};
 use icaro_ui::superficies::{con_velo, dialogo, menu_contextual, toast, ElementoMenu};
 use icaro_ui::tema::{espacio, texto, Modo};
-use iced::widget::{column, container, row, scrollable, text, Space};
-use iced::{window, Alignment, Element, Length, Padding, Size, Task};
+use iced::widget::{column, container, row, text, Space};
+use iced::{window, Alignment, Element, Length, Padding, Point, Size, Task};
 
 struct App {
     modo: Modo,
@@ -53,6 +54,9 @@ struct App {
     busqueda_consola: String,
     filtro_capturas: usize,
     captura: Option<usize>,
+    cursor: Point,
+    menu_en: Point,
+    ventana: Size,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +97,8 @@ enum Mensaje {
     Maximizar,
     Cerrar,
     Nada,
+    Cursor(Point),
+    Tamano(Size),
 }
 
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
@@ -132,7 +138,12 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.seleccionada = i;
             app.menu = None;
         }
-        Mensaje::Menu(i) => app.menu = i,
+        Mensaje::Menu(i) => {
+            app.menu = i;
+            app.menu_en = app.cursor;
+        }
+        Mensaje::Cursor(c) => app.cursor = c,
+        Mensaje::Tamano(s) => app.ventana = s,
         Mensaje::PedirEliminar => {
             app.menu = None;
             app.dialogo = true;
@@ -175,12 +186,16 @@ fn instancias() -> Vec<DatosInstancia> {
         }
     };
     vec![
-        nueva("Supervivencia", "1.21.4 · Fabric", "Hace 2 h", "214 mods", Lamina::CaballeroYelmo, EstadoInstancia::Lista, ""),
+        nueva("Supervivencia", "1.21.4 · Fabric", "Hace 2 h", "214 mods", Lamina::CaballeroCastillo, EstadoInstancia::Lista, ""),
         nueva("Better MC", "1.20.1 · NeoForge", "Hace 6 días", "312 mods", Lamina::CastilloTorres, EstadoInstancia::Desactualizada, ""),
         nueva("Skyblock", "1.21.4 · Quilt", "Nueva", "48 mods", Lamina::IcaroDedalo, EstadoInstancia::Instalando(0.58), "Descargando librerías · 112 de 186"),
         nueva("Mundo de Javier", "1.21.1 · Fabric", "Ahora", "96 mods", Lamina::ProdigoAldea, EstadoInstancia::Jugando, "En ejecución · 00:42:17"),
         nueva("Vanilla", "1.21.4 · Vanilla", "Hace 1 mes", "Sin mods", Lamina::ValleRocas, EstadoInstancia::Error, "Falta Java 21"),
     ]
+}
+
+fn suave<'a>(_app: &'a App, cuerpo: impl Into<Element<'a, Mensaje>>) -> Element<'a, Mensaje> {
+    desplazable(cuerpo)
 }
 
 fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
@@ -239,7 +254,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
         .padding(Padding::from([espacio::S6, espacio::S12]));
     column![
         banda(p, Lamina::CaidaCielo, "Instancias", Some(5)),
-        scrollable(cuerpo).height(Length::Fill)
+        suave(app, cuerpo)
     ]
     .into()
 }
@@ -253,7 +268,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         mods: "214".into(),
         tamano: "2,4 GB".into(),
         memoria: "6.144 MB".into(),
-        portada: Lamina::CastilloTorres,
+        portada: Lamina::MelencoliaReloj,
     };
     let encabezado = encabezado_editor(
         p,
@@ -406,7 +421,7 @@ fn pantalla_capturas(app: &App) -> Element<'_, Mensaje> {
     ]
     .spacing(espacio::S6)
     .padding(Padding::from([espacio::S6, espacio::S12]));
-    scrollable(cuerpo).height(Length::Fill).into()
+    suave(app, cuerpo).into()
 }
 
 fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
@@ -442,7 +457,7 @@ fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
     .padding(Padding::from([espacio::S6, espacio::S12]));
     column![
         banda(p, Lamina::TivoliCiudad, "Servidores", Some(2)),
-        scrollable(cuerpo).height(Length::Fill)
+        suave(app, cuerpo)
     ]
     .into()
 }
@@ -493,7 +508,7 @@ fn pantalla_descargas(app: &App) -> Element<'_, Mensaje> {
     .padding(Padding::from([espacio::S6, espacio::S12]));
     column![
         banda(p, Lamina::MercurioFriso, "Descargas", None),
-        scrollable(cuerpo).height(Length::Fill)
+        suave(app, cuerpo)
     ]
     .into()
 }
@@ -539,22 +554,23 @@ fn pantalla_ajustes(app: &App) -> Element<'_, Mensaje> {
     .spacing(40.0)
     .padding(Padding::from([espacio::S6, espacio::S12]));
     column![
-        banda(p, Lamina::FarnesioCielo, "Ajustes", None),
-        scrollable(cuerpo).height(Length::Fill)
+        banda(p, Lamina::FaetonPaisaje, "Ajustes", None),
+        suave(app, cuerpo)
     ]
     .into()
 }
 
 fn pendiente(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
-    container(
-        text(format!("{} · pendiente", app.seccion.nombre().to_uppercase()))
-            .font(fuentes::DISPLAY)
-            .size(texto::DISPLAY.0)
-            .color(p.text_muted),
-    )
-    .center(Length::Fill)
-    .into()
+    let partes: &[Parte] = match app.seccion {
+        Seccion::Mods => &[
+            Parte { nombre: "Biblioteca de mods", avance: AvanceParte::Pendiente },
+            Parte { nombre: "Tienda de mods", avance: AvanceParte::Pendiente },
+            Parte { nombre: "Sincronizar mods", avance: AvanceParte::Pendiente },
+        ],
+        _ => &[Parte { nombre: "Pantalla", avance: AvanceParte::Pendiente }],
+    };
+    componentes::en_construccion(p, app.seccion.nombre(), partes)
 }
 
 fn vista(app: &App) -> Element<'_, Mensaje> {
@@ -619,7 +635,11 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ventana = iced::widget::stack![
             ventana,
             iced::widget::mouse_area(
-                container(menu).padding(Padding::from([140.0, 420.0])),
+                container(menu).padding(Padding {
+                    top: app.menu_en.y.clamp(0.0, (app.ventana.height - 280.0).max(0.0)),
+                    left: app.menu_en.x.clamp(0.0, (app.ventana.width - 268.0).max(0.0)),
+                    ..Padding::ZERO
+                }),
             )
             .on_press(Mensaje::Menu(None))
         ]
@@ -641,7 +661,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                     componentes::boton(p, "Cancelar", Variante::Secundario, Some(Mensaje::CerrarDialogo)),
                     componentes::boton(p, "Eliminar Supervivencia", Variante::Peligro, Some(Mensaje::Eliminar)),
                 ],
-                Some(Lamina::CaidaCielo),
+                Some(Lamina::FaetonMano),
                 620.0,
                 300.0,
                 Mensaje::CerrarDialogo,
@@ -661,13 +681,16 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ]
         .into();
     }
-    ventana
+    iced::widget::mouse_area(ventana)
+        .on_move(Mensaje::Cursor)
+        .into()
 }
 
 fn main() -> iced::Result {
     let mut app = iced::application("Ícaro", actualizar, vista)
         .theme(|_| iced::Theme::Dark)
         .default_font(fuentes::CUERPO)
+        .subscription(|_| window::resize_events().map(|(_, s)| Mensaje::Tamano(s)))
         .window(window::Settings {
             decorations: false,
             size: Size::new(1280.0, 800.0),
@@ -721,6 +744,9 @@ fn main() -> iced::Result {
                 busqueda_consola: String::new(),
                 filtro_capturas: 0,
                 captura: Some(1),
+                cursor: Point::ORIGIN,
+                menu_en: Point::new(420.0, 140.0),
+                ventana: Size::new(1280.0, 800.0),
             },
             Task::none(),
         )

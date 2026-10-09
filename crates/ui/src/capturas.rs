@@ -3,8 +3,8 @@
 
 //! Galería de capturas de pantalla.
 
-use iced::widget::{button, column, container, image, row, text, Space};
-use iced::{Alignment, ContentFit, Element, Length, Padding};
+use iced::widget::{button, column, container, row, text, Space};
+use iced::{Alignment, Element, Length, Padding};
 
 use crate::componentes::chip;
 use crate::estilo;
@@ -50,10 +50,7 @@ pub fn galeria<'a, M: Clone + 'a>(
                 button(
                     container(
                         column![
-                            image(c.imagen.imagen(p.modo).clone())
-                                .width(Length::Fill)
-                                .height(150)
-                                .content_fit(ContentFit::Cover),
+                            crate::laminas::grabado(p, c.imagen, Length::Fill, 150),
                             container(
                                 column![
                                     text(c.archivo.clone())

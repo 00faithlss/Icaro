@@ -3,8 +3,8 @@
 
 //! Tarjeta de instancia: portada, nombre, versión, estado y acciones.
 
-use iced::widget::{button, column, container, image, row, text, Space};
-use iced::{Alignment, Color, ContentFit, Element, Length, Padding};
+use iced::widget::{button, column, container, row, text, Space};
+use iced::{Alignment, Color, Element, Length, Padding};
 
 use crate::componentes::{insignia, progreso_bloques, Estado};
 use crate::estilo;
@@ -14,10 +14,10 @@ use crate::laminas::Lamina;
 use crate::tema::{borde, espacio, medida, texto, Paleta};
 
 /// Alto de la portada dentro de la tarjeta.
-pub const ALTO_PORTADA: f32 = 120.0;
+pub const ALTO_PORTADA: f32 = 170.0;
 
 /// Alto de la tarjeta; fijo para que toda la cuadrícula quede pareja.
-pub const ALTO_TARJETA: f32 = 300.0;
+pub const ALTO_TARJETA: f32 = 350.0;
 
 /// Estado visible de una instancia.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,26 +61,34 @@ fn boton_pie<'a, M: Clone + 'a>(
     color: Color,
     mensaje: Option<M>,
 ) -> Element<'a, M> {
-    let mut contenido = row![icono(glifo, Tam::Base, color)]
-        .spacing(espacio::S2)
-        .align_y(Alignment::Center);
-    if let Some(e) = etiqueta {
-        contenido = contenido.push(
-            text(e.to_uppercase())
-                .font(fuentes::ETIQUETA)
-                .size(texto::LABEL.0)
-                .color(color),
-        );
-    }
-    let b = button(container(contenido).center_y(Length::Fill))
-        .height(medida::CONTROL)
-        .padding(Padding::from([0.0, espacio::S3]))
-        .on_press_maybe(mensaje);
-    // Los botones del pie invertido llevan su propio color; el resto, el fantasma.
-    if color == p.text {
-        b.style(estilo::boton_fantasma(p)).into()
+    // Contenido y botón en un color dado; el invertido se muestra al pasar el
+    // puntero y cambia a la vez el relleno, el icono y la etiqueta.
+    let construir = |tinta: Color, relleno: Option<Color>| -> Element<'a, M> {
+        let mut contenido = row![icono(glifo, Tam::Base, tinta)]
+            .spacing(espacio::S2)
+            .align_y(Alignment::Center);
+        if let Some(e) = etiqueta.clone() {
+            contenido = contenido.push(
+                text(e.to_uppercase())
+                    .font(fuentes::ETIQUETA)
+                    .size(texto::LABEL.0)
+                    .color(tinta),
+            );
+        }
+        button(container(contenido).center_y(Length::Fill))
+            .height(medida::CONTROL)
+            .padding(Padding::from([0.0, espacio::S3]))
+            .on_press_maybe(mensaje.clone())
+            .style(estilo::boton_pie(tinta, relleno, mensaje.is_some()))
+            .into()
+    };
+    // El pie invertido y las acciones de error o deshabilitadas no se invierten.
+    let normal = construir(color, None);
+    if mensaje.is_some() && (color == p.text || color == p.bg) {
+        let (relleno, tinta) = if color == p.text { (p.text, p.bg) } else { (p.bg, p.text) };
+        iced::widget::hover(normal, construir(tinta, Some(relleno)))
     } else {
-        b.style(estilo::sin_estilo(color)).into()
+        normal
     }
 }
 
@@ -90,10 +98,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     datos: &DatosInstancia,
     acciones: AccionesTarjeta<M>,
 ) -> Element<'a, M> {
-    let portada = image(datos.portada.imagen(p.modo).clone())
-        .width(Length::Fill)
-        .height(ALTO_PORTADA)
-        .content_fit(ContentFit::Cover);
+    let portada = crate::laminas::grabado(p, datos.portada, Length::Fill, ALTO_PORTADA);
 
     let mut cuerpo = column![
         text(datos.nombre.clone())
@@ -154,7 +159,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
         EstadoInstancia::Instalando(avance) => (
             Icono::Espera,
             format!("Instalando {} %", (avance * 100.0).round()),
-            p.text_disabled,
+            p.text_muted,
             false,
         ),
         EstadoInstancia::Jugando => (Icono::Detener, "Detener".to_owned(), tinta, true),

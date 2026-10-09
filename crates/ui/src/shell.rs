@@ -166,7 +166,7 @@ fn barra_titulo<'a, M: Clone + 'a>(p: Paleta, m: &MensajesShell<'a, M>) -> Eleme
     let buscar = button(
         container(
             row![
-                icono(Icono::Buscar, Tam::Sm, p.text_muted),
+                icono(Icono::Buscar, Tam::Base, p.text_muted),
                 text("Buscar instancias, mods, servidores")
                     .font(fuentes::CUERPO)
                     .size(texto::BODY_SM.0)
@@ -208,14 +208,14 @@ fn barra_titulo<'a, M: Clone + 'a>(p: Paleta, m: &MensajesShell<'a, M>) -> Eleme
     let controles = row![
         boton_ventana(
             p,
-            icono(Icono::Menos, Tam::Sm, p.text).into(),
+            icono(Icono::Menos, Tam::Base, p.text).into(),
             false,
             m.minimizar.clone()
         ),
         boton_ventana(p, cuadrado.into(), false, m.maximizar.clone()),
         boton_ventana(
             p,
-            icono(Icono::Cerrar, Tam::Sm, p.text).into(),
+            icono(Icono::Cerrar, Tam::Base, p.text).into(),
             true,
             m.cerrar.clone()
         ),
@@ -345,7 +345,7 @@ fn bloque_cuenta<'a, M: 'a>(p: Paleta, c: &Cuenta<'a>) -> Element<'a, M> {
             ]
             .spacing(0),
             Space::with_width(Length::Fill),
-            icono(Icono::Flecha, Tam::Sm, p.text),
+            icono(Icono::Flecha, Tam::Base, p.text),
         ]
         .align_y(Alignment::Center),
     )

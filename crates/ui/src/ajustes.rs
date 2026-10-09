@@ -3,8 +3,8 @@
 
 //! Filas y encabezados de la pantalla Ajustes.
 
-use iced::widget::{button, column, container, image, row, text, Space};
-use iced::{Alignment, ContentFit, Element, Length, Padding};
+use iced::widget::{button, column, container, row, text, Space};
+use iced::{Alignment, Element, Length, Padding};
 
 use crate::estilo;
 use crate::fuentes;
@@ -62,10 +62,7 @@ pub fn encabezado_ajustes<'a, M: 'a>(p: Paleta, titulo: &str, lamina: Option<Lam
     if let Some(l) = lamina {
         fila = fila.push(
             container(
-                image(l.imagen(p.modo).clone())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .content_fit(ContentFit::Cover),
+                crate::laminas::grabado(p, l, Length::Fill, Length::Fill),
             )
             .width(120)
             .height(150)

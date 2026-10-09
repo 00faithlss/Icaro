@@ -19,3 +19,4 @@ pub mod servidores;
 pub mod shell;
 pub mod superficies;
 pub mod tema;
+pub mod scroll;

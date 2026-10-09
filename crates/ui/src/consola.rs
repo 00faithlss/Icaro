@@ -3,7 +3,7 @@
 
 //! Consola del juego: registro en vivo con filtros por nivel.
 
-use iced::widget::{column, container, row, scrollable, text, Space};
+use iced::widget::{column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::componentes::{boton, campo, chip, Variante};
@@ -106,7 +106,7 @@ pub fn consola<'a, M: Clone + 'a>(
     }
     column![
         barra,
-        container(scrollable(filas).height(Length::Fill))
+        container(crate::scroll::desplazable(filas))
             .padding(2)
             .height(Length::Fill)
             .style(move |_: &iced::Theme| iced::widget::container::Style {

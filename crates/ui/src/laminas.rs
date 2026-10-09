@@ -7,8 +7,8 @@
 use std::sync::OnceLock;
 
 use iced::widget::image::Handle;
-use iced::widget::{column, container, image, row, stack, text, Space};
-use iced::{Alignment, ContentFit, Element, Length, Padding};
+use iced::widget::{column, container, row, stack, text, Space};
+use iced::{Alignment, Element, Length, Padding};
 
 use crate::fuentes;
 use crate::tema::{espacio, texto, Modo, Paleta};
@@ -57,10 +57,14 @@ laminas! {
     ProdigoAldea => "prodigo-aldea",
     ValleRocas => "valle-rocas",
     DragonCabeza => "dragon-cabeza",
+    CaballeroCastillo => "caballero-castillo",
+    FaetonMano => "faeton-mano",
+    PiranesiRueda => "piranesi-rueda",
+    FaetonPaisaje => "faeton-paisaje",
 }
 
 /// Alto de la banda de sección.
-pub const ALTO_BANDA: f32 = 170.0;
+pub const ALTO_BANDA: f32 = 200.0;
 
 /// Banda: lámina a sangre con el título monumental sobre un bloque de fondo
 /// que corta la imagen.
@@ -83,10 +87,7 @@ pub fn banda_con<'a, M: 'a>(
     alto: f32,
     tam_titulo: (f32, f32),
 ) -> Element<'a, M> {
-    let grabado = image(lamina.imagen(p.modo).clone())
-        .width(Length::Fill)
-        .height(alto)
-        .content_fit(ContentFit::Cover);
+    let grabado = self::grabado(p, lamina, Length::Fill, alto);
     let mut rotulo = row![text(titulo.to_uppercase())
         .font(fuentes::DISPLAY)
         .size(tam_titulo.0)
@@ -116,4 +117,89 @@ pub fn banda_con<'a, M: 'a>(
     ]
     .height(alto);
     stack![grabado, capa].into()
+}
+
+
+/// Grabado que llena su caja recortando el sobrante, centrado y sin
+/// deformarlo (como `ContentFit::Cover`).
+///
+/// El `Image` de iced con `Cover` abre una capa de recorte con sus propios
+/// límites, que ignora el recorte del `scrollable`, y la imagen se sale por
+/// arriba al desplazar. Este widget dibuja la imagen en una capa limitada a
+/// la parte visible.
+pub fn grabado<'a, M: 'a>(
+    p: Paleta,
+    lamina: Lamina,
+    ancho: impl Into<Length>,
+    alto: impl Into<Length>,
+) -> Element<'a, M> {
+    Element::new(Grabado {
+        handle: lamina.imagen(p.modo).clone(),
+        ancho: ancho.into(),
+        alto: alto.into(),
+    })
+}
+
+struct Grabado {
+    handle: Handle,
+    ancho: Length,
+    alto: Length,
+}
+
+impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
+    fn size(&self) -> iced::Size<Length> {
+        iced::Size::new(self.ancho, self.alto)
+    }
+
+    fn layout(
+        &self,
+        _arbol: &mut iced::advanced::widget::Tree,
+        _renderer: &iced::Renderer,
+        limites: &iced::advanced::layout::Limits,
+    ) -> iced::advanced::layout::Node {
+        iced::advanced::layout::atomic(limites, self.ancho, self.alto)
+    }
+
+    fn draw(
+        &self,
+        _arbol: &iced::advanced::widget::Tree,
+        renderer: &mut iced::Renderer,
+        _tema: &iced::Theme,
+        _estilo: &iced::advanced::renderer::Style,
+        layout: iced::advanced::Layout<'_>,
+        _cursor: iced::advanced::mouse::Cursor,
+        visible: &iced::Rectangle,
+    ) {
+        use iced::advanced::image::Renderer as _;
+        use iced::advanced::Renderer as _;
+
+        let caja = layout.bounds();
+        let Some(recorte) = caja.intersection(visible) else {
+            return;
+        };
+        let tam = renderer.measure_image(&self.handle);
+        if tam.width == 0 || tam.height == 0 || caja.width <= 0.0 || caja.height <= 0.0 {
+            return;
+        }
+        let (iw, ih) = (tam.width as f32, tam.height as f32);
+        let escala = (caja.width / iw).max(caja.height / ih);
+        let dibujo = iced::Rectangle {
+            x: caja.center_x() - iw * escala / 2.0,
+            y: caja.center_y() - ih * escala / 2.0,
+            width: iw * escala,
+            height: ih * escala,
+        };
+        renderer.with_layer(recorte, |renderer| {
+            renderer.draw_image(
+                iced::advanced::image::Image {
+                    handle: self.handle.clone(),
+                    filter_method: iced::advanced::image::FilterMethod::Linear,
+                    rotation: iced::Radians(0.0),
+                    opacity: 1.0,
+                    snap: true,
+                },
+                dibujo,
+            );
+        });
+    }
 }

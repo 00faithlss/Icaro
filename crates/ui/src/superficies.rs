@@ -4,9 +4,9 @@
 //! Superficies que flotan: diálogo con velo, menú contextual, toast y banner.
 
 use iced::widget::{
-    button, center, column, container, image, opaque, row, stack, text, Space,
+    button, center, column, container, opaque, row, stack, text, Space,
 };
-use iced::{Alignment, Background, Border, Color, ContentFit, Element, Length, Padding, Theme};
+use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Theme};
 
 use crate::componentes::Estado;
 use crate::estilo;
@@ -64,10 +64,7 @@ pub fn dialogo<'a, M: Clone + 'a>(
 
     let contenido: Element<'a, M> = match detalle {
         Some(l) => row![
-            image(l.imagen(p.modo).clone())
-                .width(170)
-                .height(Length::Fill)
-                .content_fit(ContentFit::Cover),
+            crate::laminas::grabado(p, l, 170, Length::Fill),
             container(Space::new(Length::Fixed(borde::MEDIO), Length::Fill))
                 .style(estilo::bloque(p.text)),
             columna,
@@ -125,53 +122,48 @@ pub fn menu_contextual<'a, M: Clone + 'a>(p: Paleta, elementos: Vec<ElementoMenu
                 mensaje,
             } => {
                 let tinta = if peligro { p.error } else { p.text };
-                let mut fila = row![
-                    icono(glifo, Tam::Base, tinta),
-                    text(etiqueta)
-                        .size(texto::BODY.0)
-                        .color(tinta)
-                        .width(Length::Fill),
-                ]
-                .spacing(espacio::S3)
-                .align_y(Alignment::Center);
-                if let Some(a) = atajo {
-                    fila = fila.push(
-                        text(a)
-                            .font(fuentes::MONO)
-                            .size(texto::MONO_SM.0)
-                            .color(p.text_muted),
-                    );
-                }
-                col = col.push(
+                // La fila normal y su versión invertida (relleno de tinta,
+                // texto y atajo en el color de fondo) al pasar el puntero.
+                let construir = |tinta: Color, atajo_c: Color, relleno: Option<Color>| -> Element<'a, M> {
+                    let mut fila = row![
+                        icono(glifo, Tam::Base, tinta),
+                        text(etiqueta)
+                            .size(texto::BODY.0)
+                            .color(tinta)
+                            .width(Length::Fill),
+                    ]
+                    .spacing(espacio::S3)
+                    .align_y(Alignment::Center);
+                    if let Some(a) = atajo {
+                        fila = fila.push(
+                            text(a)
+                                .font(fuentes::MONO)
+                                .size(texto::MONO_SM.0)
+                                .color(atajo_c),
+                        );
+                    }
                     button(fila)
                         .width(Length::Fill)
                         .height(34)
                         .padding(Padding::from([0.0, espacio::S3]))
-                        .on_press(mensaje)
-                        .style(move |_: &Theme, estado| {
-                            let encima = matches!(
-                                estado,
-                                button::Status::Hovered | button::Status::Pressed
-                            );
-                            button::Style {
-                                background: encima.then_some(Background::Color(if peligro {
-                                    p.error
-                                } else {
-                                    p.text
-                                })),
-                                text_color: if encima {
-                                    if peligro { p.on_error } else { p.bg }
-                                } else {
-                                    tinta
-                                },
-                                ..Default::default()
-                            }
-                        }),
-                );
+                        .on_press(mensaje.clone())
+                        .style(move |_: &Theme, _| button::Style {
+                            background: relleno.map(Background::Color),
+                            text_color: tinta,
+                            ..Default::default()
+                        })
+                        .into()
+                };
+                let (relleno, sobre) = if peligro { (p.error, p.on_error) } else { (p.text, p.bg) };
+                col = col.push(iced::widget::hover(
+                    construir(tinta, p.text_muted, None),
+                    construir(sobre, sobre, Some(relleno)),
+                ));
             }
         }
     }
     container(col)
+        .padding(borde::MEDIO)
         .width(260)
         .style(estilo::flotante(p))
         .into()

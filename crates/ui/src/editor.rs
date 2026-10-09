@@ -5,7 +5,7 @@
 //! pestañas General, Java, Recursos, Mundos y Archivos. La pestaña Mods
 //! queda fuera hasta que se ordene su desarrollo.
 
-use iced::widget::{column, container, row, scrollable, text, Space};
+use iced::widget::{column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::componentes::{
@@ -119,9 +119,7 @@ pub fn encabezado_editor<'a, M: Clone + 'a>(
 }
 
 fn pagina<'a, M: 'a>(contenido: Element<'a, M>) -> Element<'a, M> {
-    scrollable(container(contenido).padding(Padding::from([espacio::S6, espacio::S12])))
-        .height(Length::Fill)
-        .into()
+    crate::scroll::desplazable(container(contenido).padding(Padding::from([espacio::S6, espacio::S12])))
 }
 
 fn campo_rotulado<'a, M: 'a>(p: Paleta, nombre: &str, control: Element<'a, M>) -> Element<'a, M> {
@@ -585,7 +583,7 @@ pub fn pestana_archivos<'a, M: Clone + 'a>(
         column![
             barra,
             row![
-                container(scrollable(nodos))
+                container(crate::scroll::desplazable(nodos))
                     .width(Length::FillPortion(2))
                     .height(360)
                     .style(estilo::marco(p)),

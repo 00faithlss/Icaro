@@ -440,7 +440,7 @@ pub fn senal<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
 pub fn contador<'a, M: Clone + 'a>(p: Paleta, valor: i32, restar: M, sumar: M) -> Element<'a, M> {
     let paso = |glifo: crate::iconos::Icono, m: M| {
         button(
-            container(crate::iconos::icono(glifo, crate::iconos::Tam::Sm, p.text))
+            container(crate::iconos::icono(glifo, crate::iconos::Tam::Base, p.text))
                 .center(Length::Fill),
         )
         .width(medida::CONTROL_SM)
@@ -632,10 +632,7 @@ pub fn estado_vacio<'a, M: 'a>(
     container(
         row![
             container(
-                iced::widget::image(lamina.imagen(p.modo).clone())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .content_fit(iced::ContentFit::Cover),
+                crate::laminas::grabado(p, lamina, Length::Fill, Length::Fill),
             )
             .width(Length::FillPortion(1))
             .height(300)
@@ -657,6 +654,75 @@ pub fn estado_vacio<'a, M: 'a>(
         .align_y(iced::Alignment::Center),
     )
     .padding(espacio::S6)
+    .width(Length::Fill)
+    .into()
+}
+
+/// Avance de una parte de una sección en construcción.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvanceParte {
+    Hecho,
+    EnCurso,
+    Pendiente,
+}
+
+/// Parte del plan de una sección en construcción.
+#[derive(Debug, Clone, Copy)]
+pub struct Parte {
+    pub nombre: &'static str,
+    pub avance: AvanceParte,
+}
+
+/// Pantalla provisional de una sección que aún no existe: la rueda de
+/// bloques a medio levantar, el nombre de la sección y el plan de partes.
+/// Solo para la maqueta; se retira cuando el núcleo esté completo.
+pub fn en_construccion<'a, M: 'a>(
+    p: Paleta,
+    seccion: &str,
+    partes: &[Parte],
+) -> Element<'a, M> {
+    let mut lista = column![].spacing(espacio::S2);
+    for parte in partes {
+        let (estado, palabra) = match parte.avance {
+            AvanceParte::Hecho => (Estado::Exito, "Hecho"),
+            AvanceParte::EnCurso => (Estado::Aviso, "En curso"),
+            AvanceParte::Pendiente => (Estado::Info, "Pendiente"),
+        };
+        lista = lista.push(
+            row![
+                text(parte.nombre).size(texto::BODY.0).color(p.text),
+                Space::with_width(Length::Fill),
+                insignia(p, estado, palabra),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+    }
+    container(
+        row![
+            container(
+                crate::laminas::grabado(p, crate::laminas::Lamina::PiranesiRueda, Length::Fill, Length::Fill),
+            )
+            .width(300)
+            .height(400)
+            .style(estilo::marco(p)),
+            column![
+                text("EN CONSTRUCCIÓN")
+                    .font(fuentes::DISPLAY)
+                    .size(texto::DISPLAY.0)
+                    .color(p.text),
+                text(format!("{} todavía no existe en esta maqueta.", seccion))
+                    .size(texto::BODY.0)
+                    .color(p.text_muted),
+                lista,
+            ]
+            .spacing(espacio::S4)
+            .width(Length::FillPortion(1)),
+        ]
+        .spacing(espacio::S12)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(espacio::S12)
+    .center_y(Length::Fill)
     .width(Length::Fill)
     .into()
 }

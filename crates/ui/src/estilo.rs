@@ -181,7 +181,7 @@ pub fn chip(p: Paleta, activo: bool) -> impl Fn(&Theme, button::Status) -> butto
         button::Style {
             background: fondo.map(Background::Color),
             text_color: tinta,
-            border: contorno(borde::FINO, p.border_strong),
+            border: contorno(borde::MEDIO, p.border_strong),
             ..Default::default()
         }
     }
@@ -335,6 +335,24 @@ pub fn tarjeta_marco(p: Paleta, ancho: f32, color: Color) -> impl Fn(&Theme) -> 
 pub fn bloque(color: Color) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         background: Some(Background::Color(color)),
+        ..Default::default()
+    }
+}
+
+/// Botón del pie de una tarjeta: contorno de tinta, con relleno opcional
+/// (la versión invertida que se muestra al pasar el puntero).
+pub fn boton_pie(
+    tinta: Color,
+    relleno: Option<Color>,
+    activo: bool,
+) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, _| button::Style {
+        background: relleno.map(Background::Color),
+        text_color: tinta,
+        border: contorno(
+            if activo { borde::MEDIO } else { 0.0 },
+            relleno.unwrap_or(tinta),
+        ),
         ..Default::default()
     }
 }
