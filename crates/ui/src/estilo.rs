@@ -166,3 +166,157 @@ pub fn insignia(fondo: Color, tinta: Color) -> impl Fn(&Theme) -> container::Sty
         ..Default::default()
     }
 }
+
+/// Chip filtrable: contorno fino; activo invierte a bloque de tinta.
+pub fn chip(p: Paleta, activo: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, estado| {
+        let sobre = matches!(estado, button::Status::Hovered | button::Status::Pressed);
+        let (fondo, tinta) = if activo {
+            (Some(p.text), p.bg)
+        } else if sobre {
+            (Some(p.surface_hover), p.text)
+        } else {
+            (None, p.text)
+        };
+        button::Style {
+            background: fondo.map(Background::Color),
+            text_color: tinta,
+            border: contorno(borde::FINO, p.border_strong),
+            ..Default::default()
+        }
+    }
+}
+
+/// Opción de un grupo segmentado: sin contorno propio, la activa es un bloque.
+pub fn segmento(p: Paleta, activo: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, estado| {
+        let sobre = matches!(estado, button::Status::Hovered | button::Status::Pressed);
+        let (fondo, tinta) = if activo {
+            (Some(p.text), p.bg)
+        } else if sobre {
+            (Some(p.surface_hover), p.text)
+        } else {
+            (None, p.text)
+        };
+        button::Style {
+            background: fondo.map(Background::Color),
+            text_color: tinta,
+            border: Border::default(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Marco del grupo segmentado.
+pub fn marco(p: Paleta) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        border: contorno(borde::MEDIO, p.text),
+        ..Default::default()
+    }
+}
+
+/// Casilla cuadrada: pozo apagado, bloque de acento encendido.
+pub fn casilla(
+    p: Paleta,
+) -> impl Fn(&Theme, iced::widget::checkbox::Status) -> iced::widget::checkbox::Style {
+    use iced::widget::checkbox::Status;
+    move |_, estado| {
+        let (marcada, sobre, desactivada) = match estado {
+            Status::Active { is_checked } => (is_checked, false, false),
+            Status::Hovered { is_checked } => (is_checked, true, false),
+            Status::Disabled { is_checked } => (is_checked, false, true),
+        };
+        let color = if desactivada {
+            p.border
+        } else if sobre {
+            p.text
+        } else {
+            p.border_strong
+        };
+        iced::widget::checkbox::Style {
+            background: Background::Color(if marcada { p.accent } else { p.surface_sunken }),
+            icon_color: p.on_accent,
+            border: contorno(borde::MEDIO, if marcada { p.accent } else { color }),
+            text_color: Some(if desactivada { p.text_disabled } else { p.text }),
+        }
+    }
+}
+
+/// Selector desplegable: disparador como un campo.
+pub fn selector(
+    p: Paleta,
+) -> impl Fn(&Theme, iced::widget::pick_list::Status) -> iced::widget::pick_list::Style {
+    use iced::widget::pick_list::Status;
+    move |_, estado| {
+        let color = match estado {
+            Status::Active => p.border_strong,
+            Status::Hovered => p.text_muted,
+            Status::Opened => p.text,
+        };
+        iced::widget::pick_list::Style {
+            text_color: p.text,
+            placeholder_color: p.text_muted,
+            handle_color: p.text,
+            background: Background::Color(p.surface_sunken),
+            border: contorno(borde::MEDIO, color),
+        }
+    }
+}
+
+/// Lista flotante del selector; la opción elegida invierte la tinta.
+pub fn menu_selector(p: Paleta) -> impl Fn(&Theme) -> iced::overlay::menu::Style {
+    move |_| iced::overlay::menu::Style {
+        background: Background::Color(p.surface_raised),
+        border: contorno(borde::MEDIO, p.text),
+        text_color: p.text,
+        selected_text_color: p.bg,
+        selected_background: Background::Color(p.text),
+    }
+}
+
+/// Barra de progreso continua, sin esquinas.
+pub fn progreso(p: Paleta) -> impl Fn(&Theme) -> iced::widget::progress_bar::Style {
+    move |_| iced::widget::progress_bar::Style {
+        background: Background::Color(p.surface_sunken),
+        bar: Background::Color(p.text),
+        border: contorno(borde::FINO, p.border_strong),
+    }
+}
+
+/// Bloque de la pista del interruptor.
+pub fn pista(p: Paleta, encendido: bool, sobre: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(if encendido {
+            p.accent
+        } else {
+            p.surface_sunken
+        })),
+        border: contorno(
+            borde::MEDIO,
+            if encendido {
+                p.accent
+            } else if sobre {
+                p.text
+            } else {
+                p.border_strong
+            },
+        ),
+        ..Default::default()
+    }
+}
+
+/// Pieza cuadrada que se desplaza dentro de la pista.
+pub fn perilla(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(color)),
+        ..Default::default()
+    }
+}
+
+/// Botón sin relleno para envolver controles propios (interruptor).
+pub fn sin_estilo(texto: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, _| button::Style {
+        text_color: texto,
+        ..Default::default()
+    }
+}

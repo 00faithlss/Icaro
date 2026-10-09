@@ -13,12 +13,22 @@ use iced::{Element, Length, Theme};
 struct Galeria {
     modo: Modo,
     nombre: String,
+    filtro: usize,
+    vista: usize,
+    marcada: bool,
+    encendido: bool,
+    loader: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
 enum Mensaje {
     CambiarTema,
     Nombre(String),
+    Filtro(usize),
+    Vista(usize),
+    Marcar(bool),
+    Encender,
+    Loader(&'static str),
     Nada,
 }
 
@@ -31,6 +41,11 @@ fn actualizar(g: &mut Galeria, m: Mensaje) {
             }
         }
         Mensaje::Nombre(n) => g.nombre = n,
+        Mensaje::Filtro(i) => g.filtro = i,
+        Mensaje::Vista(i) => g.vista = i,
+        Mensaje::Marcar(m) => g.marcada = m,
+        Mensaje::Encender => g.encendido = !g.encendido,
+        Mensaje::Loader(l) => g.loader = Some(l),
         Mensaje::Nada => {}
     }
 }
@@ -108,6 +123,30 @@ fn vista(g: &Galeria) -> Element<'_, Mensaje> {
             Mensaje::Nombre
         ))
         .width(medida::PANEL_LATERAL / 2.0),
+        componentes::etiqueta(p, "Filtros"),
+        row![
+            componentes::chip(p, "Todas", g.filtro == 0, Mensaje::Filtro(0)),
+            componentes::chip(p, "Fabric", g.filtro == 1, Mensaje::Filtro(1)),
+            componentes::chip(p, "NeoForge", g.filtro == 2, Mensaje::Filtro(2)),
+            componentes::segmentado(p, &["Cuadrícula", "Lista"], g.vista, Mensaje::Vista),
+        ]
+        .spacing(espacio::S2),
+        componentes::etiqueta(p, "Controles"),
+        row![
+            componentes::casilla(p, "Abrir consola al jugar", g.marcada, Mensaje::Marcar),
+            componentes::interruptor(p, g.encendido, Mensaje::Encender),
+            componentes::selector(
+                p,
+                vec!["Fabric", "NeoForge", "Quilt"],
+                g.loader,
+                Mensaje::Loader
+            ),
+        ]
+        .spacing(espacio::S6)
+        .align_y(iced::Alignment::Center),
+        componentes::etiqueta(p, "Progreso"),
+        container(componentes::progreso(p, 0.58)).width(320),
+        container(componentes::progreso_bloques(p, 16, 9)).width(320),
         componentes::etiqueta(p, "Tarjeta"),
         container(ficha).width(320),
     ]
