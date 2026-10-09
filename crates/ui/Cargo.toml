@@ -1,0 +1,9 @@
+[package]
+name = "icaro-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "image", "canvas", "advanced", "svg", "tokio"] }
