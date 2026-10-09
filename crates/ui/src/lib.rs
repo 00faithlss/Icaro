@@ -3,5 +3,7 @@
 
 //! Sistema de diseño de Ícaro: tema, tipografía y componentes de interfaz.
 
+pub mod componentes;
+pub mod estilo;
 pub mod fuentes;
 pub mod tema;
