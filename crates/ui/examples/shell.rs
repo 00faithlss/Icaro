@@ -4,17 +4,24 @@
 //! Estructura de la ventana. Ejecutar con `cargo run -p icaro-ui --example shell`.
 
 use icaro_ui::componentes::{self, Variante};
+use icaro_ui::estilo;
 use icaro_ui::fuentes;
+use icaro_ui::movimiento::{losa, Preferencia};
 use icaro_ui::shell::{app_shell, Cuenta, DescargasActivas, MensajesShell, Seccion};
+use icaro_ui::tema::duracion;
 use icaro_ui::tema::{espacio, texto, Modo};
-use iced::widget::{column, text};
-use iced::{window, Element, Size, Task};
+use iced::widget::{column, container, stack, text};
+use iced::{window, Element, Length, Padding, Size, Subscription, Task};
+use std::time::Instant;
 
 #[derive(Default)]
 struct App {
     modo: Modo,
     seccion: Option<Seccion>,
     colapsada: bool,
+    /// Instante en que apareció el aviso, si está a la vista.
+    aviso: Option<Instant>,
+    ahora: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +29,8 @@ enum Mensaje {
     Ir(Seccion),
     CambiarTema,
     Colapsar,
+    Aviso,
+    Cuadro(Instant),
     Arrastrar,
     Minimizar,
     Maximizar,
@@ -39,6 +48,12 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             }
         }
         Mensaje::Colapsar => app.colapsada = !app.colapsada,
+        Mensaje::Aviso => {
+            let ahora = Instant::now();
+            app.ahora = Some(ahora);
+            app.aviso = Some(ahora);
+        }
+        Mensaje::Cuadro(ahora) => app.ahora = Some(ahora),
         Mensaje::Arrastrar => return window::get_oldest().and_then(window::drag),
         Mensaje::Minimizar => {
             return window::get_oldest().and_then(|id| window::minimize(id, true))
@@ -48,6 +63,20 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Nada => {}
     }
     Task::none()
+}
+
+fn suscripcion(app: &App) -> Subscription<Mensaje> {
+    match (app.aviso, app.ahora) {
+        (Some(inicio), Some(ahora)) if progreso(inicio, ahora) < 1.0 => {
+            window::frames().map(Mensaje::Cuadro)
+        }
+        _ => Subscription::none(),
+    }
+}
+
+fn progreso(inicio: Instant, ahora: Instant) -> f32 {
+    let total = Preferencia::default().duracion(duracion::LOSA);
+    (ahora.saturating_duration_since(inicio).as_secs_f32() / total.as_secs_f32()).min(1.0)
 }
 
 fn vista(app: &App) -> Element<'_, Mensaje> {
@@ -70,11 +99,17 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             Variante::Secundario,
             Some(Mensaje::Colapsar)
         ),
+        componentes::boton(
+            p,
+            "Mostrar aviso",
+            Variante::Secundario,
+            Some(Mensaje::Aviso)
+        ),
     ]
     .spacing(espacio::S4)
     .padding(espacio::S8);
     let pie = componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Nada));
-    app_shell(
+    let ventana = app_shell(
         p,
         activa,
         app.colapsada,
@@ -97,11 +132,33 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             maximizar: Mensaje::Maximizar,
             cerrar: Mensaje::Cerrar,
         },
+    );
+    let Some(inicio) = app.aviso else {
+        return ventana;
+    };
+    let t = progreso(inicio, app.ahora.unwrap_or(inicio));
+    // La losa cae desde arriba: el desplazamiento se resta del margen superior.
+    let arriba = 48.0 - losa(t);
+    let tarjeta = container(
+        text("Instancia exportada")
+            .font(fuentes::CUERPO_NEGRITA)
+            .size(texto::BODY.0),
     )
+    .padding(espacio::S4)
+    .style(estilo::flotante(p));
+    stack![
+        ventana,
+        container(tarjeta)
+            .width(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Center)
+            .padding(Padding::default().top(arriba))
+    ]
+    .into()
 }
 
 fn main() -> iced::Result {
     let mut app = iced::application("Ícaro", actualizar, vista)
+        .subscription(suscripcion)
         .theme(|_| iced::Theme::Dark)
         .default_font(fuentes::CUERPO)
         .window(window::Settings {
