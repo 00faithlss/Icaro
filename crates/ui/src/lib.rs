@@ -6,4 +6,6 @@
 pub mod componentes;
 pub mod estilo;
 pub mod fuentes;
+pub mod iconos;
+pub mod shell;
 pub mod tema;
