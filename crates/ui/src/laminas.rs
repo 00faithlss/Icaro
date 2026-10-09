@@ -70,15 +70,28 @@ pub fn banda<'a, M: 'a>(
     titulo: &str,
     conteo: Option<usize>,
 ) -> Element<'a, M> {
+    banda_con(p, lamina, titulo, conteo, ALTO_BANDA, texto::DISPLAY_XL)
+}
+
+/// Banda con alto y tamaño de título propios, como la del editor de
+/// instancia (150 px con título `display`).
+pub fn banda_con<'a, M: 'a>(
+    p: Paleta,
+    lamina: Lamina,
+    titulo: &str,
+    conteo: Option<usize>,
+    alto: f32,
+    tam_titulo: (f32, f32),
+) -> Element<'a, M> {
     let grabado = image(lamina.imagen(p.modo).clone())
         .width(Length::Fill)
-        .height(ALTO_BANDA)
+        .height(alto)
         .content_fit(ContentFit::Cover);
     let mut rotulo = row![text(titulo.to_uppercase())
         .font(fuentes::DISPLAY)
-        .size(texto::DISPLAY_XL.0)
+        .size(tam_titulo.0)
         .line_height(iced::widget::text::LineHeight::Absolute(
-            texto::DISPLAY_XL.1.into()
+            tam_titulo.1.into()
         ))
         .color(p.text)]
     .spacing(espacio::S4)
@@ -101,6 +114,6 @@ pub fn banda<'a, M: 'a>(
         Space::with_height(Length::Fill),
         row![Space::with_width(espacio::S12), bloque]
     ]
-    .height(ALTO_BANDA);
+    .height(alto);
     stack![grabado, capa].into()
 }

@@ -320,3 +320,21 @@ pub fn sin_estilo(texto: Color) -> impl Fn(&Theme, button::Status) -> button::St
         ..Default::default()
     }
 }
+
+/// Tarjeta con contorno explícito: el grosor y el tono dicen el estado
+/// (2 px seleccionada, 3 px en ejecución, tono de error).
+pub fn tarjeta_marco(p: Paleta, ancho: f32, color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.surface)),
+        border: contorno(ancho, color),
+        ..Default::default()
+    }
+}
+
+/// Bloque de color liso, sin contorno.
+pub fn bloque(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(color)),
+        ..Default::default()
+    }
+}

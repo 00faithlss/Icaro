@@ -15,6 +15,7 @@ struct Galeria {
     nombre: String,
     filtro: usize,
     vista: usize,
+    pestana: usize,
     marcada: bool,
     encendido: bool,
     loader: Option<&'static str>,
@@ -26,6 +27,7 @@ enum Mensaje {
     Nombre(String),
     Filtro(usize),
     Vista(usize),
+    Pestana(usize),
     Marcar(bool),
     Encender,
     Loader(&'static str),
@@ -43,6 +45,7 @@ fn actualizar(g: &mut Galeria, m: Mensaje) {
         Mensaje::Nombre(n) => g.nombre = n,
         Mensaje::Filtro(i) => g.filtro = i,
         Mensaje::Vista(i) => g.vista = i,
+        Mensaje::Pestana(i) => g.pestana = i,
         Mensaje::Marcar(m) => g.marcada = m,
         Mensaje::Encender => g.encendido = !g.encendido,
         Mensaje::Loader(l) => g.loader = Some(l),
@@ -131,6 +134,17 @@ fn vista(g: &Galeria) -> Element<'_, Mensaje> {
             componentes::segmentado(p, &["Cuadrícula", "Lista"], g.vista, Mensaje::Vista),
         ]
         .spacing(espacio::S2),
+        componentes::etiqueta(p, "Navegación"),
+        componentes::migas(p, &["Instancias", "Supervivencia", "Mods"], |_| Mensaje::Nada),
+        componentes::pestanas(
+            p,
+            &[("General", None), ("Java", None), ("Mods", Some(214)), ("Archivos", None)],
+            g.pestana,
+            Mensaje::Pestana
+        ),
+        componentes::etiqueta(p, "Avisos"),
+        componentes::aviso(p, Estado::Aviso, "Esta instancia usa una versión que ya no recibe actualizaciones."),
+        componentes::aviso(p, Estado::Error, "No se pudo verificar el archivo descargado."),
         componentes::etiqueta(p, "Controles"),
         row![
             componentes::casilla(p, "Abrir consola al jugar", g.marcada, Mensaje::Marcar),

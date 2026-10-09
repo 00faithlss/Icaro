@@ -16,6 +16,7 @@ Ejemplos de la interfaz:
 ```
 cargo run -p icaro-ui --example galeria
 cargo run -p icaro-ui --example shell
+cargo run -p icaro-ui --example launcher
 ```
 
 ## Estructura

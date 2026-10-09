@@ -41,6 +41,19 @@ iconos! {
     Editar => "pencil",
     Subir => "upload",
     Acciones => "more-vertical",
+    Actualizar => "reload",
+    Aviso => "warning-diamond",
+    Check => "check",
+    Detener => "stop",
+    Espera => "hourglass",
+    Arrastrar => "drag-and-drop",
+    Alerta => "square-alert",
+    Papelera => "trash",
+    Copiar => "copy",
+    Externo => "external-link",
+    Pausa => "pause",
+    Candado => "lock",
+    Info => "circle-info",
 }
 
 /// Tamaños permitidos, múltiplos del píxel de arte.
