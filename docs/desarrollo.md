@@ -11,6 +11,13 @@ cargo run -p icaro-cli
 cargo test --workspace
 ```
 
+Ejemplos de la interfaz:
+
+```
+cargo run -p icaro-ui --example galeria
+cargo run -p icaro-ui --example shell
+```
+
 ## Estructura
 
 | Carpeta | Contenido |
