@@ -421,8 +421,7 @@ pub fn app_shell<'a, M: Clone + 'a>(
     let lateral = barra_lateral(p, activa, colapsada, &cuenta, descargas.as_ref(), &m);
     let mut derecha = column![container(contenido)
         .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding::from([0.0, espacio::S12]))];
+        .height(Length::Fill)];
     if let Some(pie) = pie {
         derecha = derecha.push(regla(p.text, borde::MEDIO)).push(pie);
     }

@@ -7,6 +7,7 @@ pub mod componentes;
 pub mod estilo;
 pub mod fuentes;
 pub mod iconos;
+pub mod laminas;
 pub mod movimiento;
 pub mod shell;
 pub mod tema;

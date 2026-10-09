@@ -6,6 +6,7 @@
 use icaro_ui::componentes::{self, Variante};
 use icaro_ui::estilo;
 use icaro_ui::fuentes;
+use icaro_ui::laminas::{banda, Lamina};
 use icaro_ui::movimiento::{losa, Preferencia};
 use icaro_ui::shell::{app_shell, Cuenta, DescargasActivas, MensajesShell, Seccion};
 use icaro_ui::tema::duracion;
@@ -82,11 +83,7 @@ fn progreso(inicio: Instant, ahora: Instant) -> f32 {
 fn vista(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
     let activa = app.seccion.unwrap_or(Seccion::Instancias);
-    let contenido = column![
-        text(activa.nombre().to_uppercase())
-            .font(fuentes::DISPLAY)
-            .size(texto::DISPLAY_XL.0)
-            .color(p.text),
+    let cuerpo = column![
         componentes::boton(
             p,
             "Cambiar tema",
@@ -107,7 +104,11 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ),
     ]
     .spacing(espacio::S4)
-    .padding(espacio::S8);
+    .padding(espacio::S12);
+    let contenido = column![
+        banda(p, Lamina::CaidaCielo, activa.nombre(), Some(6)),
+        cuerpo
+    ];
     let pie = componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Nada));
     let ventana = app_shell(
         p,
