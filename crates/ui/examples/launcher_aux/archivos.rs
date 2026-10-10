@@ -362,6 +362,12 @@ fn crear_demo(raiz: &Path) {
         ("options.txt", b"version:3955\nautoJump:false\nrenderDistance:16\nresourcePacks:[\"file/Faithful 32x.zip\"]\n"),
         ("mods/fabric-api-0.112.0.jar", b"PK\x03\x04"),
         ("mods/sodium-0.6.5.jar", b"PK\x03\x04"),
+        ("mods/lithium-0.14.3.jar", b"PK"),
+        ("mods/iris-1.8.1.jar", b"PK"),
+        ("mods/modmenu-11.0.3.jar", b"PK"),
+        ("resourcepacks/faithful-2.4.1.zip", b"PK"),
+        ("resourcepacks/soft-fantasy-1.9.0.zip", b"PK"),
+        ("resourcepacks/bare-bones-1.4.2.zip", b"PK"),
         (
             "config/sodium-options.json",
             b"{\n  \"quality\": {\n    \"weather_quality\": \"DEFAULT\",\n    \"leaves_quality\": \"DEFAULT\"\n  },\n  \"advanced\": {\n    \"enable_memory_tracing\": false\n  }\n}\n",
@@ -381,3 +387,4 @@ fn crear_demo(raiz: &Path) {
         let _ = fs::write(&ruta, contenido);
     }
 }
+

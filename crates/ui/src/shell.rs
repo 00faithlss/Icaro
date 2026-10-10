@@ -18,7 +18,7 @@ pub enum Seccion {
     Servidores,
     Descargas,
     Consola,
-    Mods,
+    Modpacks,
     Capturas,
     Ajustes,
 }
@@ -29,7 +29,7 @@ impl Seccion {
         Seccion::Servidores,
         Seccion::Descargas,
         Seccion::Consola,
-        Seccion::Mods,
+        Seccion::Modpacks,
         Seccion::Capturas,
         Seccion::Ajustes,
     ];
@@ -40,7 +40,7 @@ impl Seccion {
             Seccion::Servidores => "Servidores",
             Seccion::Descargas => "Descargas",
             Seccion::Consola => "Consola",
-            Seccion::Mods => "Mods",
+            Seccion::Modpacks => "Modpacks",
             Seccion::Capturas => "Capturas",
             Seccion::Ajustes => "Ajustes",
         }
@@ -52,7 +52,7 @@ impl Seccion {
             Seccion::Servidores => Icono::Servidores,
             Seccion::Descargas => Icono::Descargas,
             Seccion::Consola => Icono::Consola,
-            Seccion::Mods => Icono::Mods,
+            Seccion::Modpacks => Icono::Mods,
             Seccion::Capturas => Icono::Capturas,
             Seccion::Ajustes => Icono::Ajustes,
         }

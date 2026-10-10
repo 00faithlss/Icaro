@@ -5,20 +5,20 @@
 //! `cargo run -p icaro-ui --example launcher`.
 
 use icaro_ui::ajustes::{encabezado_ajustes, fila_ajuste, indice_ajustes};
-use icaro_ui::componentes::{self, AvanceParte, Parte, Variante};
+use icaro_ui::componentes::{self, Variante};
 use icaro_ui::capturas::{galeria, Captura};
 use icaro_ui::consola::{consola, Linea, MensajesConsola, Nivel};
 use icaro_ui::editor::{
     encabezado_editor, pestana_archivos, pestana_general, pestana_java, pestana_mundos,
-    pestana_recursos, pestanas_editor, CompatPaquete, Copia, DatosEditor, EstadoGeneral,
-    InstalacionJava, MensajesEncabezado, MensajesGeneral, Mundo, Paquete, AccionArchivo, ConfigJava,
+    pestanas_editor, Copia, DatosEditor, EstadoGeneral,
+    InstalacionJava, MensajesEncabezado, MensajesGeneral, Mundo, AccionArchivo, ConfigJava,
     MensajesArchivos, MensajesJava, VistaArchivos,
 };
 use icaro_ui::descargas::{
     cola_descargas, historial, limites, AccionesCola, Descarga, EntradaHistorial, EstadoDescarga,
 };
 use icaro_ui::fuentes;
-use icaro_ui::iconos::Icono;
+use icaro_ui::iconos::{icono, Icono, Tam};
 use icaro_ui::instancias::{
     tarjeta_instancia, tarjeta_nueva, AccionesTarjeta, DatosInstancia, EstadoInstancia,
 };
@@ -26,6 +26,12 @@ use icaro_ui::laminas::{banda, Lamina};
 use icaro_ui::servidores::{red_privada, tarjeta_servidor, EstadoServidor, Servidor};
 #[path = "launcher_aux/archivos.rs"]
 mod archivos;
+#[path = "launcher_aux/estado.rs"]
+mod estado;
+#[path = "launcher_aux/mods.rs"]
+mod mods;
+#[path = "launcher_aux/modpacks.rs"]
+mod modpacks;
 
 use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
@@ -55,6 +61,22 @@ struct App {
     grupos: Vec<Option<String>>,
     cerrados: Vec<Option<String>>,
     edicion_grupo: Option<EdicionGrupo>,
+    busqueda_mods: String,
+    mods_vista: usize,
+    modpack_filtro: usize,
+    modpack_pagina: Option<usize>,
+    modpack_pestana: usize,
+    modpack_galeria: usize,
+    busqueda_modpacks: String,
+    instalando: Vec<(String, std::time::Instant)>,
+    mod_pagina: Option<String>,
+    mod_filtro_mc: String,
+    mod_filtro_loader: String,
+    mod_betas: bool,
+    mod_galeria: usize,
+    mod_opcionales: Vec<String>,
+    mod_pestana: usize,
+    ultimo_guardado: String,
     anim: Option<std::time::Instant>,
     anim_menu: Option<std::time::Instant>,
     ahora: std::time::Instant,
@@ -62,8 +84,6 @@ struct App {
     menu_grupos: bool,
     editor_inst: usize,
     exp: Explorador,
-    vista_recursos: usize,
-    paquetes_activos: [bool; 3],
     mundo: usize,
     filtro_consola: usize,
     busqueda_consola: String,
@@ -99,8 +119,6 @@ enum Mensaje {
     MemMax(u32),
     Metaspace(u32),
     ArgsJvm(String),
-    VistaRecursos(usize),
-    Paquete(usize),
     Mundo(usize),
     AbrirInstancia(usize),
     MoverGrupo(Option<String>),
@@ -113,6 +131,27 @@ enum Mensaje {
     GuardarGrupo,
     CancelarGrupo,
     VerGrupos(bool),
+    BuscarMods(String),
+    AlternarMod(String),
+    VistaMods(usize),
+    FiltroModpacks(usize),
+    AbrirModpack(usize),
+    CerrarModpack,
+    PestanaModpack(usize),
+    GaleriaModpack(usize),
+    BuscarModpacks(String),
+    InstalarModpack(usize),
+    AbrirModPagina(String),
+    CerrarModPagina,
+    PestanaMod(usize),
+    FiltroMcMod(String),
+    FiltroLoaderMod(String),
+    BetasMod,
+    GaleriaMod(usize),
+    OpcionalMod(String),
+    VersionMod(String, String),
+    InstalarMod(String, String),
+    EliminarMod(String),
     Cuadro(std::time::Instant),
     ElegirArchivo(usize),
     AccionArchivo(AccionArchivo),
@@ -186,12 +225,29 @@ fn abrir_instancia(app: &mut App, i: usize) {
     app.exp = Explorador::abrir(&datos.nombre);
     app.general.nombre = datos.nombre.clone();
     app.general.grupo = app.grupos[i].clone();
+    app.mod_pagina = None;
     app.menu = None;
     app.editor = Some(0);
     arrancar(app);
 }
 
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
+    mods::fijar_recurso(app.editor == Some(3));
+    let tarea = actualizar_estado(app, m);
+    guardar_si_cambio(app);
+    tarea
+}
+
+/// Escribe el estado organizado por el usuario solo cuando cambia.
+fn guardar_si_cambio(app: &mut App) {
+    let texto = estado::Guardado::nuevo(&app.lista_grupos, &app.grupos, &app.cerrados, &app.configs).texto();
+    if texto != app.ultimo_guardado {
+        estado::Guardado::escribir(&texto);
+        app.ultimo_guardado = texto;
+    }
+}
+
+fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     match m {
         Mensaje::Editar => {
             let i = app.menu.unwrap_or(app.seleccionada);
@@ -321,12 +377,6 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Metaspace(v) => app.configs[app.editor_inst].metaspace = v,
         Mensaje::ArgsJvm(v) => app.configs[app.editor_inst].argumentos = v,
-        Mensaje::VistaRecursos(i) => app.vista_recursos = i,
-        Mensaje::Paquete(i) => {
-            if let Some(a) = app.paquetes_activos.get_mut(i) {
-                *a = !*a;
-            }
-        }
         Mensaje::Mundo(i) => app.mundo = i,
         Mensaje::ElegirArchivo(i) => app.exp.elegir(i),
         Mensaje::EditarArchivo(a) => app.exp.editar(a),
@@ -369,7 +419,117 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.menu_en = app.cursor;
         }
         Mensaje::VerGrupos(v) => app.menu_grupos = v,
-        Mensaje::Cuadro(t) => app.ahora = t,
+        Mensaje::BuscarMods(t) => app.busqueda_mods = t,
+        Mensaje::AlternarMod(archivo) => mods::alternar(&instancias()[app.editor_inst].nombre, &archivo),
+        Mensaje::VistaMods(v) => {
+            app.mods_vista = v;
+            arrancar(app);
+        }
+        Mensaje::AbrirModPagina(id) => {
+            app.mod_pagina = Some(id);
+            app.mod_pestana = 0;
+            app.mod_filtro_mc = "Todas".into();
+            app.mod_filtro_loader = "Todos".into();
+            app.mod_betas = false;
+            app.mod_galeria = 0;
+            app.mod_opcionales.clear();
+            arrancar(app);
+        }
+        Mensaje::CerrarModPagina => {
+            app.mod_pagina = None;
+            arrancar(app);
+        }
+        Mensaje::FiltroMcMod(v) => app.mod_filtro_mc = v,
+        Mensaje::FiltroLoaderMod(v) => app.mod_filtro_loader = v,
+        Mensaje::BetasMod => app.mod_betas = !app.mod_betas,
+        Mensaje::GaleriaMod(i) => app.mod_galeria = i,
+        Mensaje::OpcionalMod(id) => {
+            if let Some(pos) = app.mod_opcionales.iter().position(|o| *o == id) {
+                app.mod_opcionales.remove(pos);
+            } else {
+                app.mod_opcionales.push(id);
+            }
+        }
+        Mensaje::PestanaMod(i) => {
+            app.mod_pestana = i;
+            arrancar(app);
+        }
+        Mensaje::VersionMod(archivo, version) => {
+            let inst = instancias()[app.editor_inst].nombre.clone();
+            let id = mods::listar(&inst).into_iter().find(|m| m.archivo == archivo).map(|m| m.id);
+            if let Some(id) = id {
+                if mods::cambiar_version(&inst, &archivo, &id, &version).is_some() {
+                    app.aviso = Some(format!("{id} cambió a la versión {version}."));
+                }
+            }
+        }
+        Mensaje::InstalarMod(id, version) => {
+            let inst = instancias()[app.editor_inst].nombre.clone();
+            mods::instalar(&inst, &id, &version);
+            // Dependencias obligatorias que falten y opcionales marcadas.
+            if let Some(c) = mods::en_catalogo(&id) {
+                let puestos = mods::listar(&inst);
+                let opcionales = app.mod_opcionales.clone();
+                for dep in c.dependencias.iter().copied().chain(opcionales.iter().map(String::as_str)) {
+                    if puestos.iter().all(|m| m.id != dep) {
+                        if let Some(d) = mods::en_catalogo(dep) {
+                            mods::instalar(&inst, dep, d.lanzamientos[0].version);
+                        }
+                    }
+                }
+            }
+            app.mod_opcionales.clear();
+            app.aviso = Some(format!("{id} {version} instalado."));
+        }
+        Mensaje::EliminarMod(archivo) => {
+            mods::eliminar(&instancias()[app.editor_inst].nombre, &archivo);
+            app.aviso = Some(format!("{archivo} se movió a la papelera."));
+        }
+        Mensaje::Cuadro(t) => {
+            app.ahora = t;
+            avanzar_instalaciones(app);
+        }
+        Mensaje::FiltroModpacks(i) => {
+            app.modpack_filtro = i;
+            arrancar(app);
+        }
+        Mensaje::BuscarModpacks(t) => app.busqueda_modpacks = t,
+        Mensaje::AbrirModpack(i) => {
+            app.modpack_pagina = Some(i);
+            app.modpack_pestana = 0;
+            app.modpack_galeria = 0;
+            arrancar(app);
+        }
+        Mensaje::CerrarModpack => {
+            app.modpack_pagina = None;
+            arrancar(app);
+        }
+        Mensaje::PestanaModpack(i) => {
+            app.modpack_pestana = i;
+            arrancar(app);
+        }
+        Mensaje::GaleriaModpack(i) => app.modpack_galeria = i,
+        Mensaje::InstalarModpack(i) => {
+            let m = &modpacks::CATALOGO[i];
+            if instancias().iter().any(|d| d.nombre == m.nombre) {
+                return Task::none();
+            }
+            lista_instancias().lock().unwrap().push(DatosInstancia {
+                nombre: m.nombre.into(),
+                version: format!("{} · {}", m.minecraft, m.cargador),
+                ultima_vez: "Nueva".into(),
+                mods: format!("{} mods", m.mods),
+                portada: m.portada,
+                estado: EstadoInstancia::Instalando(0.0),
+                seleccionada: false,
+                detalle: format!("Descargando mods · 0 de {}", m.mods),
+            });
+            app.grupos.push(None);
+            app.configs.push(config_por_defecto());
+            app.instalando.push((m.nombre.to_owned(), std::time::Instant::now()));
+            app.ahora = std::time::Instant::now();
+            app.aviso = Some(format!("Instalando {} como una instancia nueva.", m.nombre));
+        }
         Mensaje::Cursor(c) => app.cursor = c,
         Mensaje::Tamano(s) => app.ventana = s,
         Mensaje::PedirEliminar => {
@@ -409,7 +569,7 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     Task::none()
 }
 
-fn instancias() -> Vec<DatosInstancia> {
+fn instancias_base() -> Vec<DatosInstancia> {
     let nueva = |nombre: &str, version: &str, vez: &str, mods: &str, portada, estado, detalle: &str| {
         DatosInstancia {
             nombre: nombre.into(),
@@ -429,6 +589,54 @@ fn instancias() -> Vec<DatosInstancia> {
         nueva("Mundo de Javier", "1.21.1 · Fabric", "Ahora", "96 mods", Lamina::ProdigoAldea, EstadoInstancia::Jugando, "En ejecución · 00:42:17"),
         nueva("Vanilla", "1.21.4 · Vanilla", "Hace 1 mes", "Sin mods", Lamina::ValleRocas, EstadoInstancia::Error, "Falta Java 21"),
     ]
+}
+
+/// Lista viva de instancias: arranca con las de ejemplo y crece al instalar modpacks.
+fn lista_instancias() -> &'static std::sync::Mutex<Vec<DatosInstancia>> {
+    static LISTA: std::sync::OnceLock<std::sync::Mutex<Vec<DatosInstancia>>> = std::sync::OnceLock::new();
+    LISTA.get_or_init(|| std::sync::Mutex::new(instancias_base()))
+}
+
+fn instancias() -> Vec<DatosInstancia> {
+    lista_instancias().lock().unwrap().clone()
+}
+
+fn config_por_defecto() -> ConfigJava {
+    ConfigJava {
+        java: None,
+        memoria_min: 2048,
+        memoria_max: 6144,
+        metaspace: 512,
+        argumentos: "-XX:+UseG1GC".into(),
+    }
+}
+
+/// Hace avanzar las instalaciones de modpacks en curso (5 s de ejemplo).
+fn avanzar_instalaciones(app: &mut App) {
+    let ahora = app.ahora;
+    let mut terminadas = Vec::new();
+    {
+        let mut lista = lista_instancias().lock().unwrap();
+        for (nombre, inicio) in &app.instalando {
+            let avance = (ahora.saturating_duration_since(*inicio).as_secs_f32() / 5.0).min(1.0);
+            if let Some(d) = lista.iter_mut().find(|d| &d.nombre == nombre) {
+                let total = modpacks::CATALOGO.iter().find(|m| m.nombre == nombre).map_or(0, |m| m.mods);
+                if avance >= 1.0 {
+                    d.estado = EstadoInstancia::Lista;
+                    d.detalle.clear();
+                    d.ultima_vez = "Ahora".into();
+                    terminadas.push(nombre.clone());
+                } else {
+                    d.estado = EstadoInstancia::Instalando(avance);
+                    d.detalle = format!("Descargando mods · {} de {total}", (avance * total as f32) as u32);
+                }
+            }
+        }
+    }
+    if let Some(n) = terminadas.last() {
+        app.aviso = Some(format!("{n} quedó instalado."));
+    }
+    app.instalando.retain(|(n, _)| !terminadas.contains(n));
 }
 
 fn suave<'a>(app: &'a App, cuerpo: impl Into<Element<'a, Mensaje>>) -> Element<'a, Mensaje> {
@@ -593,8 +801,1025 @@ fn encabezado_grupo(
     .into()
 }
 
+/// Pestaña Mods del editor: lista de los mods de la instancia y descarga de
+/// nuevos; al pulsar el nombre de un mod se abre su página de detalle.
+fn pestana_mods(app: &App) -> Element<'_, Mensaje> {
+    match &app.mod_pagina {
+        Some(id) => pagina_mod(app, id),
+        None => lista_mods(app),
+    }
+}
+
+fn lista_mods(app: &App) -> Element<'_, Mensaje> {
+    let p = app.modo.paleta();
+    let instancia = instancias()[app.editor_inst].nombre.clone();
+    let instalados = mods::listar(&instancia);
+    let consulta = app.busqueda_mods.trim().to_lowercase();
+    let coincide = |texto: &str| consulta.is_empty() || texto.to_lowercase().contains(&consulta);
+
+    let barra = row![
+        componentes::segmentado(p, &["Instalados", "Descargar"], app.mods_vista, Mensaje::VistaMods),
+        container(componentes::campo(
+            p,
+            if app.mods_vista == 0 { "Buscar entre los instalados" } else { "Buscar en el catálogo" },
+            &app.busqueda_mods,
+            Mensaje::BuscarMods,
+        ))
+        .width(340),
+        Space::with_width(Length::Fill),
+        text(format!(
+            "{} de {} activos",
+            instalados.iter().filter(|m| m.activo).count(),
+            instalados.len()
+        ))
+        .font(fuentes::MONO)
+        .size(texto::MONO_SM.0)
+        .color(p.text_muted),
+    ]
+    .spacing(espacio::S4)
+    .align_y(Alignment::Center);
+
+    let mut lista = column![].spacing(espacio::S2);
+    if app.mods_vista == 0 {
+        for m in instalados.iter().filter(|m| coincide(&m.archivo)) {
+            let titulo = mods::en_catalogo(&m.id).map_or_else(|| m.id.clone(), |c| c.titulo.to_owned());
+            let nombre = iced::widget::button(
+                container(
+                    row![
+                        text(titulo)
+                            .size(texto::BODY.0)
+                            .color(if m.activo { p.text } else { p.text_muted })
+                            .width(Length::Fill),
+                        text(m.version.clone()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
+                        icono(Icono::ChevronDerecha, Tam::Base, p.text_muted),
+                    ]
+                    .spacing(espacio::S4)
+                    .align_y(Alignment::Center),
+                )
+                .center_y(Length::Fill),
+            )
+            .width(Length::Fill)
+            .height(52)
+            .padding(Padding::from([0.0, espacio::S4]))
+            .on_press(Mensaje::AbrirModPagina(m.id.clone()))
+            .style(icaro_ui::estilo::boton_fantasma(p));
+            let estado = if m.activo { icaro_ui::componentes::Estado::Exito } else { icaro_ui::componentes::Estado::Info };
+            lista = lista.push(
+                container(
+                    row![
+                        nombre,
+                        icaro_ui::componentes::insignia(p, estado, if m.activo { "Activo" } else { "Desactivado" }),
+                        componentes::interruptor(p, m.activo, Mensaje::AlternarMod(m.archivo.clone())),
+                    ]
+                    .spacing(espacio::S4)
+                    .padding(Padding::from([0.0, espacio::S4]))
+                    .align_y(Alignment::Center),
+                )
+                .style(icaro_ui::estilo::tarjeta(p, false)),
+            );
+        }
+        if instalados.is_empty() {
+            lista = lista.push(
+                text("Esta instancia no tiene nada instalado aquí. Ve a Descargar para agregar algo.")
+                    .size(texto::BODY.0)
+                    .color(p.text_muted),
+            );
+        }
+    } else {
+        for c in mods::catalogo_actual().iter().filter(|c| coincide(c.titulo) || coincide(c.descripcion)) {
+            let puesto = instalados.iter().find(|m| m.id == c.id);
+            let accion: Element<Mensaje> = match puesto {
+                Some(m) => icaro_ui::componentes::insignia(p, icaro_ui::componentes::Estado::Exito, &format!("Instalado {}", m.version)),
+                None => componentes::boton(
+                    p,
+                    &format!("Instalar {}", c.lanzamientos[0].version),
+                    Variante::Primario,
+                    Some(Mensaje::InstalarMod(c.id.to_owned(), c.lanzamientos[0].version.to_owned())),
+                ),
+            };
+            let titulo = iced::widget::button(
+                text(c.titulo).font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text),
+            )
+            .padding(0)
+            .on_press(Mensaje::AbrirModPagina(c.id.to_owned()))
+            .style(icaro_ui::estilo::sin_estilo(p.text));
+            lista = lista.push(
+                container(
+                    row![
+                        column![
+                            titulo,
+                            text(c.descripcion).size(texto::BODY_SM.0).color(p.text_muted),
+                            text(format!("{} · {} descargas · {}", c.autor, c.descargas, c.cargadores.join(", ")))
+                                .font(fuentes::MONO)
+                                .size(texto::MONO_SM.0)
+                                .color(p.text_muted),
+                        ]
+                        .spacing(espacio::S1)
+                        .width(Length::Fill),
+                        accion,
+                    ]
+                    .spacing(espacio::S4)
+                    .align_y(Alignment::Center),
+                )
+                .padding(espacio::S4)
+                .width(Length::Fill)
+                .style(icaro_ui::estilo::tarjeta(p, false)),
+            );
+        }
+    }
+    column![barra, lista]
+        .spacing(espacio::S6)
+        .padding(Padding::from([espacio::S6, espacio::S12]))
+        .into()
+}
+
+/// Días desde 1970 de una fecha civil (algoritmo de Howard Hinnant).
+fn dias_civil(a: i64, m: i64, d: i64) -> i64 {
+    let a = if m <= 2 { a - 1 } else { a };
+    let era = a.div_euclid(400);
+    let aoe = a - era * 400;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let doe = aoe * 365 + aoe / 4 - aoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// "hace 3 meses" a partir de una fecha `AAAA-MM-DD`.
+fn hace(fecha: &str) -> String {
+    let partes: Vec<i64> = fecha.split('-').filter_map(|v| v.parse().ok()).collect();
+    let [a, m, d] = partes[..] else {
+        return fecha.to_owned();
+    };
+    let hoy = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |t| (t.as_secs() / 86_400) as i64);
+    let dias = (hoy - dias_civil(a, m, d)).max(0);
+    let (n, unidad) = if dias < 1 {
+        return "hoy".into();
+    } else if dias < 30 {
+        (dias, "día")
+    } else if dias < 365 {
+        (dias / 30, "mes")
+    } else {
+        (dias / 365, "año")
+    };
+    let plural = match (n, unidad) {
+        (1, u) => u.to_owned(),
+        (_, "mes") => "meses".to_owned(),
+        (_, u) => format!("{u}s"),
+    };
+    format!("hace {n} {plural}")
+}
+
+/// Etiqueta pequeña con contorno, como las de compatibilidad y etiquetas.
+fn chip_dato<'a>(p: icaro_ui::tema::Paleta, texto: &str) -> Element<'a, Mensaje> {
+    container(text(texto.to_owned()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text))
+        .padding(Padding::from([espacio::S1, espacio::S2]))
+        .style(icaro_ui::estilo::marco(p))
+        .into()
+}
+
+/// Chips en filas de hasta tres, porque iced no parte las filas solo.
+fn chips_en_filas<'a>(p: icaro_ui::tema::Paleta, items: &[String]) -> Element<'a, Mensaje> {
+    let mut col = column![].spacing(espacio::S2);
+    for grupo in items.chunks(3) {
+        let mut fila = row![].spacing(espacio::S2);
+        for i in grupo {
+            fila = fila.push(chip_dato(p, i));
+        }
+        col = col.push(fila);
+    }
+    col.into()
+}
+
+/// Tarjeta de la columna lateral, con título opcional.
+fn tarjeta_lateral<'a>(
+    p: icaro_ui::tema::Paleta,
+    titulo: Option<&str>,
+    cuerpo: Element<'a, Mensaje>,
+) -> Element<'a, Mensaje> {
+    let mut col = column![].spacing(espacio::S3);
+    if let Some(t) = titulo {
+        col = col.push(text(t.to_owned()).font(fuentes::TITULO).size(texto::BODY.0 + 2.0).color(p.text));
+    }
+    container(col.push(cuerpo))
+        .padding(espacio::S4)
+        .width(Length::Fill)
+        .style(icaro_ui::estilo::tarjeta(p, false))
+        .into()
+}
+
+/// Fila de la tarjeta Enlaces: texto con el icono de enlace externo.
+fn enlace_externo<'a>(p: icaro_ui::tema::Paleta, texto: &str) -> Element<'a, Mensaje> {
+    iced::widget::button(
+        row![
+            text(texto.to_owned()).size(texto::BODY.0).color(p.text).width(Length::Fill),
+            icono(Icono::Externo, Tam::Base, p.text_muted),
+        ]
+        .spacing(espacio::S2)
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .padding(Padding::from([espacio::S1, 0.0]))
+    .on_press(Mensaje::Nada)
+    .style(icaro_ui::estilo::sin_estilo(p.text))
+    .into()
+}
+
+/// Fila de la tarjeta Detalles: icono y texto.
+fn fila_detalle<'a>(p: icaro_ui::tema::Paleta, glifo: Icono, texto: String) -> Element<'a, Mensaje> {
+    row![
+        icono(glifo, Tam::Base, p.text_muted),
+        text(texto).size(texto::BODY.0).color(p.text),
+    ]
+    .spacing(espacio::S3)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Tarjetas Enlaces, Etiquetas, Creadores y Detalles, comunes a mods y modpacks.
+#[allow(clippy::too_many_arguments)]
+fn tarjetas_informacion<'a>(
+    p: icaro_ui::tema::Paleta,
+    etiquetas: &[String],
+    creador: (&str, &str, String, Vec<&str>),
+    licencia: &str,
+    publicado: &str,
+    actualizado: &str,
+    extra: Vec<(Icono, String)>,
+) -> Vec<Element<'a, Mensaje>> {
+    use icaro_ui::componentes::etiqueta;
+    let enlaces = column![
+        enlace_externo(p, "Reportar problemas"),
+        enlace_externo(p, "Ver código fuente"),
+        enlace_externo(p, "Unirse al servidor de Discord"),
+        container(Space::new(Length::Fill, 1.0)).style(icaro_ui::estilo::bloque(p.border)),
+        enlace_externo(p, "Donar"),
+    ]
+    .spacing(espacio::S1);
+    let (nombre, rol, resumen, top) = creador;
+    let mut ficha = column![
+        row![
+            container(icono(Icono::Instancias, Tam::Base, p.text))
+                .padding(espacio::S2)
+                .style(icaro_ui::estilo::marco(p)),
+            column![
+                text(nombre.to_owned()).font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text),
+                text(rol.to_owned()).size(texto::BODY_SM.0).color(p.text_muted),
+            ]
+            .spacing(espacio::S1),
+        ]
+        .spacing(espacio::S3)
+        .align_y(Alignment::Center),
+        text(resumen).size(texto::BODY_SM.0).color(p.text_muted),
+    ]
+    .spacing(espacio::S2);
+    if !top.is_empty() {
+        ficha = ficha.push(etiqueta(p, "Más descargados"));
+        for t in top {
+            ficha = ficha.push(text(t.to_owned()).size(texto::BODY_SM.0).color(p.text));
+        }
+    }
+    ficha = ficha.push(componentes::boton(p, "Ver perfil", Variante::Secundario, Some(Mensaje::Nada)));
+    let mut detalles = column![
+        fila_detalle(p, Icono::Copiar, format!("Licencia {licencia}")),
+        fila_detalle(p, Icono::Check, format!("Publicado {}", hace(publicado))),
+        fila_detalle(p, Icono::Actualizar, format!("Actualizado {}", hace(actualizado))),
+    ]
+    .spacing(espacio::S3);
+    for (g, t) in extra {
+        detalles = detalles.push(fila_detalle(p, g, t));
+    }
+    vec![
+        tarjeta_lateral(p, Some("Enlaces"), enlaces.into()),
+        tarjeta_lateral(p, Some("Etiquetas"), chips_en_filas(p, etiquetas)),
+        tarjeta_lateral(p, Some("Creadores"), ficha.into()),
+        tarjeta_lateral(p, Some("Detalles"), detalles.into()),
+    ]
+}
+
+/// Índice de la versión que sirve para la instancia: la más nueva con su
+/// versión del juego y su cargador (y estable, salvo que se pidan pruebas).
+fn para_instancia(c: &mods::ModCatalogo, mc: &str, cargador: &str, pruebas: bool) -> Option<usize> {
+    c.lanzamientos.iter().position(|l| {
+        l.minecraft == mc
+            && (mods::es_recurso() || c.cargadores_de(l).iter().any(|x| x.eq_ignore_ascii_case(cargador)))
+            && (pruebas || l.canal == "release")
+    })
+}
+
+/// Página completa de un mod: encabezado, pestañas y columna lateral fija con
+/// la acción principal, la compatibilidad, los datos y el creador.
+fn pagina_mod<'a>(app: &'a App, id: &str) -> Element<'a, Mensaje> {
+    use icaro_ui::componentes::{casilla, etiqueta, insignia, Estado};
+    let p = app.modo.paleta();
+    let datos = &instancias()[app.editor_inst];
+    let instancia = datos.nombre.clone();
+    let (mc_inst, cargador_inst) = {
+        let mut partes = datos.version.split(" · ");
+        (partes.next().unwrap_or("").to_owned(), partes.next().unwrap_or("").to_owned())
+    };
+    let todos = mods::listar(&instancia);
+    let instalado = todos.iter().find(|m| m.id == id).cloned();
+    let catalogo = mods::en_catalogo(id);
+    let extras = mods::extras(id);
+    let titulo = catalogo.map_or_else(|| id.to_owned(), |c| c.titulo.to_owned());
+
+    let encabezado = column![
+        row![componentes::boton(p, if mods::es_recurso() { "Volver a los resourcepacks" } else { "Volver a los mods" }, Variante::Fantasma, Some(Mensaje::CerrarModPagina))],
+        text(titulo.to_uppercase()).font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
+        text(catalogo.map_or("Mod sin ficha en el catálogo.", |c| c.descripcion))
+            .size(texto::BODY.0)
+            .color(p.text_muted),
+    ]
+    .spacing(espacio::S2);
+
+    // Las pestañas dependen del mod: sin imágenes no hay Galería.
+    let mut nombres = vec!["Descripción"];
+    if !extras.galeria.is_empty() {
+        nombres.push("Galería");
+    }
+    nombres.extend(["Versiones", "Cambios"]);
+    if !mods::es_recurso() {
+        nombres.push("Dependencias");
+    }
+    let activa = app.mod_pestana.min(nombres.len() - 1);
+    let barra = componentes::pestanas(
+        p,
+        &nombres.iter().map(|n| (*n, None)).collect::<Vec<_>>(),
+        activa,
+        Mensaje::PestanaMod,
+    );
+
+    let idx_para = catalogo.and_then(|c| para_instancia(c, &mc_inst, &cargador_inst, app.mod_betas));
+    let idx_instalado = catalogo.zip(instalado.as_ref()).and_then(|(c, m)| {
+        c.lanzamientos.iter().position(|l| l.version == m.version)
+    });
+
+    let contenido: Element<Mensaje> = match (catalogo, nombres[activa]) {
+        (None, _) => text("Este mod no está en el catálogo, así que no hay más datos que mostrar.")
+            .size(texto::BODY.0)
+            .color(p.text_muted)
+            .into(),
+        (Some(c), "Descripción") => {
+            let mut cat = row![].spacing(espacio::S2);
+            for k in c.categorias {
+                cat = cat.push(insignia(p, Estado::Info, k));
+            }
+            column![
+                text(c.detalle).size(texto::BODY.0).color(p.text),
+                text(if mods::es_recurso() {
+                    format!("Resolución {} para Minecraft {}.", c.cargadores.join(", "), c.minecraft().join(", "))
+                } else {
+                    format!("Funciona con {} en {}.", c.cargadores.join(", "), c.minecraft().join(", "))
+                })
+                    .size(texto::BODY.0)
+                    .color(p.text_muted),
+                cat,
+            ]
+            .spacing(espacio::S4)
+            .into()
+        }
+        (Some(_), "Galería") => {
+            let laminas = [
+                Lamina::TivoliCiudad,
+                Lamina::ValleRocas,
+                Lamina::ProdigoAldea,
+                Lamina::CastilloTorres,
+                Lamina::MelencoliaReloj,
+                Lamina::FaetonPaisaje,
+            ];
+            let sel = app.mod_galeria.min(extras.galeria.len() - 1);
+            let principal = column![
+                container(icaro_ui::laminas::grabado(p, laminas[sel % laminas.len()], Length::Fill, 300))
+                    .style(icaro_ui::estilo::marco(p)),
+                text(extras.galeria[sel]).size(texto::BODY.0).color(p.text),
+            ]
+            .spacing(espacio::S2);
+            let mut miniaturas = row![].spacing(espacio::S4);
+            for (i, titulo) in extras.galeria.iter().enumerate().take(3) {
+                miniaturas = miniaturas.push(
+                    iced::widget::button(
+                        column![
+                            container(icaro_ui::laminas::grabado(p, laminas[i % laminas.len()], Length::Fill, 110))
+                                .style(icaro_ui::estilo::marco(p)),
+                            text(*titulo).size(texto::BODY_SM.0).color(if i == sel { p.text } else { p.text_muted }),
+                        ]
+                        .spacing(espacio::S1),
+                    )
+                    .width(Length::FillPortion(1))
+                    .padding(0)
+                    .on_press(Mensaje::GaleriaMod(i))
+                    .style(icaro_ui::estilo::sin_estilo(p.text)),
+                );
+            }
+            column![
+                principal,
+                miniaturas,
+                text(format!("Imágenes de ejemplo; las capturas reales llegarán con la conexión al catálogo."))
+                    .size(texto::BODY_SM.0)
+                    .color(p.text_muted),
+            ]
+            .spacing(espacio::S4)
+            .into()
+        }
+        (Some(c), "Versiones") => {
+            let mut mc_opciones = vec!["Todas".to_owned()];
+            mc_opciones.extend(c.minecraft().iter().map(|v| (*v).to_owned()));
+            let mut loaders = vec!["Todos".to_owned()];
+            for l in c.lanzamientos {
+                for x in c.cargadores_de(l) {
+                    if !loaders.iter().any(|y| y == x) {
+                        loaders.push((*x).to_owned());
+                    }
+                }
+            }
+            let filtros = row![
+                container(componentes::selector(p, mc_opciones, Some(app.mod_filtro_mc.clone()), Mensaje::FiltroMcMod)).width(160),
+                container(componentes::selector(p, loaders, Some(app.mod_filtro_loader.clone()), Mensaje::FiltroLoaderMod)).width(160),
+                casilla(p, "Mostrar betas y alphas", app.mod_betas, |_| Mensaje::BetasMod),
+            ]
+            .spacing(espacio::S4)
+            .align_y(Alignment::Center);
+            let mut tabla = column![container(
+                row![
+                    container(etiqueta(p, "Versión")).width(Length::FillPortion(2)),
+                    container(etiqueta(p, "Juego")).width(Length::FillPortion(2)),
+                    container(etiqueta(p, if mods::es_recurso() { "Resolución" } else { "Cargadores" })).width(Length::FillPortion(3)),
+                    container(etiqueta(p, "Fecha")).width(Length::FillPortion(3)),
+                    Space::with_width(Length::FillPortion(8)),
+                ]
+            )
+            .padding(Padding::from([espacio::S2, espacio::S3]))]
+            .spacing(espacio::S1);
+            let mut filas = 0;
+            for (i, l) in c.lanzamientos.iter().enumerate() {
+                let cargadores = c.cargadores_de(l);
+                if (app.mod_filtro_mc != "Todas" && l.minecraft != app.mod_filtro_mc)
+                    || (app.mod_filtro_loader != "Todos" && !cargadores.contains(&app.mod_filtro_loader.as_str()))
+                    || (!app.mod_betas && l.canal != "release")
+                {
+                    continue;
+                }
+                filas += 1;
+                let es_para = idx_para == Some(i);
+                let actual = idx_instalado == Some(i);
+                let mut derecha = row![].spacing(espacio::S2).align_y(Alignment::Center);
+                if actual {
+                    derecha = derecha.push(insignia(p, Estado::Exito, "Instalada"));
+                }
+                if es_para {
+                    derecha = derecha.push(insignia(p, Estado::Info, "Para tu instancia"));
+                    if !actual {
+                        let (texto, msg) = match &instalado {
+                            Some(m) => ("Usar", Mensaje::VersionMod(m.archivo.clone(), l.version.to_owned())),
+                            None => ("Agregar", Mensaje::InstalarMod(c.id.to_owned(), l.version.to_owned())),
+                        };
+                        derecha = derecha.push(componentes::boton(p, texto, Variante::Primario, Some(msg)));
+                    }
+                }
+                let mut version = row![text(l.version).font(fuentes::MONO).size(texto::MONO.0).color(p.text)]
+                    .spacing(espacio::S2)
+                    .align_y(Alignment::Center);
+                if l.canal != "release" {
+                    version = version.push(insignia(p, Estado::Aviso, l.canal));
+                }
+                tabla = tabla.push(
+                    container(
+                        row![
+                            container(version).width(Length::FillPortion(2)),
+                            text(l.minecraft).font(fuentes::MONO).size(texto::MONO.0).color(p.text).width(Length::FillPortion(2)),
+                            text(cargadores.join(", ")).size(texto::BODY_SM.0).color(p.text_muted).width(Length::FillPortion(3)),
+                            text(l.fecha).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(Length::FillPortion(3)),
+                            container(derecha).width(Length::FillPortion(8)),
+                        ]
+                        .align_y(Alignment::Center),
+                    )
+                    .padding(Padding::from([espacio::S2, espacio::S3]))
+                    .style(icaro_ui::estilo::tarjeta(p, es_para)),
+                );
+            }
+            if filas == 0 {
+                tabla = tabla.push(
+                    text("Ninguna versión coincide con los filtros.").size(texto::BODY.0).color(p.text_muted),
+                );
+            }
+            column![filtros, tabla].spacing(espacio::S4).into()
+        }
+        (Some(c), "Cambios") => {
+            let mut lista = column![].spacing(espacio::S5);
+            for (i, l) in c.lanzamientos.iter().enumerate() {
+                let mut cabeza = row![
+                    text(format!("{} · {}", l.version, l.fecha)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text),
+                ]
+                .spacing(espacio::S2)
+                .align_y(Alignment::Center);
+                if l.canal != "release" {
+                    cabeza = cabeza.push(insignia(p, Estado::Aviso, l.canal));
+                }
+                if idx_instalado == Some(i) {
+                    cabeza = cabeza.push(insignia(p, Estado::Exito, "Instalada"));
+                } else if idx_instalado.is_some_and(|ins| i < ins) {
+                    cabeza = cabeza.push(insignia(p, Estado::Info, "Nueva"));
+                }
+                let mut bloque = column![cabeza].spacing(espacio::S1);
+                for linea in l.cambios {
+                    bloque = bloque.push(text(format!("— {linea}")).size(texto::BODY.0).color(p.text_muted));
+                }
+                lista = lista.push(bloque);
+            }
+            lista.into()
+        }
+        (Some(c), _) => {
+            let nombre_de = |dep: &str| mods::en_catalogo(dep).map_or_else(|| dep.to_owned(), |d| d.titulo.to_owned());
+            let mut lista = column![].spacing(espacio::S3);
+            lista = lista.push(etiqueta(p, "Obligatorias"));
+            if c.dependencias.is_empty() {
+                lista = lista.push(text("Este mod no necesita otros.").size(texto::BODY.0).color(p.text_muted));
+            }
+            for dep in c.dependencias {
+                let puesta = todos.iter().any(|m| m.id == *dep);
+                lista = lista.push(
+                    row![
+                        text(nombre_de(dep)).size(texto::BODY.0).color(p.text).width(Length::Fill),
+                        if puesta { insignia(p, Estado::Exito, "Instalada") } else { insignia(p, Estado::Aviso, "Se instalará") },
+                    ]
+                    .align_y(Alignment::Center),
+                );
+            }
+            if !extras.opcionales.is_empty() {
+                lista = lista.push(Space::with_height(espacio::S2)).push(etiqueta(p, "Opcionales"));
+                for dep in extras.opcionales {
+                    let puesta = todos.iter().any(|m| m.id == *dep);
+                    let marcada = puesta || app.mod_opcionales.iter().any(|o| o == dep);
+                    let id_dep = (*dep).to_owned();
+                    lista = lista.push(
+                        row![
+                            casilla(p, &nombre_de(dep), marcada, move |_| Mensaje::OpcionalMod(id_dep.clone())),
+                            Space::with_width(Length::Fill),
+                            if puesta { insignia(p, Estado::Exito, "Instalada") } else { Space::with_width(0).into() },
+                        ]
+                        .align_y(Alignment::Center),
+                    );
+                }
+            }
+            if !extras.incompatibles.is_empty() {
+                lista = lista.push(Space::with_height(espacio::S2)).push(etiqueta(p, "Incompatibles"));
+                for (dep, motivo) in extras.incompatibles {
+                    let presente = todos.iter().any(|m| m.id == *dep);
+                    lista = lista.push(
+                        row![
+                            text(nombre_de(dep)).size(texto::BODY.0).color(p.text),
+                            text(*motivo).size(texto::BODY_SM.0).color(p.text_muted).width(Length::Fill),
+                            if presente { insignia(p, Estado::Error, "Instalado") } else { Space::with_width(0).into() },
+                        ]
+                        .spacing(espacio::S4)
+                        .align_y(Alignment::Center),
+                    );
+                }
+            }
+            lista.into()
+        }
+    };
+
+    // Columna lateral fija, con tarjetas como en Modrinth.
+    let mut lateral = column![].spacing(espacio::S3);
+    let accion: Element<Mensaje> = match (&instalado, catalogo) {
+        (Some(m), _) => column![
+            insignia(p, Estado::Exito, &format!("Instalado {}", m.version)),
+            row![
+                text("Activo").size(texto::BODY.0).color(p.text).width(Length::Fill),
+                componentes::interruptor(p, m.activo, Mensaje::AlternarMod(m.archivo.clone())),
+            ]
+            .align_y(Alignment::Center),
+            componentes::boton(p, if mods::es_recurso() { "Eliminar pack" } else { "Eliminar mod" }, Variante::Peligro, Some(Mensaje::EliminarMod(m.archivo.clone()))),
+        ]
+        .spacing(espacio::S3)
+        .into(),
+        (None, Some(c)) => {
+            let version = c.lanzamientos[idx_para.unwrap_or(0)].version;
+            componentes::boton(
+                p,
+                &format!("Agregar {version}"),
+                Variante::Primario,
+                Some(Mensaje::InstalarMod(c.id.to_owned(), version.to_owned())),
+            )
+        }
+        _ => Space::with_height(0).into(),
+    };
+    lateral = lateral.push(tarjeta_lateral(p, None, accion));
+    if let Some(c) = catalogo {
+        let versiones: Vec<String> = c.minecraft().iter().map(|v| (*v).to_owned()).collect();
+        let mut plataformas: Vec<String> = Vec::new();
+        for l in c.lanzamientos {
+            for x in c.cargadores_de(l) {
+                if !plataformas.iter().any(|y| y == x) {
+                    plataformas.push((*x).to_owned());
+                }
+            }
+        }
+        let compat = column![
+            row![
+                text(format!("{instancia}: {mc_inst} · {cargador_inst}")).size(texto::BODY_SM.0).color(p.text_muted).width(Length::Fill),
+                if idx_para.is_some() { insignia(p, Estado::Exito, "Compatible") } else { insignia(p, Estado::Error, "No compatible") },
+            ]
+            .spacing(espacio::S2)
+            .align_y(Alignment::Center),
+            text("Minecraft: Java Edition").size(texto::BODY.0).color(p.text),
+            chips_en_filas(p, &versiones),
+            text(if mods::es_recurso() { "Resolución" } else { "Plataformas" }).size(texto::BODY.0).color(p.text),
+            chips_en_filas(p, &plataformas),
+            text("Entornos compatibles").size(texto::BODY.0).color(p.text),
+            chip_dato(p, extras.entorno),
+        ]
+        .spacing(espacio::S2);
+        lateral = lateral.push(tarjeta_lateral(p, Some("Compatibilidad"), compat.into()));
+        let etiquetas: Vec<String> = c.categorias.iter().map(|k| (*k).to_owned()).collect();
+        let resumen = format!(
+            "{} · {} proyectos · {} descargas",
+            extras.creador_tipo, extras.creador_proyectos, extras.creador_descargas
+        );
+        for t in tarjetas_informacion(
+            p,
+            &etiquetas,
+            (c.autor, if extras.creador_tipo == "Organización" { "Propietario" } else { "Miembro" }, resumen, extras.creador_top.to_vec()),
+            c.licencia,
+            extras.publicado,
+            extras.actualizado,
+            vec![
+                (Icono::Descargas, format!("{} descargas", c.descargas)),
+                (Icono::Info, format!("{} seguidores", extras.seguidores)),
+            ],
+        ) {
+            lateral = lateral.push(t);
+        }
+    }
+
+    let principal = desplazable(
+        column![barra, contenido]
+            .spacing(espacio::S6)
+            .padding(Padding { right: espacio::S4, ..Padding::ZERO }),
+    );
+    let cuerpo = row![
+        container(principal).width(Length::Fill).height(Length::Fill),
+        container(desplazable(lateral))
+            .width(300)
+            .height(Length::Fill),
+    ]
+    .spacing(espacio::S8)
+    .height(Length::Fill);
+    column![encabezado, cuerpo]
+        .spacing(espacio::S6)
+        .padding(Padding::from([espacio::S6, espacio::S12]))
+        .into()
+}
+
+/// Publicaciones de ejemplo de un modpack: versión, fecha y cambios.
+fn publicaciones_modpack(m: &modpacks::Modpack) -> [(&'static str, &'static str, [&'static str; 2]); 3] {
+    let _ = m;
+    [
+        ("2.1.0", "2026-09-30", ["Actualiza los mods a su última versión", "Corrige un fallo al iniciar el mundo"]),
+        ("2.0.0", "2026-08-12", ["Agrega mods nuevos y quita los que ya no se mantienen", "Ajusta la configuración de rendimiento"]),
+        ("1.5.3", "2026-05-20", ["Corrección de errores", "Mejora el tiempo de carga"]),
+    ]
+}
+
+/// Mods que trae un modpack (muestra tomada del catálogo de mods).
+fn mods_incluidos(i: usize) -> Vec<&'static mods::ModCatalogo> {
+    let n = mods::CATALOGO.len();
+    (0..5).map(|k| &mods::CATALOGO[(i + k) % n]).collect()
+}
+
+/// Página de un modpack: mismas vistas que la de un mod, con una pestaña con
+/// los mods que incluye en lugar de dependencias.
+fn pagina_modpack(app: &App, i: usize) -> Element<'_, Mensaje> {
+    use icaro_ui::componentes::{etiqueta, insignia, Estado};
+    let p = app.modo.paleta();
+    let m = &modpacks::CATALOGO[i];
+    let instalado = instancias().iter().any(|d| d.nombre == m.nombre);
+    let publicaciones = publicaciones_modpack(m);
+    let incluidos = mods_incluidos(i);
+
+    let encabezado = column![
+        row![componentes::boton(p, "Volver a los modpacks", Variante::Fantasma, Some(Mensaje::CerrarModpack))],
+        text(m.nombre.to_uppercase()).font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
+        text(m.descripcion).size(texto::BODY.0).color(p.text_muted),
+        text(format!("{} descargas · {} mods · {}", m.descargas, m.mods, m.tamano))
+            .font(fuentes::MONO)
+            .size(texto::MONO_SM.0)
+            .color(p.text_muted),
+    ]
+    .spacing(espacio::S2);
+
+    let nombres = ["Descripción", "Galería", "Versiones", "Cambios", "Mods incluidos"];
+    let activa = app.modpack_pestana.min(nombres.len() - 1);
+    let barra = componentes::pestanas(
+        p,
+        &nombres.iter().map(|n| (*n, None)).collect::<Vec<_>>(),
+        activa,
+        Mensaje::PestanaModpack,
+    );
+
+    let contenido: Element<Mensaje> = match nombres[activa] {
+        "Descripción" => column![
+            text(m.descripcion).size(texto::BODY.0).color(p.text),
+            text(format!(
+                "Incluye {} mods para Minecraft {} con {}. Al instalarlo se crea una instancia nueva con su propia configuración de Java y memoria.",
+                m.mods, m.minecraft, m.cargador
+            ))
+            .size(texto::BODY.0)
+            .color(p.text_muted),
+            row![insignia(p, Estado::Info, m.categoria), insignia(p, Estado::Info, "Modpack")].spacing(espacio::S2),
+        ]
+        .spacing(espacio::S4)
+        .into(),
+        "Galería" => {
+            let laminas = [m.portada, Lamina::TivoliCiudad, Lamina::ValleRocas];
+            let titulos = ["Primer vistazo", "Exploración", "Construcciones"];
+            let sel = app.modpack_galeria.min(2);
+            let mut miniaturas = row![].spacing(espacio::S4);
+            for (k, t) in titulos.iter().enumerate() {
+                miniaturas = miniaturas.push(
+                    iced::widget::button(
+                        column![
+                            container(icaro_ui::laminas::grabado(p, laminas[k], Length::Fill, 110)).style(icaro_ui::estilo::marco(p)),
+                            text(*t).size(texto::BODY_SM.0).color(if k == sel { p.text } else { p.text_muted }),
+                        ]
+                        .spacing(espacio::S1),
+                    )
+                    .width(Length::FillPortion(1))
+                    .padding(0)
+                    .on_press(Mensaje::GaleriaModpack(k))
+                    .style(icaro_ui::estilo::sin_estilo(p.text)),
+                );
+            }
+            column![
+                container(icaro_ui::laminas::grabado(p, laminas[sel], Length::Fill, 300)).style(icaro_ui::estilo::marco(p)),
+                text(titulos[sel]).size(texto::BODY.0).color(p.text),
+                miniaturas,
+            ]
+            .spacing(espacio::S3)
+            .into()
+        }
+        "Versiones" => {
+            let mut tabla = column![container(
+                row![
+                    container(etiqueta(p, "Versión")).width(Length::FillPortion(2)),
+                    container(etiqueta(p, "Juego")).width(Length::FillPortion(2)),
+                    container(etiqueta(p, "Cargador")).width(Length::FillPortion(2)),
+                    container(etiqueta(p, "Fecha")).width(Length::FillPortion(3)),
+                    Space::with_width(Length::FillPortion(4)),
+                ]
+            )
+            .padding(Padding::from([espacio::S2, espacio::S3]))]
+            .spacing(espacio::S1);
+            for (k, (version, fecha, _)) in publicaciones.iter().enumerate() {
+                let derecha: Element<Mensaje> = if k == 0 {
+                    if instalado {
+                        insignia(p, Estado::Exito, "Instalado")
+                    } else {
+                        componentes::boton(p, "Instalar", Variante::Primario, Some(Mensaje::InstalarModpack(i)))
+                    }
+                } else {
+                    Space::with_width(0).into()
+                };
+                tabla = tabla.push(
+                    container(
+                        row![
+                            text(*version).font(fuentes::MONO).size(texto::MONO.0).color(p.text).width(Length::FillPortion(2)),
+                            text(m.minecraft).font(fuentes::MONO).size(texto::MONO.0).color(p.text).width(Length::FillPortion(2)),
+                            text(m.cargador).size(texto::BODY_SM.0).color(p.text_muted).width(Length::FillPortion(2)),
+                            text(*fecha).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(Length::FillPortion(3)),
+                            container(derecha).width(Length::FillPortion(4)),
+                        ]
+                        .align_y(Alignment::Center),
+                    )
+                    .padding(Padding::from([espacio::S2, espacio::S3]))
+                    .style(icaro_ui::estilo::tarjeta(p, k == 0)),
+                );
+            }
+            tabla.into()
+        }
+        "Cambios" => {
+            let mut lista = column![].spacing(espacio::S5);
+            for (k, (version, fecha, cambios)) in publicaciones.iter().enumerate() {
+                let mut cabeza = row![text(format!("{version} · {fecha}")).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text)]
+                    .spacing(espacio::S2)
+                    .align_y(Alignment::Center);
+                if k == 0 {
+                    cabeza = cabeza.push(insignia(p, Estado::Info, "Última"));
+                }
+                let mut bloque = column![cabeza].spacing(espacio::S1);
+                for c in cambios {
+                    bloque = bloque.push(text(format!("— {c}")).size(texto::BODY.0).color(p.text_muted));
+                }
+                lista = lista.push(bloque);
+            }
+            lista.into()
+        }
+        _ => {
+            let mut lista = column![text(format!("Muestra de los {} mods que incluye.", m.mods)).size(texto::BODY.0).color(p.text_muted)]
+                .spacing(espacio::S2);
+            for c in incluidos {
+                lista = lista.push(
+                    container(
+                        row![
+                            column![
+                                text(c.titulo).font(fuentes::TITULO).size(texto::BODY.0).color(p.text),
+                                text(c.descripcion).size(texto::BODY_SM.0).color(p.text_muted),
+                            ]
+                            .spacing(espacio::S1)
+                            .width(Length::Fill),
+                            text(c.lanzamientos.iter().find(|l| l.canal == "release").map_or("", |l| l.version)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
+                        ]
+                        .spacing(espacio::S4)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding(espacio::S3)
+                    .width(Length::Fill)
+                    .style(icaro_ui::estilo::tarjeta(p, false)),
+                );
+            }
+            lista.into()
+        }
+    };
+
+    let accion: Element<Mensaje> = if instalado {
+        insignia(p, Estado::Exito, "Instalado como instancia")
+    } else {
+        componentes::boton(p, "Instalar como instancia", Variante::Primario, Some(Mensaje::InstalarModpack(i)))
+    };
+    let compat = column![
+        text("Minecraft: Java Edition").size(texto::BODY.0).color(p.text),
+        chips_en_filas(p, &[m.minecraft.to_owned()]),
+        text("Plataformas").size(texto::BODY.0).color(p.text),
+        chips_en_filas(p, &[m.cargador.to_owned()]),
+        text("Entornos compatibles").size(texto::BODY.0).color(p.text),
+        chip_dato(p, "Cliente y servidor"),
+    ]
+    .spacing(espacio::S2);
+    let mut lateral = column![
+        tarjeta_lateral(p, None, accion),
+        tarjeta_lateral(p, Some("Compatibilidad"), compat.into()),
+    ]
+    .spacing(espacio::S3);
+    let top: Vec<&str> = modpacks::CATALOGO.iter().filter(|o| o.autor == m.autor).map(|o| o.nombre).take(3).collect();
+    for t in tarjetas_informacion(
+        p,
+        &[m.categoria.to_owned(), "Modpack".to_owned()],
+        (m.autor, "Equipo", format!("{} modpacks", top.len().max(1)), top),
+        "Código abierto",
+        "2025-04-02",
+        publicaciones[0].1,
+        vec![
+            (Icono::Descargas, format!("{} descargas", m.descargas)),
+            (Icono::Instancias, format!("{} mods · {}", m.mods, m.tamano)),
+        ],
+    ) {
+        lateral = lateral.push(t);
+    }
+
+    let cuerpo = row![
+        container(desplazable(column![barra, contenido].spacing(espacio::S6).padding(Padding { right: espacio::S4, ..Padding::ZERO })))
+            .width(Length::Fill)
+            .height(Length::Fill),
+        container(desplazable(lateral)).width(300).height(Length::Fill),
+    ]
+    .spacing(espacio::S8)
+    .height(Length::Fill);
+    column![encabezado, cuerpo]
+        .spacing(espacio::S6)
+        .padding(Padding::from([espacio::S6, espacio::S12]))
+        .into()
+}
+
+/// Catálogo de modpacks: cada uno se instala como una instancia nueva.
+fn pantalla_modpacks(app: &App) -> Element<'_, Mensaje> {
+    let p = app.modo.paleta();
+    if let Some(i) = app.modpack_pagina {
+        return con_entrada(app, pagina_modpack(app, i));
+    }
+    let consulta = app.busqueda_modpacks.trim().to_lowercase();
+    let categoria = modpacks::CATEGORIAS[app.modpack_filtro.min(modpacks::CATEGORIAS.len() - 1)];
+    let existentes: Vec<String> = instancias().into_iter().map(|d| d.nombre).collect();
+
+    let mut chips = row![].spacing(espacio::S2);
+    for (i, c) in modpacks::CATEGORIAS.iter().enumerate() {
+        chips = chips.push(componentes::chip(p, c, app.modpack_filtro == i, Mensaje::FiltroModpacks(i)));
+    }
+    let herramientas = row![
+        chips,
+        Space::with_width(Length::Fill),
+        container(componentes::campo(p, "Buscar modpacks", &app.busqueda_modpacks, Mensaje::BuscarModpacks)).width(300),
+    ]
+    .spacing(espacio::S4)
+    .align_y(Alignment::Center);
+
+    let mut tarjetas: Vec<Element<Mensaje>> = Vec::new();
+    for (i, m) in modpacks::CATALOGO.iter().enumerate() {
+        let coincide = (categoria == "Todos" || m.categoria == categoria)
+            && (consulta.is_empty()
+                || m.nombre.to_lowercase().contains(&consulta)
+                || m.descripcion.to_lowercase().contains(&consulta));
+        if !coincide {
+            continue;
+        }
+        let instalado = existentes.iter().any(|n| n == m.nombre);
+        let instalando = app.instalando.iter().any(|(n, _)| n == m.nombre);
+        let accion = if instalado {
+            componentes::boton(
+                p,
+                if instalando { "Instalando" } else { "Instalado" },
+                Variante::Secundario,
+                None,
+            )
+        } else {
+            componentes::boton(p, "Instalar", Variante::Primario, Some(Mensaje::InstalarModpack(i)))
+        };
+        let cuerpo = column![
+            iced::widget::button(text(m.nombre).font(fuentes::TITULO).size(texto::HEADING.0).color(p.text))
+                .padding(0)
+                .on_press(Mensaje::AbrirModpack(i))
+                .style(icaro_ui::estilo::sin_estilo(p.text)),
+            text(format!("{} · {}", m.minecraft, m.cargador).to_uppercase())
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .color(p.text_muted),
+            text(m.descripcion).size(texto::BODY_SM.0).color(p.text),
+            text(format!("{} · {} descargas
+{} mods · {}", m.autor, m.descargas, m.mods, m.tamano))
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .color(p.text_muted),
+            Space::with_height(Length::Fill),
+            row![
+                icaro_ui::componentes::insignia(p, icaro_ui::componentes::Estado::Info, m.categoria),
+                Space::with_width(Length::Fill),
+                accion,
+            ]
+            .align_y(Alignment::Center),
+        ]
+        .spacing(espacio::S2)
+        .height(Length::Fill);
+        tarjetas.push(
+            container(
+                column![
+                    icaro_ui::laminas::grabado(p, m.portada, Length::Fill, 110),
+                    container(cuerpo).padding(espacio::S4).height(Length::Fill),
+                ],
+            )
+            .width(icaro_ui::instancias::ANCHO_TARJETA)
+            .height(330)
+            .style(icaro_ui::estilo::tarjeta(p, false))
+            .into(),
+        );
+    }
+
+    let disponible = app.ventana.width - 232.0 - 2.0 * espacio::S12 + espacio::S6;
+    let columnas = ((disponible / (icaro_ui::instancias::ANCHO_TARJETA + espacio::S6)).floor() as usize).max(1);
+    let mut rejilla = column![].spacing(espacio::S6);
+    let mut it = tarjetas.into_iter();
+    let mut hay = false;
+    loop {
+        let mut fila = row![].spacing(espacio::S6);
+        let mut n = 0;
+        for _ in 0..columnas {
+            if let Some(t) = it.next() {
+                fila = fila.push(t);
+                n += 1;
+            }
+        }
+        if n == 0 {
+            break;
+        }
+        hay = true;
+        rejilla = rejilla.push(fila);
+    }
+    if !hay {
+        rejilla = rejilla.push(text("Ningún modpack coincide con la búsqueda.").size(texto::BODY.0).color(p.text_muted));
+    }
+    let cuerpo = column![
+        text("Cada modpack se instala como una instancia nueva, con sus mods y su versión del juego.")
+            .size(texto::BODY.0)
+            .color(p.text_muted),
+        herramientas,
+        rejilla,
+    ]
+    .spacing(espacio::S6)
+    .padding(Padding::from([espacio::S6, espacio::S12]));
+    column![
+        banda(p, Lamina::HidraCabezas, "Modpacks", Some(modpacks::CATALOGO.len())),
+        suave(app, cuerpo)
+    ]
+    .into()
+}
+
 fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
+    if pestana == 2 || pestana == 3 {
+        if let Some(id) = &app.mod_pagina {
+            return con_entrada(app, pagina_mod(app, id));
+        }
+    }
     let datos = DatosEditor {
         nombre: "Supervivencia".into(),
         version: "1.21.4 · Fabric 0.16.9".into(),
@@ -649,22 +1874,8 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
                 InstalacionJava { version: "19".into(), proveedor: "No encontrado".into(), gestionada: false, ruta: "D:/jdk-19/bin/javaw.exe".into(), usado_por: "Ninguna".into(), existe: false },
             ],
         ),
-        3 => {
-            let nombres = [("Faithful 32x", "Faithful Team", "32x", CompatPaquete::Compatible), ("Soft Fantasy", "Aeris", "16x", CompatPaquete::HechoPara("1.20".into())), ("Por defecto", "Mojang", "16x", CompatPaquete::Compatible)];
-            let paquetes: Vec<Paquete> = nombres
-                .into_iter()
-                .enumerate()
-                .map(|(i, (n, a, r, c))| Paquete {
-                    nombre: n.into(),
-                    autor: a.into(),
-                    resolucion: r.into(),
-                    activo: app.paquetes_activos[i],
-                    compat: c,
-                    fijo: i == 2,
-                })
-                .collect();
-            pestana_recursos(p, app.vista_recursos, Mensaje::VistaRecursos, &paquetes, Mensaje::Paquete)
-        }
+        2 => pestana_mods(app),
+        3 => pestana_mods(app),
         4 => pestana_mundos(
             p,
             &[
@@ -701,7 +1912,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
                 },
             )
         }
-        _ => pendiente(app),
+        _ => container(Space::new(0, 0)).into(),
     };
     column![encabezado, barra, con_entrada(app, cuerpo)].into()
 }
@@ -728,9 +1939,13 @@ fn pantalla_consola(app: &App) -> Element<'_, Mensaje> {
                 .color(p.text)
         )
         .padding(Padding::from([espacio::S6, espacio::S12])),
-        container(consola(p, &lineas_consola(), app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
-            .padding(Padding::from([0.0, espacio::S12]))
-            .height(Length::Fill),
+        con_entrada(
+            app,
+            container(consola(p, &lineas_consola(), app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
+                .padding(Padding::from([0.0, espacio::S12]))
+                .height(Length::Fill)
+                .into(),
+        ),
         Space::with_height(espacio::S6),
     ]
     .into()
@@ -908,29 +2123,17 @@ fn pantalla_ajustes(app: &App) -> Element<'_, Mensaje> {
     .into()
 }
 
-fn pendiente(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
-    let partes: &[Parte] = match app.seccion {
-        Seccion::Mods => &[
-            Parte { nombre: "Biblioteca de mods", avance: AvanceParte::Pendiente },
-            Parte { nombre: "Tienda de mods", avance: AvanceParte::Pendiente },
-            Parte { nombre: "Sincronizar mods", avance: AvanceParte::Pendiente },
-        ],
-        _ => &[Parte { nombre: "Pantalla", avance: AvanceParte::Pendiente }],
-    };
-    componentes::en_construccion(p, app.seccion.nombre(), partes)
-}
-
 fn vista(app: &App) -> Element<'_, Mensaje> {
+    mods::fijar_recurso(app.editor == Some(3));
     let p = app.modo.paleta();
     let contenido = match app.seccion {
         Seccion::Instancias => pantalla_instancias(app),
         Seccion::Servidores => pantalla_servidores(app),
         Seccion::Descargas => pantalla_descargas(app),
         Seccion::Ajustes => pantalla_ajustes(app),
+        Seccion::Modpacks => pantalla_modpacks(app),
         Seccion::Consola => pantalla_consola(app),
         Seccion::Capturas => pantalla_capturas(app),
-        _ => pendiente(app),
     };
     let pie = row![
         column![
@@ -1063,7 +2266,8 @@ fn main() -> iced::Result {
         .default_font(fuentes::CUERPO)
         .subscription(|app| {
             let mut subs = vec![window::resize_events().map(|(_, s)| Mensaje::Tamano(s))];
-            if progreso(app.anim, app.ahora, MS_ENTRADA) < 1.0
+            if !app.instalando.is_empty()
+                || progreso(app.anim, app.ahora, MS_ENTRADA) < 1.0
                 || progreso(app.anim_menu, app.ahora, MS_MENU) < 1.0
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
@@ -1090,6 +2294,7 @@ fn main() -> iced::Result {
     let menu = std::env::var_os("ICARO_MENU").is_some().then_some(0);
     let con_dialogo = std::env::var_os("ICARO_DIALOGO").is_some();
     app.run_with(move || {
+        let guardado = estado::Guardado::cargar();
         (
             App {
                 modo: if piedra { Modo::Piedra } else { Modo::Tinta },
@@ -1114,28 +2319,47 @@ fn main() -> iced::Result {
                     pantalla_completa: false,
                     servidor: Some("Amigos · 10.147.17.1"),
                 },
-                cerrados: vec![],
+                cerrados: guardado.as_ref().map_or_else(Vec::new, |g| g.cerrados.clone()),
+                busqueda_mods: String::new(),
+                mods_vista: 0,
+                modpack_filtro: 0,
+                modpack_pagina: std::env::var("ICARO_PACK").ok().and_then(|v| v.parse().ok()),
+                modpack_pestana: std::env::var("ICARO_PACKTAB").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+                modpack_galeria: 0,
+                busqueda_modpacks: String::new(),
+                instalando: Vec::new(),
+                mod_pagina: std::env::var("ICARO_MOD").ok(),
+                mod_filtro_mc: "Todas".into(),
+                mod_filtro_loader: "Todos".into(),
+                mod_betas: false,
+                mod_galeria: 0,
+                mod_opcionales: Vec::new(),
+                mod_pestana: std::env::var("ICARO_MODTAB").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+                ultimo_guardado: String::new(),
                 anim: None,
                 anim_menu: None,
                 ahora: std::time::Instant::now(),
                 ultimo_clic: None,
                 menu_grupos: false,
-                lista_grupos: vec!["Con amigos".into(), "Técnicos".into()],
+                lista_grupos: guardado.as_ref().map_or_else(|| vec!["Con amigos".into(), "Técnicos".into()], |g| g.lista_grupos.clone()),
                 edicion_grupo: None,
-                grupos: vec![Some("Con amigos".into()), Some("Técnicos".into()), Some("Con amigos".into()), None, None],
-                configs: (0..5)
-                    .map(|_| ConfigJava {
-                        java: None,
-                        memoria_min: 2048,
-                        memoria_max: 6144,
-                        metaspace: 512,
-                        argumentos: "-XX:+UseG1GC".into(),
-                    })
-                    .collect(),
+                grupos: guardado.as_ref().filter(|g| g.grupos.len() >= 5).map_or_else(
+                    || vec![Some("Con amigos".into()), Some("Técnicos".into()), Some("Con amigos".into()), None, None],
+                    |g| g.grupos[..5].to_vec(),
+                ),
+                configs: guardado.as_ref().map(|g| g.configs()).filter(|c| c.len() >= 5).map(|c| c[..5].to_vec()).unwrap_or_else(|| {
+                    (0..5)
+                        .map(|_| ConfigJava {
+                            java: None,
+                            memoria_min: 2048,
+                            memoria_max: 6144,
+                            metaspace: 512,
+                            argumentos: "-XX:+UseG1GC".into(),
+                        })
+                        .collect()
+                }),
                 editor_inst: 0,
                 exp: Explorador::abrir("Supervivencia"),
-                vista_recursos: 0,
-                paquetes_activos: [true, false, true],
                 mundo: 0,
                 filtro_consola: 0,
                 busqueda_consola: String::new(),
