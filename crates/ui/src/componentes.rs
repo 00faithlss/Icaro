@@ -742,48 +742,6 @@ pub fn deslizador_memoria<'a, M: Clone + 'a>(
     .into()
 }
 
-/// Estado vacío: una lámina a la izquierda, un título que dice qué falta,
-/// una explicación y las acciones que lo resuelven.
-pub fn estado_vacio<'a, M: 'a>(
-    p: Paleta,
-    lamina: crate::laminas::Lamina,
-    titulo: &str,
-    explicacion: &str,
-    acciones: Vec<Element<'a, M>>,
-) -> Element<'a, M> {
-    let mut fila = row![].spacing(espacio::S2);
-    for a in acciones {
-        fila = fila.push(a);
-    }
-    container(
-        row![
-            container(
-                crate::laminas::grabado(p, lamina, Length::Fill, Length::Fill),
-            )
-            .width(Length::FillPortion(1))
-            .height(300)
-            .style(estilo::marco(p)),
-            column![
-                text(titulo.to_uppercase())
-                    .font(fuentes::DISPLAY)
-                    .size(texto::DISPLAY.0)
-                    .color(p.text),
-                text(explicacion.to_owned())
-                    .size(texto::BODY.0)
-                    .color(p.text_muted),
-                fila,
-            ]
-            .spacing(espacio::S4)
-            .width(Length::FillPortion(1)),
-        ]
-        .spacing(espacio::S12)
-        .align_y(iced::Alignment::Center),
-    )
-    .padding(espacio::S6)
-    .width(Length::Fill)
-    .into()
-}
-
 /// Avance de una parte de una sección en construcción.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AvanceParte {
