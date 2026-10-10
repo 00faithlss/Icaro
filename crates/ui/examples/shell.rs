@@ -117,6 +117,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         Cuenta {
             nombre: "Mineral_7",
             proveedor: "Microsoft",
+            estado: icaro_ui::cuenta::EstadoSesion::Activa,
         },
         Some(DescargasActivas {
             cantidad: 2,
@@ -129,6 +130,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             ir_a: Box::new(Mensaje::Ir),
             arrastrar: Mensaje::Arrastrar,
             buscar: Mensaje::Nada,
+            cuenta: Mensaje::Nada,
             minimizar: Mensaje::Minimizar,
             maximizar: Mensaje::Maximizar,
             cerrar: Mensaje::Cerrar,

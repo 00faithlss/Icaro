@@ -197,6 +197,7 @@ pub fn grabado<'a, M: 'a>(
         entero: false,
         prensa: false,
         tinta: p.text,
+        posicion: None,
     })
 }
 
@@ -218,6 +219,7 @@ pub fn grabado_prensa<'a, M: 'a>(
         entero: false,
         prensa: true,
         tinta: p.text,
+        posicion: None,
     })
 }
 
@@ -238,6 +240,7 @@ pub fn grabado_entero<'a, M: 'a>(
         entero: true,
         prensa: false,
         tinta: p.text,
+        posicion: None,
     })
 }
 
@@ -258,6 +261,30 @@ pub fn grabado_zoom<'a, M: 'a>(
         entero: false,
         prensa: true,
         tinta: p.text,
+        posicion: None,
+    })
+}
+
+/// Igual que [`grabado`], con el encuadre de `object-position`: `posicion`
+/// es la fracción (de 0 a 1) de la imagen que se alinea con esa misma
+/// fracción de la caja. Sirve para no cortar rostros en cuadros pequeños.
+pub fn grabado_posicion<'a, M: 'a>(
+    p: Paleta,
+    lamina: Lamina,
+    ancho: impl Into<Length>,
+    alto: impl Into<Length>,
+    posicion: (f32, f32),
+) -> Element<'a, M> {
+    Element::new(Grabado {
+        handle: lamina.imagen(p.modo).clone(),
+        ancho: ancho.into(),
+        alto: alto.into(),
+        foco: lamina.foco(),
+        zoom: false,
+        entero: false,
+        prensa: false,
+        tinta: p.text,
+        posicion: Some(posicion),
     })
 }
 
@@ -273,6 +300,9 @@ struct Grabado {
     prensa: bool,
     /// Color de la barra de tinta de la Prensa.
     tinta: iced::Color,
+    /// Como `object-position` de CSS: fracción de la imagen que se alinea con
+    /// la misma fracción de la caja.
+    posicion: Option<(f32, f32)>,
 }
 
 #[derive(Default)]
@@ -434,6 +464,8 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
         // El foco de la imagen queda lo más cerca posible del centro de la caja.
         let (x, y) = if self.entero {
             (caja.center_x() - w / 2.0, caja.center_y() - h / 2.0)
+        } else if let Some((px, py)) = self.posicion {
+            (caja.x + px * (caja.width - w), caja.y + py * (caja.height - h))
         } else {
             (
                 (caja.center_x() - self.foco.0 * w).clamp(caja.x + caja.width - w, caja.x),

@@ -34,6 +34,8 @@ mod mods;
 mod modpacks;
 #[path = "launcher_aux/pantallas.rs"]
 mod pantallas;
+#[path = "launcher_aux/sesion.rs"]
+mod sesion;
 
 use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
@@ -118,6 +120,7 @@ struct App {
     picar: Option<Picar>,
     /// Instancia recién devuelta a la cuadrícula (Colocar).
     colocada: Option<(usize, std::time::Instant)>,
+    sesion: sesion::Sesion,
 }
 
 /// Eliminación por Picar: se mantiene presionado hasta romper la tarjeta.
@@ -192,6 +195,7 @@ enum Mensaje {
     TiendaLado(usize),
     TiendaOrden(usize),
     Pant(pantallas::Accion),
+    Ses(sesion::Accion),
     FiltroModpacks(usize),
     AbrirModpack(usize),
     CerrarModpack,
@@ -487,6 +491,10 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Captura(i) => app.captura = Some(i),
         Mensaje::Ir(s) => {
             app.seccion = s;
+            if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) {
+                app.pantalla = None;
+            }
+            app.sesion.menu = false;
             arrancar(app);
             app.editor = None;
         }
@@ -507,6 +515,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::BuscarMods(t) => app.busqueda_mods = t,
         Mensaje::AlternarMod(archivo) => mods::alternar(&instancias()[app.editor_inst].nombre, &archivo),
         Mensaje::Pant(a) => return pantallas::actualizar(app, a),
+        Mensaje::Ses(a) => return sesion::actualizar(app, a),
         Mensaje::FiltroMods(i) => {
             app.mods_filtro = i;
             arrancar(app);
@@ -625,8 +634,14 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.ahora = t;
             avanzar_instalaciones(app);
             avanzar_picar(app);
+            sesion::avanzar(app);
         }
         Mensaje::Jugar(i) => {
+            // Una sesión vencida muestra el aviso en lugar de abrir el Umbral.
+            let _ = sesion::actualizar(app, sesion::Accion::Jugar);
+            if app.sesion.banner_jugar {
+                return Task::none();
+            }
             // El Umbral solo se dispara desde Jugar, nunca al abrir el launcher.
             let ahora = std::time::Instant::now();
             app.menu = None;
@@ -2710,18 +2725,23 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
     ]
     .align_y(Alignment::Center)
     .padding(Padding::from([espacio::S2, espacio::S12]));
+    let pie: Element<Mensaje> = match sesion::banner_jugar(app) {
+        Some(banner) => column![banner, pie].into(),
+        None => pie.into(),
+    };
     let mut ventana = app_shell(
         p,
-        app.seccion,
+        if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { Seccion::Ajustes } else { app.seccion },
         app.colapsada,
-        Cuenta { nombre: "Mineral_7", proveedor: "Microsoft" },
+        Cuenta { nombre: app.sesion.estado.nombre(), proveedor: "Microsoft", estado: app.sesion.estado },
         Some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 }),
         contenido,
-        (app.seccion == Seccion::Instancias && app.editor.is_none()).then(|| pie.into()),
+        (app.seccion == Seccion::Instancias && app.editor.is_none() && !matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio))).then_some(pie),
         MensajesShell {
             ir_a: Box::new(Mensaje::Ir),
             arrastrar: Mensaje::Arrastrar,
             buscar: Mensaje::Nada,
+            cuenta: Mensaje::Ses(sesion::Accion::Menu(true)),
             minimizar: Mensaje::Minimizar,
             maximizar: Mensaje::Maximizar,
             cerrar: Mensaje::Cerrar,
@@ -2853,6 +2873,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ]
         .into();
     }
+    let ventana = sesion::con_selector(app, ventana);
     iced::widget::mouse_area(ventana)
         .on_move(Mensaje::Cursor)
         .into()
@@ -2870,6 +2891,7 @@ fn main() -> iced::Result {
                 || progreso(app.anim_menu, app.ahora, MS_MENU) < 1.0
                 || progreso(app.anim_panel, app.ahora, MS_PANEL) < 1.0
                 || (hay_dialogo(app) && progreso(app.anim_dialogo, app.ahora, MS_LOSA) < 1.0)
+                || sesion::animando(app)
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
             }
@@ -2889,6 +2911,20 @@ fn main() -> iced::Result {
             subs.push(iced::keyboard::on_key_release(|k, _| {
                 (k == iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete)).then_some(Mensaje::PicarSoltar)
             }));
+            if matches!(app.pantalla, Some(pantallas::Pantalla::Estudio)) {
+                // Flechas: giran la escena en pasos de 45°. Soltar una .png la carga.
+                subs.push(iced::keyboard::on_key_press(|tecla, _| match tecla {
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowLeft) => Some(Mensaje::Ses(sesion::Accion::Girar(-1))),
+                    iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowRight) => Some(Mensaje::Ses(sesion::Accion::Girar(1))),
+                    _ => None,
+                }));
+                subs.push(iced::event::listen_with(|evento, _, _| match evento {
+                    iced::Event::Window(window::Event::FileHovered(_)) => Some(Mensaje::Ses(sesion::Accion::Soltando(true))),
+                    iced::Event::Window(window::Event::FilesHoveredLeft) => Some(Mensaje::Ses(sesion::Accion::Soltando(false))),
+                    iced::Event::Window(window::Event::FileDropped(ruta)) => Some(Mensaje::Ses(sesion::Accion::Soltar(ruta))),
+                    _ => None,
+                }));
+            }
             iced::Subscription::batch(subs)
         })
         .window(window::Settings {
@@ -2980,6 +3016,8 @@ fn main() -> iced::Result {
                     Some("sync") => Some(pantallas::Pantalla::Sincronizar),
                     Some("integridad") => Some(pantallas::Pantalla::Integridad),
                     Some("update") => Some(pantallas::Pantalla::Actualizacion),
+                    Some("cuenta") => Some(pantallas::Pantalla::Cuenta),
+                    Some("estudio") => Some(pantallas::Pantalla::Estudio),
                     _ => guardado.is_none().then_some(pantallas::Pantalla::Primera),
                 },
                 aj: pantallas::Ajustes::default(),
@@ -2996,7 +3034,7 @@ fn main() -> iced::Result {
                 importar: std::env::var("ICARO_IMPORTAR").is_ok().then(|| pantallas::Importar { origen: 0, archivo: None, launchers: [true, false, false], clon_origen: 0, con_mundos: false }),
                 exportar: std::env::var("ICARO_EXPORTAR").is_ok().then(|| pantallas::Exportar { instancia: 0, nombre: "Supervivencia".into(), version: "1.0.0".into(), autor: "Mineral_7".into(), carpetas: [true, true, false, false] }),
                 codigo_inicio: std::time::Instant::now(),
-                codigo_fase: pantallas::FaseCodigo::Esperando,
+                codigo_fase: if std::env::var("ICARO_CODIGO").as_deref() == Ok("vencido") { pantallas::FaseCodigo::Vencido } else { pantallas::FaseCodigo::Esperando },
                 intentos: 0,
                 detalle_fallo: false,
                 modpack_pagina: std::env::var("ICARO_PACK").ok().and_then(|v| v.parse().ok()),
@@ -3059,6 +3097,7 @@ fn main() -> iced::Result {
                     Some(Picar { instancia, inicio: ahora, soltada: Some((lejos, etapa)), rota: None })
                 }),
                 colocada: None,
+                sesion: sesion::Sesion::desde_entorno(),
             },
             Task::none(),
         )

@@ -56,6 +56,14 @@ iconos! {
     Pausa => "pause",
     Candado => "lock",
     Info => "circle-info",
+    Pincel => "brush",
+    Deshacer => "undo",
+    Rehacer => "redo",
+    Entrar => "login",
+    Salir => "logout",
+    Refrescar => "refresh",
+    Usuario => "user",
+    UsuarioMas => "user-plus",
 }
 
 /// Tamaños permitidos, múltiplos del píxel de arte.

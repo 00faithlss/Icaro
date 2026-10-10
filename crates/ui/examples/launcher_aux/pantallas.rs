@@ -31,6 +31,7 @@ pub enum Pantalla {
     Integridad,
     Actualizacion,
     Cuenta,
+    Estudio,
     Red,
 }
 
@@ -490,9 +491,14 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             app.codigo_inicio = Instant::now();
             app.codigo_fase = FaseCodigo::Esperando;
         }
-        Accion::SimularConfirmacion => app.codigo_fase = FaseCodigo::Confirmado(Instant::now()),
+        Accion::SimularConfirmacion => {
+            app.codigo_fase = FaseCodigo::Confirmado(Instant::now());
+            app.sesion.estado = icaro_ui::cuenta::EstadoSesion::Activa;
+            app.sesion.banner_jugar = false;
+        }
         Accion::JugarComoInvitado => {
             app.pantalla = None;
+            app.sesion.estado = icaro_ui::cuenta::EstadoSesion::Invitado;
             app.aviso = Some("Sigues como invitado. Puedes iniciar sesión luego desde la cuenta.".into());
             arrancar(app);
         }
@@ -612,7 +618,8 @@ pub fn vista_pantalla<'a>(app: &'a App, pantalla: Pantalla) -> Element<'a, Mensa
         Pantalla::Sincronizar => con_lamina(p, Lamina::Hidra, crate::desplazable_pub(sincronizar(p))),
         Pantalla::Integridad => con_lamina(p, Lamina::Minerva, crate::desplazable_pub(integridad(app, p))),
         Pantalla::Actualizacion => con_lamina(p, Lamina::Saturno, crate::desplazable_pub(actualizacion(p))),
-        Pantalla::Cuenta => con_lamina(p, Lamina::ApoloBelvedere, crate::desplazable_pub(cuenta(p))),
+        Pantalla::Cuenta => crate::desplazable_pub(crate::sesion::vista_cuenta(app)),
+        Pantalla::Estudio => crate::sesion::vista_estudio(app),
         Pantalla::Red => con_lamina(p, Lamina::HermesHilos, crate::desplazable_pub(red_privada(p))),
     }
 }
@@ -653,18 +660,6 @@ fn primera<'a>(_app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
     con_lamina(p, Lamina::Icaro, derecha.into())
 }
 
-fn celda<'a>(p: Paleta, c: char, vencido: bool) -> Element<'a, Mensaje> {
-    let tinta = if vencido { p.warning } else { p.text };
-    container(text(c.to_string()).font(fuentes::MONO).size(26.0).color(tinta))
-        .center_x(44)
-        .center_y(56)
-        .style(move |_: &iced::Theme| iced::widget::container::Style {
-            border: iced::Border { color: tinta, width: 2.0, radius: 0.0.into() },
-            ..Default::default()
-        })
-        .into()
-}
-
 fn codigo<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
     let restante = 900u64.saturating_sub(app.ahora.saturating_duration_since(app.codigo_inicio).as_secs());
     let fase = match app.codigo_fase {
@@ -672,15 +667,7 @@ fn codigo<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
         f => f,
     };
     let vencido = fase == FaseCodigo::Vencido;
-    let mut celdas = row![].spacing(espacio::S2).align_y(Alignment::Center);
-    for (i, c) in "F7K2-9QXM".chars().enumerate() {
-        if c == '-' {
-            celdas = celdas.push(text("—").size(24.0).color(p.text_muted));
-        } else {
-            let _ = i;
-            celdas = celdas.push(celda(p, c, vencido));
-        }
-    }
+    let celdas = icaro_ui::cuenta::codigo(p, "F7K2-9QXM", vencido);
     let mut col = column![
         text("INICIA SESIÓN\nCON MICROSOFT").font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
         text("Tu cuenta de Minecraft se confirma en el navegador. Ícaro nunca ve tu contraseña.")
@@ -696,8 +683,15 @@ fn codigo<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
     match fase {
         FaseCodigo::Vencido => {
             col = col
-                .push(text("El código venció. Pide otro para continuar.").size(texto::BODY.0).color(p.warning))
-                .push(row![componentes::boton(p, "Pedir otro código", Variante::Primario, Some(m(Accion::PedirOtroCodigo)))]);
+                .push(text("El código venció a los 15 minutos. Pide otro para seguir.").size(texto::BODY_SM.0).color(p.warning))
+                .push(row![icaro_ui::cuenta::boton_icono(
+                    p,
+                    Some(Icono::Refrescar),
+                    "Pedir otro código",
+                    icaro_ui::cuenta::Tipo::Primario,
+                    icaro_ui::tema::medida::CONTROL_SM,
+                    Some(m(Accion::PedirOtroCodigo)),
+                )]);
         }
         FaseCodigo::Confirmado(t) => {
             col = col.push(
@@ -1494,49 +1488,7 @@ pub fn cambiar_version<'a>(app: &'a App, i: usize) -> Element<'a, Mensaje> {
     )
 }
 
-// ------------------------------------------------- cuenta y red privada
-
-fn skin<'a>(p: Paleta, espalda: bool) -> Element<'a, Mensaje> {
-    // Muñeco de píxeles: cabeza, torso, brazos y piernas.
-    let c = |w: f32, h: f32, color: iced::Color| container(Space::new(w, h)).style(icaro_ui::estilo::bloque(color));
-    let piel = p.text_muted;
-    let ropa = if espalda { p.border_strong } else { p.text };
-    let pelo = p.border;
-    column![
-        c(64.0, 64.0, if espalda { pelo } else { piel }),
-        row![c(32.0, 96.0, piel), c(64.0, 96.0, ropa), c(32.0, 96.0, piel)],
-        row![c(32.0, 96.0, p.border_strong), c(32.0, 96.0, p.border_strong)],
-    ]
-    .align_x(Alignment::Center)
-    .into()
-}
-
-fn cuenta<'a>(p: Paleta) -> Element<'a, Mensaje> {
-    let cabezas = row![
-        skin_mini(p, 1), skin_mini(p, 2), skin_mini(p, 3), skin_mini(p, 4),
-    ]
-    .spacing(espacio::S3);
-    column![
-        text("CUENTA").font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
-        text("mineral7@outlook.com · Microsoft").font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
-        row![skin(p, false), skin(p, true)].spacing(espacio::S6),
-        componentes::boton(p, "Abrir estudio", Variante::Secundario, Some(Mensaje::Nada)),
-        icaro_ui::componentes::etiqueta(p, "Nombre de usuario"),
-        text("Mineral_7").font(fuentes::MONO).size(texto::MONO.0).color(p.text),
-        text("Puedes cambiarlo de nuevo en 30 días.").size(texto::BODY_SM.0).color(p.text_muted),
-        icaro_ui::componentes::etiqueta(p, "Historial de skins"),
-        cabezas,
-        componentes::boton(p, "Cerrar sesión de esta cuenta", Variante::Peligro, Some(m(Accion::Cerrar))),
-        componentes::boton(p, "Volver", Variante::Fantasma, Some(m(Accion::Cerrar))),
-    ]
-    .spacing(espacio::S3)
-    .into()
-}
-
-fn skin_mini<'a>(p: Paleta, n: u32) -> Element<'a, Mensaje> {
-    let color = [p.text, p.text_muted, p.border_strong, p.border][(n as usize) % 4];
-    container(Space::new(40.0, 40.0)).style(icaro_ui::estilo::bloque(color)).into()
-}
+// ------------------------------------------------- red privada
 
 fn red_privada<'a>(p: Paleta) -> Element<'a, Mensaje> {
     let paso = |n: &str, t: &str, d: &str| -> Element<'a, Mensaje> {
