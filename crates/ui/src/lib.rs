@@ -7,6 +7,7 @@ pub mod ajustes;
 pub mod capturas;
 pub mod componentes;
 pub mod consola;
+pub mod cuenta;
 pub mod descargas;
 pub mod editor;
 pub mod estilo;

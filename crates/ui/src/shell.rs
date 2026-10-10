@@ -68,6 +68,7 @@ impl Seccion {
 pub struct Cuenta<'a> {
     pub nombre: &'a str,
     pub proveedor: &'a str,
+    pub estado: crate::cuenta::EstadoSesion,
 }
 
 /// Resumen de las descargas activas; la barra lateral lo muestra solo si existe.
@@ -84,6 +85,8 @@ pub struct MensajesShell<'a, M> {
     pub ir_a: Box<dyn Fn(Seccion) -> M + 'a>,
     pub arrastrar: M,
     pub buscar: M,
+    /// Abre el menú de cuentas desde el bloque de la barra lateral.
+    pub cuenta: M,
     pub minimizar: M,
     pub maximizar: M,
     pub cerrar: M,
@@ -331,34 +334,17 @@ fn indicador_descargas<'a, M: 'a>(p: Paleta, d: &DescargasActivas) -> Element<'a
     .into()
 }
 
-fn bloque_cuenta<'a, M: 'a>(p: Paleta, c: &Cuenta<'a>) -> Element<'a, M> {
-    container(
-        row![
-            column![
-                text(c.nombre.to_string())
-                    .font(fuentes::CUERPO_NEGRITA)
-                    .size(texto::BODY.0),
-                text(c.proveedor.to_string())
-                    .font(fuentes::MONO)
-                    .size(texto::MONO_SM.0)
-                    .color(p.text_muted),
-            ]
-            .spacing(0),
-            Space::with_width(Length::Fill),
-            icono(Icono::Flecha, Tam::Base, p.text),
-        ]
-        .align_y(Alignment::Center),
-    )
-    .padding(espacio::S3)
-    .width(Length::Fill)
-    .style(move |_: &Theme| container::Style {
-        border: Border {
-            width: borde::MEDIO,
-            color: p.border_strong,
-            radius: 0.0.into(),
-        },
-        ..Default::default()
-    })
+/// Bloque de cuenta: cabeza de skin, nombre y proveedor, sobre una regla de
+/// 1 px. Al pulsarlo se abre el menú de cuentas.
+fn bloque_cuenta<'a, M: Clone + 'a>(p: Paleta, c: &Cuenta<'a>, al_pulsar: M) -> Element<'a, M> {
+    column![
+        container(Space::new(Length::Fill, Length::Fixed(borde::FINO))).style(move |_: &Theme| container::Style {
+            background: Some(Background::Color(p.border)),
+            ..Default::default()
+        }),
+        crate::cuenta::bloque_cuenta(p, c.estado, c.nombre, c.proveedor, al_pulsar),
+    ]
+    .spacing(espacio::S3)
     .into()
 }
 
@@ -379,7 +365,7 @@ fn barra_lateral<'a, M: Clone + 'a>(
         if let Some(d) = descargas {
             pie = pie.push(indicador_descargas(p, d));
         }
-        pie = pie.push(bloque_cuenta(p, cuenta));
+        pie = pie.push(bloque_cuenta(p, cuenta, m.cuenta.clone()));
     }
     let ancho = if colapsada {
         medida::BARRA_LATERAL_COLAPSADA
