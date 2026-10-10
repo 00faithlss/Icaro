@@ -9,6 +9,7 @@ pub mod componentes;
 pub mod consola;
 pub mod descargas;
 pub mod editor;
+pub mod efectos;
 pub mod estilo;
 pub mod fuentes;
 pub mod iconos;

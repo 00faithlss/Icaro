@@ -583,7 +583,7 @@ fn con_lamina<'a>(p: Paleta, lamina: Lamina, derecha: Element<'a, Mensaje>) -> E
             .height(Length::Fill)
             .into()
     } else {
-        container(grabado(p, lamina, Length::Fill, Length::Fill))
+        container(icaro_ui::efectos::lupa(p, lamina))
             .width(Length::FillPortion(2))
             .height(Length::Fill)
             .into()

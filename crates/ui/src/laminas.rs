@@ -127,7 +127,7 @@ pub fn banda_con<'a, M: 'a>(
     alto: f32,
     tam_titulo: (f32, f32),
 ) -> Element<'a, M> {
-    let grabado = self::grabado(p, lamina, Length::Fill, alto);
+    let grabado = self::grabado_prensa(p, lamina, Length::Fill, alto);
     let mut rotulo = row![text(titulo.to_uppercase())
         .font(fuentes::DISPLAY)
         .size(tam_titulo.0)
@@ -195,6 +195,29 @@ pub fn grabado<'a, M: 'a>(
         foco: lamina.foco(),
         zoom: false,
         entero: false,
+        prensa: false,
+        tinta: p.text,
+    })
+}
+
+/// Igual que [`grabado`], pero la lámina se imprime de arriba abajo al
+/// cargar (Prensa): ocho pasos en `dur-prensa` con una barra de tinta al
+/// frente. Con movimiento reducido es un fundido de 120 ms.
+pub fn grabado_prensa<'a, M: 'a>(
+    p: Paleta,
+    lamina: Lamina,
+    ancho: impl Into<Length>,
+    alto: impl Into<Length>,
+) -> Element<'a, M> {
+    Element::new(Grabado {
+        handle: lamina.imagen(p.modo).clone(),
+        ancho: ancho.into(),
+        alto: alto.into(),
+        foco: lamina.foco(),
+        zoom: false,
+        entero: false,
+        prensa: true,
+        tinta: p.text,
     })
 }
 
@@ -213,6 +236,8 @@ pub fn grabado_entero<'a, M: 'a>(
         foco: (0.5, 0.5),
         zoom: false,
         entero: true,
+        prensa: false,
+        tinta: p.text,
     })
 }
 
@@ -231,6 +256,8 @@ pub fn grabado_zoom<'a, M: 'a>(
         foco: lamina.foco(),
         zoom: true,
         entero: false,
+        prensa: true,
+        tinta: p.text,
     })
 }
 
@@ -242,6 +269,10 @@ struct Grabado {
     zoom: bool,
     /// Se muestra entera, sin recortar, centrada en la caja.
     entero: bool,
+    /// Se imprime de arriba abajo al cargar (Prensa).
+    prensa: bool,
+    /// Color de la barra de tinta de la Prensa.
+    tinta: iced::Color,
 }
 
 #[derive(Default)]
@@ -250,6 +281,10 @@ struct EstadoZoom {
     escala: f32,
     encima: bool,
     ultimo: Option<std::time::Instant>,
+    /// Instante en que la lámina se mostró por primera vez (Prensa).
+    cargada: Option<std::time::Instant>,
+    /// Milisegundos transcurridos desde que se mostró, para el dibujo.
+    prensa_ms: f32,
 }
 
 const ZOOM_MAX: f32 = 1.07;
@@ -305,10 +340,24 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
         shell: &mut iced::advanced::Shell<'_, M>,
         _visible: &iced::Rectangle,
     ) -> iced::event::Status {
+        let estado = arbol.state.downcast_mut::<EstadoZoom>();
+        if let (true, iced::Event::Window(iced::window::Event::RedrawRequested(ahora))) =
+            (self.prensa, &evento)
+        {
+            let inicio = *estado.cargada.get_or_insert(*ahora);
+            estado.prensa_ms = ahora.saturating_duration_since(inicio).as_secs_f32() * 1000.0;
+            let fin = if crate::movimiento::preferencia().reducir {
+                crate::tema::duracion::FAST
+            } else {
+                crate::tema::duracion::PRENSA
+            };
+            if estado.prensa_ms < fin as f32 {
+                shell.request_redraw(iced::window::RedrawRequest::NextFrame);
+            }
+        }
         if !self.zoom {
             return iced::event::Status::Ignored;
         }
-        let estado = arbol.state.downcast_mut::<EstadoZoom>();
         match evento {
             iced::Event::Mouse(_) => {
                 let encima = cursor.is_over(layout.bounds());
@@ -358,7 +407,23 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
         if tam.width == 0 || tam.height == 0 || caja.width <= 0.0 || caja.height <= 0.0 {
             return;
         }
-        let escala_zoom = arbol.state.downcast_ref::<EstadoZoom>().escala.max(1.0);
+        let estado = arbol.state.downcast_ref::<EstadoZoom>();
+        let escala_zoom = estado.escala.max(1.0);
+        // Prensa: la lámina se imprime de arriba abajo al cargar.
+        let (impreso, opacidad, barra) = if self.prensa {
+            crate::movimiento::prensa_lamina(estado.prensa_ms, crate::movimiento::preferencia())
+        } else {
+            (1.0, 1.0, false)
+        };
+        let recorte = if impreso < 1.0 {
+            let tapa = iced::Rectangle { height: caja.height * impreso, ..caja };
+            match tapa.intersection(&recorte) {
+                Some(r) => r,
+                None => return,
+            }
+        } else {
+            recorte
+        };
         let (iw, ih) = (tam.width as f32, tam.height as f32);
         let escala = if self.entero {
             (caja.width / iw).min(caja.height / ih)
@@ -382,11 +447,23 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
                     handle: self.handle.clone(),
                     filter_method: iced::advanced::image::FilterMethod::Linear,
                     rotation: iced::Radians(0.0),
-                    opacity: 1.0,
+                    opacity: opacidad,
                     snap: true,
                 },
                 dibujo,
             );
         });
+        if barra {
+            // Barra de tinta de 3 px que baja con la plancha y se apaga al final.
+            let y = caja.y + (caja.height - 3.0) * impreso;
+            if let Some(b) = (iced::Rectangle { x: caja.x, y, width: caja.width, height: 3.0 })
+                .intersection(visible)
+            {
+                renderer.fill_quad(
+                    iced::advanced::renderer::Quad { bounds: b, ..Default::default() },
+                    iced::Background::Color(iced::Color { a: 1.0 - impreso, ..self.tinta }),
+                );
+            }
+        }
     }
 }

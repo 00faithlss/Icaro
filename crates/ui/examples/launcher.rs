@@ -112,6 +112,34 @@ struct App {
     cursor: Point,
     menu_en: Point,
     ventana: Size,
+    /// Instante en que se pulsó Jugar; mientras exista, el Umbral cubre la ventana.
+    umbral: Option<std::time::Instant>,
+    /// Eliminación en curso manteniendo Supr sobre la instancia seleccionada.
+    picar: Option<Picar>,
+    /// Instancia recién devuelta a la cuadrícula (Colocar).
+    colocada: Option<(usize, std::time::Instant)>,
+}
+
+/// Eliminación por Picar: se mantiene presionado hasta romper la tarjeta.
+struct Picar {
+    instancia: usize,
+    inicio: std::time::Instant,
+    /// Si se soltó antes de tiempo: cuándo y desde qué etapa se retiran las grietas.
+    soltada: Option<(std::time::Instant, u32)>,
+    /// Instante en que la tarjeta se rompió.
+    rota: Option<std::time::Instant>,
+}
+
+fn ms_desde(inicio: std::time::Instant, ahora: std::time::Instant) -> f32 {
+    ahora.saturating_duration_since(inicio).as_secs_f32() * 1000.0
+}
+
+/// Etapa de grietas visible de una eliminación en curso.
+fn etapa_picar(p: &Picar, ahora: std::time::Instant) -> u32 {
+    match p.soltada {
+        Some((t, desde)) => icaro_ui::movimiento::picar_soltar(desde, ms_desde(t, ahora)),
+        None => icaro_ui::movimiento::picar_etapa(ms_desde(p.inicio, ahora)),
+    }
 }
 
 /// Creación o renombrado de un grupo en curso.
@@ -209,6 +237,10 @@ enum Mensaje {
     Nada,
     Cursor(Point),
     Tamano(Size),
+    Jugar(usize),
+    UmbralVolver,
+    PicarEmpezar,
+    PicarSoltar,
 }
 
 /// Inicia la entrada suave del contenido, salvo con movimiento reducido.
@@ -592,6 +624,43 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Cuadro(t) => {
             app.ahora = t;
             avanzar_instalaciones(app);
+            avanzar_picar(app);
+        }
+        Mensaje::Jugar(i) => {
+            // El Umbral solo se dispara desde Jugar, nunca al abrir el launcher.
+            let ahora = std::time::Instant::now();
+            app.menu = None;
+            app.seleccionada = i;
+            app.umbral = Some(ahora);
+            app.ahora = ahora;
+        }
+        Mensaje::UmbralVolver => app.umbral = None,
+        Mensaje::PicarEmpezar => {
+            let libre = app.umbral.is_none()
+                && app.seccion == Seccion::Instancias
+                && app.editor.is_none()
+                && app.pantalla.is_none()
+                && app.menu.is_none()
+                && app.mod_panel.is_none()
+                && app.edicion_grupo.is_none()
+                && !hay_dialogo(app);
+            let reintento = app.picar.as_ref().is_some_and(|p| p.soltada.is_some() && p.rota.is_none());
+            if libre && (app.picar.is_none() || reintento) {
+                let ahora = std::time::Instant::now();
+                app.picar = Some(Picar { instancia: app.seleccionada, inicio: ahora, soltada: None, rota: None });
+                app.ahora = ahora;
+            }
+        }
+        Mensaje::PicarSoltar => {
+            let ahora = std::time::Instant::now();
+            if let Some(p) = &app.picar {
+                if p.rota.is_none() && p.soltada.is_none() {
+                    let etapa = etapa_picar(p, ahora);
+                    if let Some(p) = &mut app.picar {
+                        p.soltada = Some((ahora, etapa));
+                    }
+                }
+            }
         }
         Mensaje::FiltroModpacks(i) => {
             app.modpack_filtro = i;
@@ -645,12 +714,25 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.dialogo = false;
             app.aviso = Some("Se eliminó la instancia Supervivencia.".into());
         }
-        Mensaje::CerrarAviso => app.aviso = None,
+        Mensaje::CerrarAviso => {
+            app.aviso = None;
+            // Deshacer una eliminación por Picar: la tarjeta vuelve y se asienta.
+            if app.picar.as_ref().is_some_and(|p| p.rota.is_some()) {
+                if let Some(p) = app.picar.take() {
+                    let ahora = std::time::Instant::now();
+                    app.colocada = Some((p.instancia, ahora));
+                    app.ahora = ahora;
+                }
+            }
+        }
         Mensaje::Tema(i) => {
             app.tema = i;
             app.modo = if i == 1 { Modo::Piedra } else { Modo::Tinta };
         }
-        Mensaje::Reducir => app.reducir = !app.reducir,
+        Mensaje::Reducir => {
+            app.reducir = !app.reducir;
+            icaro_ui::movimiento::fijar_reducir(app.reducir);
+        }
         Mensaje::Simultaneas(n) => app.simultaneas = n.clamp(1, 8),
         Mensaje::Ajuste(i) => app.ajuste = i,
         Mensaje::Arrastrar => {
@@ -743,6 +825,54 @@ fn avanzar_instalaciones(app: &mut App) {
     app.instalando.retain(|(n, _)| !terminadas.contains(n));
 }
 
+/// Avanza la eliminación por Picar: rompe la tarjeta al llegar a la décima
+/// etapa y retira las grietas si se soltó antes.
+fn avanzar_picar(app: &mut App) {
+    let ahora = app.ahora;
+    let Some(p) = &app.picar else { return };
+    if p.rota.is_some() {
+        return;
+    }
+    let etapa = etapa_picar(p, ahora);
+    if p.soltada.is_some() {
+        if etapa == 0 {
+            app.picar = None;
+        }
+    } else if etapa >= icaro_ui::movimiento::PICAR_ETAPAS {
+        let nombre = instancias().get(p.instancia).map(|d| d.nombre.clone()).unwrap_or_default();
+        if let Some(p) = &mut app.picar {
+            p.rota = Some(ahora);
+        }
+        // Deshacer dura mientras el aviso siga abierto.
+        app.aviso = Some(format!("{nombre} eliminada."));
+    }
+}
+
+/// Envuelve una tarjeta con las capas de Picar y Colocar que le correspondan.
+fn con_efectos<'a>(app: &App, i: usize, nombre: &str, tarjeta: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+    use icaro_ui::efectos::{self, FasePicar};
+    use icaro_ui::instancias::{ALTO_TARJETA, ANCHO_TARJETA};
+    let p = app.modo.paleta();
+    if let Some(pi) = app.picar.as_ref().filter(|pi| pi.instancia == i) {
+        return match pi.rota {
+            None => iced::widget::stack![tarjeta, efectos::picar(p, nombre, FasePicar::Grietas(etapa_picar(pi, app.ahora)))].into(),
+            Some(_) if app.reducir => Space::new(ANCHO_TARJETA, ALTO_TARJETA).into(),
+            Some(t) => iced::widget::stack![
+                Space::new(ANCHO_TARJETA, ALTO_TARJETA),
+                efectos::picar(p, nombre, FasePicar::Rota(ms_desde(t, app.ahora)))
+            ]
+            .into(),
+        };
+    }
+    match app.colocada {
+        Some((c, t)) if c == i => {
+            let avance = (ms_desde(t, app.ahora) / icaro_ui::tema::duracion::FAST as f32).clamp(0.0, 1.0);
+            iced::widget::stack![tarjeta, efectos::colocar(p, avance, ANCHO_TARJETA, ALTO_TARJETA)].into()
+        }
+        _ => tarjeta,
+    }
+}
+
 /// Contenido desplazable para las pantallas de otro módulo.
 fn desplazable_pub<'a>(e: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
     desplazable(e)
@@ -808,15 +938,16 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
         for i in miembros {
             let mut d = todas[i].clone();
             d.seleccionada = i == app.seleccionada;
-            tarjetas.push(tarjeta_instancia(
+            let tarjeta = tarjeta_instancia(
                 p,
                 &d,
                 AccionesTarjeta {
                     seleccionar: Mensaje::AbrirInstancia(i),
-                    principal: if matches!(d.estado, EstadoInstancia::Error) { Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Fallo)) } else { Mensaje::Nada },
+                    principal: if matches!(d.estado, EstadoInstancia::Error) { Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Fallo)) } else if matches!(d.estado, EstadoInstancia::Lista) { Mensaje::Jugar(i) } else { Mensaje::Nada },
                     mas: Mensaje::Menu(Some(i)),
                 },
-            ));
+            );
+            tarjetas.push(con_efectos(app, i, &d.nombre, tarjeta));
         }
         let mut it = tarjetas.into_iter();
         let mut rejilla = column![].spacing(espacio::S6);
@@ -2290,7 +2421,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
             volver: Mensaje::VolverEditor,
             abrir_carpeta: Mensaje::Nada,
             mas: Mensaje::Nada,
-            jugar: Mensaje::Nada,
+            jugar: Mensaje::Jugar(app.editor_inst),
         },
     );
     let barra = container(pestanas_editor(p, pestana, 214, 3, Mensaje::Pestana))
@@ -2575,7 +2706,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                 .color(p.text_muted),
         ],
         Space::with_width(Length::Fill),
-        componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Nada)),
+        componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Jugar(app.seleccionada))),
     ]
     .align_y(Alignment::Center)
     .padding(Padding::from([espacio::S2, espacio::S12]));
@@ -2616,7 +2747,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         let menu = menu_contextual(
             p,
             if app.menu_grupos { elementos_grupos } else { vec![
-                ElementoMenu::Opcion { icono: Icono::Jugar, texto: "Jugar".into(), atajo: Some("Enter"), peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Jugar, texto: "Jugar".into(), atajo: Some("Enter"), peligro: false, mensaje: Mensaje::Jugar(app.menu.unwrap_or(0)) },
                 ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Abrir carpeta".into(), atajo: Some("O"), peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::AbrirCarpetaInstancia(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Editar, texto: "Editar".into(), atajo: Some("E"), peligro: false, mensaje: Mensaje::Editar },
                 ElementoMenu::Separador,
@@ -2713,6 +2844,15 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ]
         .into();
     }
+    if let Some(t) = app.umbral {
+        let nombre = instancias().get(app.seleccionada).map(|d| d.nombre.clone()).unwrap_or_default();
+        let pref = icaro_ui::movimiento::Preferencia { reducir: app.reducir };
+        ventana = iced::widget::stack![
+            ventana,
+            icaro_ui::efectos::umbral(p, ms_desde(t, app.ahora), pref, &nombre, Mensaje::UmbralVolver),
+        ]
+        .into();
+    }
     iced::widget::mouse_area(ventana)
         .on_move(Mensaje::Cursor)
         .into()
@@ -2733,6 +2873,22 @@ fn main() -> iced::Result {
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
             }
+            let umbral_activo = app.umbral.is_some_and(|t| ms_desde(t, app.ahora) < 1700.0);
+            let picar_activo = app.picar.as_ref().is_some_and(|p| {
+                p.rota.map_or(true, |t| ms_desde(t, app.ahora) < icaro_ui::movimiento::PICAR_ROTURA_MS + 80.0)
+            });
+            let colocada_activa = app
+                .colocada
+                .is_some_and(|(_, t)| ms_desde(t, app.ahora) < icaro_ui::tema::duracion::FAST as f32);
+            if umbral_activo || picar_activo || colocada_activa {
+                subs.push(window::frames().map(Mensaje::Cuadro));
+            }
+            subs.push(iced::keyboard::on_key_press(|k, _| {
+                (k == iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete)).then_some(Mensaje::PicarEmpezar)
+            }));
+            subs.push(iced::keyboard::on_key_release(|k, _| {
+                (k == iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete)).then_some(Mensaje::PicarSoltar)
+            }));
             iced::Subscription::batch(subs)
         })
         .window(window::Settings {
@@ -2892,6 +3048,17 @@ fn main() -> iced::Result {
                 cursor: Point::ORIGIN,
                 menu_en: Point::new(420.0, 140.0),
                 ventana: Size::new(1280.0, 800.0),
+                umbral: std::env::var_os("ICARO_UMBRAL").is_some().then(std::time::Instant::now),
+                // ICARO_PICAR=<etapa>[:<instancia>]: abre con la eliminación detenida en esa etapa.
+                picar: std::env::var("ICARO_PICAR").ok().and_then(|v| {
+                    let mut partes = v.split(':');
+                    let etapa = partes.next()?.parse::<u32>().ok()?;
+                    let instancia = partes.next().and_then(|i| i.parse::<usize>().ok()).unwrap_or(0);
+                    let ahora = std::time::Instant::now();
+                    let lejos = ahora + std::time::Duration::from_secs(3600);
+                    Some(Picar { instancia, inicio: ahora, soltada: Some((lejos, etapa)), rota: None })
+                }),
+                colocada: None,
             },
             Task::none(),
         )
