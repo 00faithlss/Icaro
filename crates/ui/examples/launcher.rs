@@ -2278,6 +2278,11 @@ fn main() -> iced::Result {
             decorations: false,
             size: Size::new(1280.0, 800.0),
             min_size: Some(Size::new(940.0, 600.0)),
+            icon: window::icon::from_file_data(
+                include_bytes!("../assets/icono/icaro-256.png"),
+                None,
+            )
+            .ok(),
             ..Default::default()
         });
     for f in fuentes::BYTES {
