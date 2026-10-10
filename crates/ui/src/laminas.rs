@@ -13,8 +13,19 @@ use iced::{Alignment, Element, Length, Padding};
 use crate::fuentes;
 use crate::tema::{espacio, texto, Modo, Paleta};
 
+/// Archivo de la lámina en Tinta. Las marcadas con `@unica` tienen fondo
+/// negro y se ven igual en ambos temas, así que no tienen negativo.
+macro_rules! archivo_tinta {
+    ($archivo:literal) => {
+        concat!("../assets/laminas/", $archivo, "-negativo.webp")
+    };
+    ($archivo:literal, unica) => {
+        concat!("../assets/laminas/", $archivo, ".webp")
+    };
+}
+
 macro_rules! laminas {
-    ($($variante:ident => $archivo:literal),* $(,)?) => {
+    ($($variante:ident => $archivo:literal $(@ $unica:ident)?),* $(,)?) => {
         /// Láminas empaquetadas con el programa.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Lamina { $($variante),* }
@@ -33,7 +44,7 @@ macro_rules! laminas {
                         (Lamina::$variante, Modo::Tinta) => {
                             static CELDA: OnceLock<Handle> = OnceLock::new();
                             CELDA.get_or_init(|| Handle::from_bytes(
-                                &include_bytes!(concat!("../assets/laminas/", $archivo, "-negativo.webp"))[..],
+                                &include_bytes!(archivo_tinta!($archivo $(, $unica)?))[..],
                             ))
                         }
                     )*
@@ -101,6 +112,21 @@ laminas! {
     MelencoliaCometa => "melencolia-cometa",
     HuidaCiudad => "huida-ciudad",
     FaetonPaisaje => "faeton-paisaje",
+    // Láminas de fondo negro: iguales en ambos temas.
+    Umbral => "umbral" @unica,
+    Mano => "mano" @unica,
+    Orbita => "orbita" @unica,
+    Alas => "alas" @unica,
+    Forja => "forja" @unica,
+    // Detalles del Gabinete y del vacío de la Consola.
+    FaetonCuerpo => "faeton-cuerpo",
+    SaturnoRostro => "saturno-rostro",
+    MercurioCaduceo => "mercurio-caduceo",
+    MinervaRostro => "minerva-rostro",
+    ApoloMano => "apolo-mano",
+    BelvedereRostro => "belvedere-rostro",
+    FarnesioEspalda => "farnesio-espalda",
+    JeronimoSanto => "jeronimo-santo",
 }
 
 /// Alto de la banda de sección.

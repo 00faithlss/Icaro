@@ -14,7 +14,7 @@ macro_rules! iconos {
         pub enum Icono { $($variante),* }
 
         impl Icono {
-            const fn bytes(self) -> &'static [u8] {
+            pub(crate) const fn bytes(self) -> &'static [u8] {
                 match self {
                     $(Icono::$variante => include_bytes!(concat!("../assets/iconos/", $archivo, ".svg"))),*
                 }
@@ -39,6 +39,9 @@ iconos! {
     Flecha => "chevron-up",
     ChevronAbajo => "chevron-down",
     ChevronDerecha => "chevron-right",
+    ChevronIzquierda => "chevron-left",
+    ZoomMas => "zoom-in",
+    ZoomMenos => "zoom-out",
     Carpeta => "folder",
     Editar => "pencil",
     Subir => "upload",

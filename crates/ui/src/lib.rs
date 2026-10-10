@@ -4,6 +4,7 @@
 //! Sistema de diseño de Ícaro: tema, tipografía y componentes de interfaz.
 
 pub mod ajustes;
+pub mod botones;
 pub mod capturas;
 pub mod componentes;
 pub mod consola;
@@ -11,6 +12,8 @@ pub mod descargas;
 pub mod editor;
 pub mod estilo;
 pub mod fuentes;
+pub mod gabinete;
+pub mod grabados;
 pub mod iconos;
 pub mod instancias;
 pub mod laminas;
@@ -19,4 +22,6 @@ pub mod servidores;
 pub mod shell;
 pub mod superficies;
 pub mod tema;
+pub mod vacios;
+pub mod visor;
 pub mod scroll;

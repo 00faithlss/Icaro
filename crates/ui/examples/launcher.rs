@@ -6,7 +6,6 @@
 
 use icaro_ui::ajustes::indice_ajustes;
 use icaro_ui::componentes::{self, Variante};
-use icaro_ui::capturas::{galeria, Captura};
 use icaro_ui::consola::{consola, Linea, MensajesConsola, Nivel};
 use icaro_ui::editor::{
     encabezado_editor, pestana_archivos, pestana_general, pestana_java, pestana_mundos,
@@ -28,6 +27,8 @@ use icaro_ui::servidores::{red_privada, tarjeta_servidor, EstadoServidor, Servid
 mod archivos;
 #[path = "launcher_aux/estado.rs"]
 mod estado;
+#[path = "launcher_aux/capt.rs"]
+mod capt;
 #[path = "launcher_aux/mods.rs"]
 mod mods;
 #[path = "launcher_aux/modpacks.rs"]
@@ -107,8 +108,7 @@ struct App {
     mundo: usize,
     filtro_consola: usize,
     busqueda_consola: String,
-    filtro_capturas: usize,
-    captura: Option<usize>,
+    capt: capt::Estado,
     cursor: Point,
     menu_en: Point,
     ventana: Size,
@@ -189,8 +189,7 @@ enum Mensaje {
     NombreArchivo(String),
     FiltroConsola(usize),
     BuscarConsola(String),
-    FiltroCapturas(usize),
-    Captura(usize),
+    Capt(capt::Accion),
     Ir(Seccion),
     Filtro(usize),
     Menu(Option<usize>),
@@ -216,6 +215,7 @@ fn arrancar(app: &mut App) {
     if !app.reducir {
         app.anim = Some(std::time::Instant::now());
         app.ahora = std::time::Instant::now();
+        app.capt.prensa = Some(app.ahora);
     }
 }
 
@@ -451,8 +451,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         },
         Mensaje::FiltroConsola(i) => app.filtro_consola = i,
         Mensaje::BuscarConsola(v) => app.busqueda_consola = v,
-        Mensaje::FiltroCapturas(i) => app.filtro_capturas = i,
-        Mensaje::Captura(i) => app.captura = Some(i),
+        Mensaje::Capt(a) => return capt::actualizar(app, a),
         Mensaje::Ir(s) => {
             app.seccion = s;
             arrancar(app);
@@ -591,6 +590,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Cuadro(t) => {
             app.ahora = t;
+            capt::cuadro(app);
             avanzar_instalaciones(app);
         }
         Mensaje::FiltroModpacks(i) => {
@@ -756,6 +756,9 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
     if let Some(pestana) = app.editor {
         return pantalla_editor(app, pestana);
+    }
+    if app.capt.vacio {
+        return capt::vacio_instancias(app);
     }
     let mut chips = row![].spacing(espacio::S2);
     for (i, f) in ["Todas", "Fabric", "NeoForge", "Vanilla"].iter().enumerate() {
@@ -1198,7 +1201,7 @@ fn tienda_mods(app: &App) -> Element<'_, Mensaje> {
         );
     }
     if hay == 0 {
-        resultados = resultados.push(text("Nada coincide con la búsqueda y los filtros.").size(texto::BODY.0).color(p.text_muted));
+        resultados = resultados.push(capt::vacio_busqueda(app, &app.busqueda_mods, Mensaje::BuscarMods(String::new())));
     }
 
     let cabecera = column![
@@ -2249,7 +2252,7 @@ fn pantalla_modpacks(app: &App) -> Element<'_, Mensaje> {
         rejilla = rejilla.push(fila);
     }
     if !hay {
-        rejilla = rejilla.push(text("Ningún modpack coincide con la búsqueda.").size(texto::BODY.0).color(p.text_muted));
+        rejilla = rejilla.push(capt::vacio_busqueda(app, &app.busqueda_modpacks, Mensaje::BuscarModpacks(String::new())));
     }
     let cuerpo = column![
         text("Cada modpack se instala como una instancia nueva, con sus mods y su versión del juego.")
@@ -2344,10 +2347,11 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
                 Copia { fecha: "2026-10-04 22:40".into(), tamano: "1,0 GB".into(), motivo: "Antes de cambiar versión".into() },
             ],
         ),
-        5 => container(consola(p, &lineas_consola(), app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
+        5 => capt::pestana(app),
+        6 => container(consola(p, &lineas_consola(), app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
             .padding(Padding::from([espacio::S6, espacio::S12]))
             .into(),
-        6 => {
+        7 => {
             pestana_archivos(
                 p,
                 &VistaArchivos {
@@ -2384,6 +2388,9 @@ fn lineas_consola() -> Vec<Linea> {
 }
 
 fn pantalla_consola(app: &App) -> Element<'_, Mensaje> {
+    if app.capt.vacio {
+        return capt::vacio_consola(app);
+    }
     let p = app.modo.paleta();
     column![
         container(
@@ -2406,42 +2413,13 @@ fn pantalla_consola(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_capturas(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
-    let ejemplos = [
-        ("2026-10-09_01.12.04.png", "Hoy 01:12", Lamina::ParejaAldea),
-        ("2026-10-08_22.40.31.png", "Ayer 22:40", Lamina::CascadaAgua),
-        ("2026-10-07_19.03.55.png", "Hace 2 días", Lamina::SoldadosCastillo),
-        ("2026-10-05_16.20.10.png", "Hace 4 días", Lamina::IxionNubes),
-        ("2026-10-02_11.48.09.png", "Hace 1 semana", Lamina::DemogorgonCueva),
-        ("2026-09-28_09.15.42.png", "Hace 11 días", Lamina::MelencoliaCometa),
-    ];
-    let capturas: Vec<Captura> = ejemplos
-        .iter()
-        .map(|(a, f, l)| Captura { archivo: (*a).into(), fecha: (*f).into(), imagen: *l })
-        .collect();
-    let cuerpo = column![
-        container(
-            text("CAPTURAS")
-                .font(fuentes::DISPLAY)
-                .size(texto::DISPLAY_XL.0)
-                .color(p.text)
-        ),
-        galeria(
-            p,
-            &["Todas", "Supervivencia", "Better MC"],
-            app.filtro_capturas,
-            Mensaje::FiltroCapturas,
-            &capturas,
-            app.captura,
-            Mensaje::Captura,
-        ),
-    ]
-    .spacing(espacio::S6)
-    .padding(Padding::from([espacio::S6, espacio::S12]));
-    suave(app, cuerpo).into()
+    capt::pantalla(app)
 }
 
 fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
+    if app.capt.vacio {
+        return capt::vacio_servidores(app);
+    }
     let p = app.modo.paleta();
     let amigos = Servidor {
         nombre: "Amigos".into(),
@@ -2480,6 +2458,9 @@ fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_descargas(app: &App) -> Element<'_, Mensaje> {
+    if app.capt.vacio {
+        return capt::vacio_descargas(app);
+    }
     let p = app.modo.paleta();
     let cola = vec![
         Descarga {
@@ -2534,12 +2515,17 @@ fn pantalla_ajustes(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
     let secciones = pantallas::SECCIONES;
     let pagina = pantallas::pagina_ajustes(app);
-    let cuerpo = row![
+    let fila = row![
         indice_ajustes(p, &secciones, app.ajuste, Mensaje::Ajuste),
         pagina
     ]
-    .spacing(40.0)
-    .padding(Padding::from([espacio::S6, espacio::S12]));
+    .spacing(40.0);
+    let mut contenido = column![fila].spacing(espacio::S12);
+    // Acerca de cierra con el Gabinete, a todo el ancho.
+    if app.ajuste == pantallas::SECCIONES.len() - 1 {
+        contenido = contenido.push(capt::pared(app));
+    }
+    let cuerpo = contenido.padding(Padding::from([espacio::S6, espacio::S12]));
     column![
         banda(p, Lamina::FaetonPaisaje, "Ajustes", None),
         suave(app, cuerpo)
@@ -2713,6 +2699,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ]
         .into();
     }
+    let ventana = capt::capa(app, ventana);
     iced::widget::mouse_area(ventana)
         .on_move(Mensaje::Cursor)
         .into()
@@ -2730,9 +2717,11 @@ fn main() -> iced::Result {
                 || progreso(app.anim_menu, app.ahora, MS_MENU) < 1.0
                 || progreso(app.anim_panel, app.ahora, MS_PANEL) < 1.0
                 || (hay_dialogo(app) && progreso(app.anim_dialogo, app.ahora, MS_LOSA) < 1.0)
+                || app.capt.animando(app.ahora, app.reducir)
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
             }
+            subs.push(capt::suscripcion(app));
             iced::Subscription::batch(subs)
         })
         .window(window::Settings {
@@ -2792,7 +2781,7 @@ fn main() -> iced::Result {
                 tema: usize::from(piedra),
                 reducir: false,
                 simultaneas: 4,
-                ajuste: 1,
+                ajuste: std::env::var("ICARO_AJUSTE").ok().and_then(|v| v.parse().ok()).unwrap_or(1),
                 editor: std::env::var("ICARO_EDITOR").ok().and_then(|v| v.parse().ok()),
                 general: EstadoGeneral {
                     nombre: "Supervivencia".into(),
@@ -2804,7 +2793,7 @@ fn main() -> iced::Result {
                     servidor: Some("Amigos · 10.147.17.1"),
                 },
                 cerrados: guardado.as_ref().map_or_else(Vec::new, |g| g.cerrados.clone()),
-                busqueda_mods: String::new(),
+                busqueda_mods: std::env::var("ICARO_BUSCAR").unwrap_or_default(),
                 mods_vista: usize::from(std::env::var("ICARO_TIENDA").is_ok()),
                 mods_filtro: 0,
                 mod_panel: std::env::var("ICARO_PANEL").ok(),
@@ -2887,8 +2876,7 @@ fn main() -> iced::Result {
                 mundo: 0,
                 filtro_consola: 0,
                 busqueda_consola: String::new(),
-                filtro_capturas: 0,
-                captura: Some(1),
+                capt: capt::Estado::nuevo(),
                 cursor: Point::ORIGIN,
                 menu_en: Point::new(420.0, 140.0),
                 ventana: Size::new(1280.0, 800.0),

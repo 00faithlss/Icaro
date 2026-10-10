@@ -1240,6 +1240,7 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
                         componentes::boton(p, "Actualización", Variante::Secundario, Some(m(Accion::Abrir(Pantalla::Actualizacion)))),
                         componentes::boton(p, "Cuenta", Variante::Secundario, Some(m(Accion::Abrir(Pantalla::Cuenta)))),
                         componentes::boton(p, "Red privada", Variante::Secundario, Some(m(Accion::Abrir(Pantalla::Red)))),
+                        componentes::boton(p, if app.capt.vacio { "Mostrar datos" } else { "Estados vacíos" }, Variante::Secundario, Some(Mensaje::Capt(crate::capt::Accion::AlternarVacios))),
                     ]
                     .spacing(espacio::S3)
                     .wrap(),

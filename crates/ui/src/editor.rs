@@ -55,6 +55,7 @@ pub fn pestanas_editor<'a, M: Clone + 'a>(
             ("Mods", Some(mods)),
             ("Recursos", None),
             ("Mundos", Some(mundos)),
+            ("Capturas", None),
             ("Registros", None),
             ("Archivos", None),
         ],
