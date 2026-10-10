@@ -7,3 +7,6 @@ publish = false
 
 [dependencies]
 iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "image", "canvas", "advanced", "svg", "tokio"] }
+
+[dev-dependencies]
+serde_json.workspace = true

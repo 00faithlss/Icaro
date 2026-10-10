@@ -18,6 +18,8 @@ pub const ALTO_PORTADA: f32 = 170.0;
 
 /// Alto de la tarjeta; fijo para que toda la cuadrícula quede pareja.
 pub const ALTO_TARJETA: f32 = 350.0;
+/// Ancho fijo de la tarjeta: no crece al maximizar la ventana.
+pub const ANCHO_TARJETA: f32 = 300.0;
 
 /// Estado visible de una instancia.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -208,7 +210,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
             .style(estilo::tarjeta_marco(p, ancho, color_marco)),
     )
     .padding(0)
-    .width(Length::Fill)
+    .width(ANCHO_TARJETA)
     .height(ALTO_TARJETA)
     .on_press(acciones.seleccionar)
     .style(estilo::sin_estilo(p.text))
@@ -232,7 +234,7 @@ pub fn tarjeta_nueva<'a, M: Clone + 'a>(p: Paleta, al_pulsar: M) -> Element<'a, 
             .style(estilo::tarjeta(p, false)),
     )
     .padding(0)
-    .width(Length::Fill)
+    .width(ANCHO_TARJETA)
     .height(ALTO_TARJETA)
     .on_press(al_pulsar)
     .style(estilo::sin_estilo(p.text))

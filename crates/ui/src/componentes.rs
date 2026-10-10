@@ -37,7 +37,7 @@ pub fn boton<'a, M: Clone + 'a>(
             .align_y(iced::alignment::Vertical::Center),
     )
     .height(medida::CONTROL)
-    .padding(Padding::from([0.0, espacio::S4]))
+    .padding(Padding::from([0.0, espacio::S6]))
     .on_press_maybe(al_pulsar);
     match variante {
         Variante::Primario => b.style(estilo::boton_primario(p)),
@@ -59,7 +59,7 @@ pub fn campo<'a, M: Clone + 'a>(
         .on_input(al_cambiar)
         .font(fuentes::CUERPO)
         .size(texto::BODY.0)
-        .padding(Padding::from([8.0, espacio::S3]))
+        .padding(Padding::from([10.0, espacio::S4]))
         .style(estilo::campo(p))
         .into()
 }
@@ -95,7 +95,7 @@ pub fn insignia<'a, M: 'a>(p: Paleta, estado: Estado, palabra: &str) -> Element<
             .font(fuentes::ETIQUETA)
             .size(texto::LABEL.0),
     )
-    .padding(Padding::from([espacio::S1, espacio::S2]))
+    .padding(Padding::from([espacio::S1 + 2.0, espacio::S3]))
     .style(estilo::insignia(fondo, tinta))
     .into()
 }
@@ -128,7 +128,7 @@ pub fn chip<'a, M: Clone + 'a>(
         .center_y(Length::Fill),
     )
     .height(medida::CONTROL_SM)
-    .padding(Padding::from([0.0, espacio::S3]))
+    .padding(Padding::from([0.0, espacio::S4]))
     .on_press(al_pulsar)
     .style(estilo::chip(p, activo))
     .into()
@@ -165,7 +165,7 @@ pub fn segmentado<'a, M: Clone + 'a>(
                 .center_y(Length::Fill),
             )
             .height(medida::CONTROL - 2.0 * 2.0)
-            .padding(Padding::from([0.0, espacio::S3]))
+            .padding(Padding::from([0.0, espacio::S4]))
             .on_press(al_elegir(i))
             .style(estilo::segmento(p, i == activa)),
         );
@@ -265,7 +265,7 @@ where
         .placeholder("Elegir")
         .font(fuentes::CUERPO)
         .text_size(texto::BODY.0)
-        .padding(Padding::from([8.0, espacio::S3]))
+        .padding(Padding::from([10.0, espacio::S4]))
         .style(estilo::selector(p))
         .menu_style(estilo::menu_selector(p))
         .into()
@@ -399,7 +399,7 @@ pub fn aviso<'a, M: 'a>(p: Paleta, estado: Estado, mensaje: &str) -> Element<'a,
         .spacing(espacio::S3)
         .align_y(iced::Alignment::Center),
     )
-    .padding(Padding::from([espacio::S3, espacio::S4]))
+    .padding(Padding::from([espacio::S4, espacio::S5]))
     .width(Length::Fill)
     .style(move |_: &iced::Theme| container::Style {
         background: Some(iced::Background::Color(fondo)),
@@ -724,5 +724,64 @@ pub fn en_construccion<'a, M: 'a>(
     .padding(espacio::S12)
     .center_y(Length::Fill)
     .width(Length::Fill)
+    .into()
+}
+
+/// Deslizador de un valor en MB con su cifra a la derecha.
+pub fn deslizador_valor<'a, M: Clone + 'a>(
+    p: Paleta,
+    valor: u32,
+    minimo: u32,
+    maximo: u32,
+    paso: u32,
+    al_cambiar: impl Fn(u32) -> M + Clone + 'a,
+) -> Element<'a, M> {
+    use iced::widget::slider;
+    let alternativa = al_cambiar.clone();
+    let maximo = maximo.max(minimo + paso);
+    let control = slider(minimo..=maximo, valor.clamp(minimo, maximo), al_cambiar)
+        .step(paso)
+        .height(24)
+        .style(move |_, _| slider::Style {
+            rail: slider::Rail {
+                backgrounds: (
+                    iced::Background::Color(p.text),
+                    iced::Background::Color(p.surface_sunken),
+                ),
+                width: 6.0,
+                border: iced::Border {
+                    color: p.border_strong,
+                    width: 1.0,
+                    radius: 0.0.into(),
+                },
+            },
+            handle: slider::Handle {
+                shape: slider::HandleShape::Rectangle {
+                    width: 14,
+                    border_radius: 0.0.into(),
+                },
+                background: iced::Background::Color(p.text),
+                border_width: 2.0,
+                border_color: p.bg,
+            },
+        });
+    let al_texto = move |t: String| {
+        let cifras: String = t.chars().filter(char::is_ascii_digit).collect();
+        cifras.parse::<u32>().unwrap_or(0)
+    };
+    row![
+        container(control).width(Length::Fill),
+        text_input("MB", &valor.to_string())
+            .on_input(move |t| alternativa(al_texto(t)))
+            .font(fuentes::MONO)
+            .size(texto::MONO.0)
+            .padding(Padding::from([8.0, espacio::S3]))
+            .width(110)
+            .align_x(iced::alignment::Horizontal::Right)
+            .style(estilo::campo(p)),
+        text("MB").font(fuentes::MONO).size(texto::MONO.0).color(p.text_muted),
+    ]
+    .spacing(espacio::S4)
+    .align_y(iced::Alignment::Center)
     .into()
 }

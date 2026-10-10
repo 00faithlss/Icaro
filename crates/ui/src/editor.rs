@@ -133,31 +133,30 @@ fn campo_rotulado<'a, M: 'a>(p: Paleta, nombre: &str, control: Element<'a, M>) -
 #[derive(Debug, Clone)]
 pub struct EstadoGeneral {
     pub nombre: String,
-    pub grupo: Option<&'static str>,
+    pub grupo: Option<String>,
+    /// Grupos disponibles, con "Sin grupo" al final.
+    pub grupos: Vec<String>,
     pub ancho: String,
     pub alto: String,
     pub pantalla_completa: bool,
     pub servidor: Option<&'static str>,
-    pub memoria: u32,
 }
 
 /// Mensajes de la pestaña General.
 pub struct MensajesGeneral<M> {
     pub nombre: fn(String) -> M,
-    pub grupo: fn(&'static str) -> M,
+    pub grupo: fn(String) -> M,
     pub ancho: fn(String) -> M,
     pub alto: fn(String) -> M,
     pub pantalla_completa: fn(bool) -> M,
     pub servidor: fn(&'static str) -> M,
-    pub memoria: fn(u32) -> M,
 }
 
-/// Pestaña General: nombre, grupo, ventana, servidor y memoria.
+/// Pestaña General: nombre, grupo, ventana y servidor.
 pub fn pestana_general<'a, M: Clone + 'a>(
     p: Paleta,
     e: &EstadoGeneral,
     m: &MensajesGeneral<M>,
-    ram_total: u32,
 ) -> Element<'a, M> {
     let ventana = row![
         container(campo(p, "Ancho", &e.ancho, m.ancho)).width(100),
@@ -173,7 +172,12 @@ pub fn pestana_general<'a, M: Clone + 'a>(
             campo_rotulado(
                 p,
                 "Grupo",
-                selector(p, vec!["Con amigos", "Técnicos", "Sin grupo"], e.grupo, m.grupo)
+                selector(
+                    p,
+                    e.grupos.clone(),
+                    Some(e.grupo.clone().unwrap_or_else(|| "Sin grupo".to_owned())),
+                    m.grupo
+                )
             ),
         ]
         .spacing(espacio::S8),
@@ -191,18 +195,6 @@ pub fn pestana_general<'a, M: Clone + 'a>(
             ),
         ]
         .spacing(espacio::S8),
-        campo_rotulado(
-            p,
-            "Memoria",
-            componentes::deslizador_memoria(
-                p,
-                e.memoria,
-                ram_total,
-                (ram_total as f32 * 0.35) as u32,
-                (4096, 8192),
-                m.memoria
-            )
-        ),
     ]
     .spacing(espacio::S6);
     pagina(rejilla.into())
@@ -219,11 +211,9 @@ pub struct InstalacionJava {
     pub existe: bool,
 }
 
-/// Pestaña Java: gestión automática y tabla de instalaciones.
-pub fn pestana_java<'a, M: Clone + 'a>(
+/// Tabla de instalaciones de Java detectadas y sus acciones.
+fn tabla_instalaciones<'a, M: Clone + 'a>(
     p: Paleta,
-    automatica: bool,
-    alternar: M,
     instalaciones: &[InstalacionJava],
 ) -> Element<'a, M> {
     let mut tabla = column![container(
@@ -277,25 +267,17 @@ pub fn pestana_java<'a, M: Clone + 'a>(
                 .padding(Padding::from([espacio::S2, 0.0])),
             );
     }
-    pagina(
-        column![
-            crate::ajustes::fila_ajuste(
-                p,
-                "Gestión automática",
-                "Ícaro descarga y elige la versión correcta de Java para cada instancia. Recomendado.",
-                interruptor(p, automatica, alternar),
-            ),
-            tabla,
-            row![
+    column![
+        tabla,
+        row![
                 boton(p, "Descargar Java", Variante::Secundario, None::<M>),
                 boton(p, "Detectar instalaciones", Variante::Secundario, None::<M>),
                 boton(p, "Agregar ruta", Variante::Fantasma, None::<M>),
             ]
-            .spacing(espacio::S2),
-        ]
-        .spacing(espacio::S4)
-        .into(),
-    )
+        .spacing(espacio::S2),
+    ]
+    .spacing(espacio::S4)
+    .into()
 }
 
 fn columna_titulo<'a, M: 'a>(p: Paleta, nombre: &str, partes: u16) -> Element<'a, M> {
@@ -517,55 +499,242 @@ pub fn pestana_mundos<'a, M: Clone + 'a>(
     )
 }
 
-/// Nodo del árbol de archivos.
+/// Señal de impacto de un shader: cuatro barras invertidas (más barras,
+/// menos impacto).
+pub fn impacto<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
+    senal(p, 4usize.saturating_sub(nivel))
+}
+
+/// Configuración de Java de una instancia. Cada instancia tiene la suya.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfigJava {
+    /// `None` deja que Ícaro elija la versión según la del juego.
+    pub java: Option<String>,
+    /// Memoria inicial de la JVM (`-Xms`), en MB.
+    pub memoria_min: u32,
+    /// Memoria máxima de la JVM (`-Xmx`), en MB.
+    pub memoria_max: u32,
+    /// Memoria para clases y metadatos (`-XX:MaxMetaspaceSize`), en MB.
+    pub metaspace: u32,
+    /// Argumentos adicionales de la JVM, separados por espacios.
+    pub argumentos: String,
+}
+
+impl ConfigJava {
+    /// Argumentos finales que se pasarían a la JVM.
+    pub fn linea_de_comando(&self) -> String {
+        let mut partes = vec![
+            format!("-Xms{}M", self.memoria_min),
+            format!("-Xmx{}M", self.memoria_max),
+            format!("-XX:MaxMetaspaceSize={}M", self.metaspace),
+        ];
+        if !self.argumentos.trim().is_empty() {
+            partes.push(self.argumentos.trim().to_owned());
+        }
+        partes.join(" ")
+    }
+}
+
+/// Mensajes de la pestaña Java.
+pub struct MensajesJava<M> {
+    pub java: fn(Option<String>) -> M,
+    pub memoria_min: fn(u32) -> M,
+    pub memoria_max: fn(u32) -> M,
+    pub metaspace: fn(u32) -> M,
+    pub argumentos: fn(String) -> M,
+}
+
+/// Texto de la opción de Java automático en el selector.
+pub const JAVA_AUTOMATICO: &str = "Automático (recomendado)";
+
+/// Pestaña Java de una instancia: versión de Java, memoria mínima, máxima y
+/// de metadatos, argumentos de la JVM y las instalaciones detectadas.
+pub fn pestana_java<'a, M: Clone + 'a>(
+    p: Paleta,
+    cfg: &ConfigJava,
+    m: &MensajesJava<M>,
+    ram_total: u32,
+    instalaciones: &[InstalacionJava],
+) -> Element<'a, M> {
+    let mut opciones = vec![JAVA_AUTOMATICO.to_owned()];
+    opciones.extend(
+        instalaciones
+            .iter()
+            .filter(|i| i.existe)
+            .map(|i| format!("Java {} · {}", i.version, i.proveedor)),
+    );
+    let elegida = cfg.java.clone().unwrap_or_else(|| JAVA_AUTOMATICO.to_owned());
+    let al_elegir = m.java;
+    let version = selector(p, opciones, Some(elegida), move |o| {
+        al_elegir((o != JAVA_AUTOMATICO).then_some(o))
+    });
+
+    let tope = ram_total.saturating_sub(1024).max(1024);
+    let memoria = column![
+        campo_rotulado(
+            p,
+            "Memoria mínima",
+            componentes::deslizador_valor(p, cfg.memoria_min, 256, tope, 256, m.memoria_min),
+        ),
+        campo_rotulado(
+            p,
+            "Memoria máxima",
+            componentes::deslizador_valor(p, cfg.memoria_max, 512, tope, 256, m.memoria_max),
+        ),
+        campo_rotulado(
+            p,
+            "Memoria de metadatos (Metaspace)",
+            componentes::deslizador_valor(p, cfg.metaspace, 128, 2048, 128, m.metaspace),
+        ),
+    ]
+    .spacing(espacio::S4)
+    .width(Length::Fill);
+
+    pagina(
+        column![
+            campo_rotulado(p, "Versión de Java de esta instancia", version),
+            text("Con Automático, Ícaro usa Java 21 desde la 1.20.5, Java 17 de la 1.18 a la 1.20.4 y Java 8 antes.")
+                .size(texto::BODY_SM.0)
+                .color(p.text_muted),
+            memoria,
+            campo_rotulado(
+                p,
+                "Argumentos de la JVM",
+                campo(p, "-XX:+UseG1GC -XX:MaxGCPauseMillis=50", &cfg.argumentos, m.argumentos),
+            ),
+            campo_rotulado(
+                p,
+                "Línea resultante",
+                container(
+                    text(cfg.linea_de_comando())
+                        .font(fuentes::MONO)
+                        .size(texto::MONO_SM.0)
+                        .color(p.text),
+                )
+                .padding(espacio::S3)
+                .width(Length::Fill)
+                .style(estilo::marco(p))
+                .into(),
+            ),
+            campo_rotulado(p, "Instalaciones detectadas", tabla_instalaciones(p, instalaciones)),
+        ]
+        .spacing(espacio::S6)
+        .into(),
+    )
+}
+
+/// Entrada visible del árbol de archivos.
 #[derive(Debug, Clone)]
 pub struct Nodo {
     pub nombre: String,
     pub profundidad: usize,
     pub carpeta: bool,
+    pub abierta: bool,
+    /// Gestionado por Ícaro: se muestra con candado y no se modifica aquí.
     pub bloqueado: bool,
 }
 
-/// Pestaña Archivos: árbol a la izquierda y vista previa a la derecha.
+/// Acciones de la pestaña Archivos.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccionArchivo {
+    Abrir,
+    Renombrar,
+    ConfirmarNombre,
+    CancelarNombre,
+    Duplicar,
+    Papelera,
+    CopiarRuta,
+    Guardar,
+    Descartar,
+}
+
+/// Estado que la pestaña Archivos necesita para dibujarse.
+pub struct VistaArchivos<'a> {
+    pub arbol: &'a [Nodo],
+    pub elegido: Option<usize>,
+    /// Contenido del archivo de texto abierto; `None` si no hay o no es texto.
+    pub contenido: Option<&'a iced::widget::text_editor::Content>,
+    pub modificado: bool,
+    /// Mensaje junto al editor: error de lectura o de formato.
+    pub nota: Option<(Estado, String)>,
+    /// Nombre en edición al renombrar.
+    pub renombrando: Option<&'a str>,
+}
+
+/// Mensajes de la pestaña Archivos.
+pub struct MensajesArchivos<M> {
+    pub elegir: fn(usize) -> M,
+    pub accion: fn(AccionArchivo) -> M,
+    pub editar: fn(iced::widget::text_editor::Action) -> M,
+    pub nombre: fn(String) -> M,
+}
+
+/// Pestaña Archivos: árbol de carpetas que se abren y cierran, acciones sobre
+/// el elemento elegido y editor de texto para los archivos de texto.
 pub fn pestana_archivos<'a, M: Clone + 'a>(
     p: Paleta,
-    arbol: &[Nodo],
-    elegido: usize,
-    al_elegir: impl Fn(usize) -> M + 'a,
-    previa: &str,
+    v: &VistaArchivos<'a>,
+    m: &MensajesArchivos<M>,
 ) -> Element<'a, M> {
-    let barra = row![
-        boton(p, "Abrir", Variante::Secundario, None::<M>),
-        boton(p, "Renombrar", Variante::Secundario, None::<M>),
-        boton(p, "Duplicar", Variante::Secundario, None::<M>),
-        boton(p, "Papelera", Variante::Secundario, None::<M>),
-        boton(p, "Copiar ruta", Variante::Fantasma, None::<M>),
-    ]
-    .spacing(espacio::S2);
+    let nodo = v.elegido.and_then(|i| v.arbol.get(i));
+    let hay = nodo.is_some();
+    let libre = nodo.is_some_and(|n| !n.bloqueado);
+    let accion = |texto: &str, variante: Variante, activo: bool, a: AccionArchivo| {
+        boton(p, texto, variante, activo.then(|| (m.accion)(a)))
+    };
+
+    let barra: Element<'a, M> = if let Some(nombre) = v.renombrando {
+        row![
+            container(campo(p, "Nuevo nombre", nombre, m.nombre)).width(320),
+            accion("Guardar nombre", Variante::Primario, true, AccionArchivo::ConfirmarNombre),
+            accion("Cancelar", Variante::Fantasma, true, AccionArchivo::CancelarNombre),
+        ]
+        .spacing(espacio::S2)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        row![
+            accion("Abrir", Variante::Secundario, hay, AccionArchivo::Abrir),
+            accion("Renombrar", Variante::Secundario, libre, AccionArchivo::Renombrar),
+            accion("Duplicar", Variante::Secundario, libre, AccionArchivo::Duplicar),
+            accion("Papelera", Variante::Secundario, libre, AccionArchivo::Papelera),
+            accion("Copiar ruta", Variante::Fantasma, hay, AccionArchivo::CopiarRuta),
+        ]
+        .spacing(espacio::S2)
+        .into()
+    };
+
     let mut nodos = column![];
-    for (i, n) in arbol.iter().enumerate() {
-        let glifo = if n.carpeta { Icono::Carpeta } else { Icono::Copiar };
-        let actual = i == elegido;
+    for (i, n) in v.arbol.iter().enumerate() {
+        let actual = v.elegido == Some(i);
         let tinta = if actual { p.bg } else { p.text };
+        let expansor: Element<'a, M> = if n.carpeta {
+            icono(if n.abierta { Icono::ChevronAbajo } else { Icono::ChevronDerecha }, Tam::Base, tinta).into()
+        } else {
+            Space::with_width(Tam::Base.px()).into()
+        };
+        let glifo = if n.carpeta { Icono::Carpeta } else { Icono::Copiar };
         let mut fila = row![
-            Space::with_width(n.profundidad as f32 * espacio::S4),
+            Space::with_width(n.profundidad as f32 * espacio::S5),
+            expansor,
             icono(glifo, Tam::Base, tinta),
             text(n.nombre.clone())
-                .size(texto::BODY_SM.0)
+                .font(if actual { fuentes::CUERPO_NEGRITA } else { fuentes::CUERPO })
+                .size(texto::BODY.0)
                 .color(tinta)
                 .width(Length::Fill),
         ]
-        .spacing(espacio::S2)
+        .spacing(espacio::S3)
         .align_y(Alignment::Center);
         if n.bloqueado {
-            fila = fila.push(icono(Icono::Candado, Tam::Sm, tinta));
+            fila = fila.push(icono(Icono::Candado, Tam::Base, tinta));
         }
         nodos = nodos.push(
-            iced::widget::button(fila)
+            iced::widget::button(container(fila).center_y(Length::Fill))
                 .width(Length::Fill)
-                .height(30)
-                .padding(Padding::from([0.0, espacio::S3]))
-                .on_press(al_elegir(i))
+                .height(40)
+                .padding(Padding::from([0.0, espacio::S4]))
+                .on_press((m.elegir)(i))
                 .style(move |_, estado| iced::widget::button::Style {
                     background: (actual
                         || matches!(estado, iced::widget::button::Status::Hovered))
@@ -579,34 +748,69 @@ pub fn pestana_archivos<'a, M: Clone + 'a>(
                 }),
         );
     }
+
+    let derecha: Element<'a, M> = match v.contenido {
+        Some(contenido) => {
+            let editor = iced::widget::text_editor(contenido)
+                .on_action(m.editar)
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .height(Length::Fill)
+                .padding(espacio::S3)
+                .style(move |_: &iced::Theme, _| iced::widget::text_editor::Style {
+                    background: iced::Background::Color(p.surface_sunken),
+                    border: iced::Border {
+                        color: p.border_strong,
+                        width: borde::MEDIO,
+                        radius: 0.0.into(),
+                    },
+                    icon: p.text_muted,
+                    placeholder: p.text_muted,
+                    value: p.text,
+                    selection: p.accent_soft,
+                });
+            let mut pie = row![].spacing(espacio::S2).align_y(Alignment::Center);
+            pie = pie.push(accion("Guardar", Variante::Primario, v.modificado, AccionArchivo::Guardar));
+            pie = pie.push(accion("Descartar", Variante::Secundario, v.modificado, AccionArchivo::Descartar));
+            if v.modificado {
+                pie = pie.push(insignia(p, Estado::Aviso, "Sin guardar"));
+            }
+            if let Some((estado, nota)) = &v.nota {
+                pie = pie.push(insignia(p, estado.clone(), nota));
+            }
+            column![editor, pie].spacing(espacio::S2).into()
+        }
+        None => container(
+            text(match &v.nota {
+                Some((_, nota)) => nota.clone(),
+                None => "Elige un archivo de texto para verlo y editarlo.".to_owned(),
+            })
+            .size(texto::BODY.0)
+            .color(p.text_muted),
+        )
+        .padding(espacio::S4)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(estilo::marco(p))
+        .into(),
+    };
+
     pagina(
         column![
             barra,
             row![
                 container(crate::scroll::desplazable(nodos))
+                    .padding(borde::MEDIO)
                     .width(Length::FillPortion(2))
-                    .height(360)
+                    .height(420)
                     .style(estilo::marco(p)),
-                container(
-                    text(previa.to_owned())
-                        .font(fuentes::MONO)
-                        .size(texto::MONO_SM.0)
-                        .color(p.text)
-                )
-                .padding(espacio::S4)
-                .width(Length::FillPortion(3))
-                .height(360)
-                .style(estilo::marco(p)),
+                container(derecha)
+                    .width(Length::FillPortion(3))
+                    .height(420),
             ]
             .spacing(espacio::S4),
         ]
         .spacing(espacio::S4)
         .into(),
     )
-}
-
-/// Señal de impacto de un shader: cuatro barras invertidas (más barras,
-/// menos impacto).
-pub fn impacto<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
-    senal(p, 4usize.saturating_sub(nivel))
 }

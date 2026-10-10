@@ -11,7 +11,8 @@ use icaro_ui::consola::{consola, Linea, MensajesConsola, Nivel};
 use icaro_ui::editor::{
     encabezado_editor, pestana_archivos, pestana_general, pestana_java, pestana_mundos,
     pestana_recursos, pestanas_editor, CompatPaquete, Copia, DatosEditor, EstadoGeneral,
-    InstalacionJava, MensajesEncabezado, MensajesGeneral, Mundo, Nodo, Paquete,
+    InstalacionJava, MensajesEncabezado, MensajesGeneral, Mundo, Paquete, AccionArchivo, ConfigJava,
+    MensajesArchivos, MensajesJava, VistaArchivos,
 };
 use icaro_ui::descargas::{
     cola_descargas, historial, limites, AccionesCola, Descarga, EntradaHistorial, EstadoDescarga,
@@ -23,6 +24,10 @@ use icaro_ui::instancias::{
 };
 use icaro_ui::laminas::{banda, Lamina};
 use icaro_ui::servidores::{red_privada, tarjeta_servidor, EstadoServidor, Servidor};
+#[path = "launcher_aux/archivos.rs"]
+mod archivos;
+
+use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
 use icaro_ui::shell::{app_shell, Cuenta, DescargasActivas, MensajesShell, Seccion};
 use icaro_ui::superficies::{con_velo, dialogo, menu_contextual, toast, ElementoMenu};
@@ -45,11 +50,21 @@ struct App {
     ajuste: usize,
     editor: Option<usize>,
     general: EstadoGeneral,
-    java_auto: bool,
+    configs: Vec<ConfigJava>,
+    lista_grupos: Vec<String>,
+    grupos: Vec<Option<String>>,
+    cerrados: Vec<Option<String>>,
+    edicion_grupo: Option<EdicionGrupo>,
+    anim: Option<std::time::Instant>,
+    anim_menu: Option<std::time::Instant>,
+    ahora: std::time::Instant,
+    ultimo_clic: Option<std::time::Instant>,
+    menu_grupos: bool,
+    editor_inst: usize,
+    exp: Explorador,
     vista_recursos: usize,
     paquetes_activos: [bool; 3],
     mundo: usize,
-    archivo: usize,
     filtro_consola: usize,
     busqueda_consola: String,
     filtro_capturas: usize,
@@ -59,30 +74,56 @@ struct App {
     ventana: Size,
 }
 
+/// Creación o renombrado de un grupo en curso.
+struct EdicionGrupo {
+    /// Nombre actual si se renombra; `None` si se crea uno nuevo.
+    original: Option<String>,
+    texto: String,
+    /// Instancia que se mueve al grupo recién creado.
+    mover: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 enum Mensaje {
     Editar,
     VolverEditor,
     Pestana(usize),
     Nombre(String),
-    Grupo(&'static str),
+    Grupo(String),
     Ancho(String),
     Alto(String),
     Completa(bool),
     Servidor(&'static str),
-    Memoria(u32),
-    JavaAuto,
+    JavaVersion(Option<String>),
+    MemMin(u32),
+    MemMax(u32),
+    Metaspace(u32),
+    ArgsJvm(String),
     VistaRecursos(usize),
     Paquete(usize),
     Mundo(usize),
-    Archivo(usize),
+    AbrirInstancia(usize),
+    MoverGrupo(Option<String>),
+    AlternarGrupo(Option<String>),
+    NuevoGrupo,
+    NuevoGrupoParaInstancia,
+    RenombrarGrupo(String),
+    EliminarGrupo(String),
+    TextoGrupo(String),
+    GuardarGrupo,
+    CancelarGrupo,
+    VerGrupos(bool),
+    Cuadro(std::time::Instant),
+    ElegirArchivo(usize),
+    AccionArchivo(AccionArchivo),
+    EditarArchivo(iced::widget::text_editor::Action),
+    NombreArchivo(String),
     FiltroConsola(usize),
     BuscarConsola(String),
     FiltroCapturas(usize),
     Captura(usize),
     Ir(Seccion),
     Filtro(usize),
-    Seleccionar(usize),
     Menu(Option<usize>),
     PedirEliminar,
     CerrarDialogo,
@@ -101,22 +142,185 @@ enum Mensaje {
     Tamano(Size),
 }
 
+/// Inicia la entrada suave del contenido, salvo con movimiento reducido.
+fn arrancar(app: &mut App) {
+    if !app.reducir {
+        app.anim = Some(std::time::Instant::now());
+        app.ahora = std::time::Instant::now();
+    }
+}
+
+/// Progreso de 0 a 1 de una animación que empezó en `inicio`.
+fn progreso(inicio: Option<std::time::Instant>, ahora: std::time::Instant, ms: u64) -> f32 {
+    inicio.map_or(1.0, |i| {
+        (ahora.saturating_duration_since(i).as_millis() as f32 / ms as f32).clamp(0.0, 1.0)
+    })
+}
+
+const MS_ENTRADA: u64 = 320;
+const MS_MENU: u64 = 160;
+
+/// Entrada del contenido: aparece despacio. Un velo parcial del color de fondo
+/// se disipa de forma continua (sin pasos, para que no parpadee) y arranca
+/// lejos de ser opaco para que el contenido nunca desaparezca del todo.
+fn con_entrada<'a>(app: &App, contenido: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+    let p = app.modo.paleta();
+    let t = progreso(app.anim, app.ahora, MS_ENTRADA);
+    let mut velo = p.bg;
+    velo.a = 0.7 * (1.0 - icaro_ui::movimiento::Curva::Lineal.aplicar(t));
+    // Se apila siempre para que el árbol de widgets no cambie al terminar.
+    iced::widget::stack![
+        contenido,
+        container(Space::new(Length::Fill, Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(icaro_ui::estilo::bloque(velo)),
+    ]
+    .into()
+}
+
+fn abrir_instancia(app: &mut App, i: usize) {
+    let datos = &instancias()[i];
+    app.seleccionada = i;
+    app.editor_inst = i;
+    app.exp = Explorador::abrir(&datos.nombre);
+    app.general.nombre = datos.nombre.clone();
+    app.general.grupo = app.grupos[i].clone();
+    app.menu = None;
+    app.editor = Some(0);
+    arrancar(app);
+}
+
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     match m {
         Mensaje::Editar => {
-            app.menu = None;
-            app.editor = Some(0);
+            let i = app.menu.unwrap_or(app.seleccionada);
+            abrir_instancia(app, i);
         }
-        Mensaje::VolverEditor => app.editor = None,
-        Mensaje::Pestana(i) => app.editor = Some(i),
+        Mensaje::AbrirInstancia(i) => abrir_instancia(app, i),
+        Mensaje::AlternarGrupo(g) => {
+            arrancar(app);
+            if let Some(pos) = app.cerrados.iter().position(|c| *c == g) {
+                app.cerrados.remove(pos);
+            } else {
+                app.cerrados.push(g);
+            }
+        }
+        Mensaje::MoverGrupo(g) => {
+            arrancar(app);
+            let i = app.menu.unwrap_or(app.seleccionada);
+            app.grupos[i] = g.clone();
+            app.menu = None;
+            let nombre = instancias()[i].nombre.clone();
+            app.aviso = Some(match g {
+                Some(g) => format!("{nombre} ahora está en el grupo {g}."),
+                None => format!("{nombre} quedó sin grupo."),
+            });
+        }
+        Mensaje::VolverEditor => {
+            app.editor = None;
+            arrancar(app);
+        }
+        Mensaje::Pestana(i) => {
+            app.editor = Some(i);
+            arrancar(app);
+        }
         Mensaje::Nombre(v) => app.general.nombre = v,
-        Mensaje::Grupo(v) => app.general.grupo = Some(v),
+        Mensaje::Grupo(v) => {
+            let g = (v != "Sin grupo").then_some(v);
+            app.general.grupo = g.clone();
+            app.grupos[app.editor_inst] = g;
+        }
+        Mensaje::NuevoGrupo => {
+            app.edicion_grupo = Some(EdicionGrupo { original: None, texto: String::new(), mover: None });
+        }
+        Mensaje::NuevoGrupoParaInstancia => {
+            let i = app.menu.unwrap_or(app.seleccionada);
+            app.menu = None;
+            app.edicion_grupo = Some(EdicionGrupo { original: None, texto: String::new(), mover: Some(i) });
+        }
+        Mensaje::RenombrarGrupo(nombre) => {
+            app.edicion_grupo = Some(EdicionGrupo { texto: nombre.clone(), original: Some(nombre), mover: None });
+        }
+        Mensaje::TextoGrupo(t) => {
+            if let Some(e) = app.edicion_grupo.as_mut() {
+                e.texto = t;
+            }
+        }
+        Mensaje::CancelarGrupo => app.edicion_grupo = None,
+        Mensaje::GuardarGrupo => {
+            if let Some(e) = app.edicion_grupo.take() {
+                let nuevo = e.texto.trim().to_owned();
+                let repetido = app.lista_grupos.iter().any(|g| g.to_lowercase() == nuevo.to_lowercase() && Some(g) != e.original.as_ref());
+                if nuevo.is_empty() {
+                    app.aviso = Some("El grupo necesita un nombre.".into());
+                    app.edicion_grupo = Some(e);
+                } else if repetido {
+                    app.aviso = Some(format!("Ya existe un grupo llamado {nuevo}."));
+                    app.edicion_grupo = Some(e);
+                } else {
+                    arrancar(app);
+                    match e.original {
+                        Some(viejo) => {
+                            if let Some(pos) = app.lista_grupos.iter().position(|g| *g == viejo) {
+                                app.lista_grupos[pos] = nuevo.clone();
+                            }
+                            for g in app.grupos.iter_mut().chain(app.cerrados.iter_mut()) {
+                                if g.as_ref() == Some(&viejo) {
+                                    *g = Some(nuevo.clone());
+                                }
+                            }
+                            if app.general.grupo.as_ref() == Some(&viejo) {
+                                app.general.grupo = Some(nuevo.clone());
+                            }
+                            app.aviso = Some(format!("Grupo renombrado a {nuevo}."));
+                        }
+                        None => {
+                            app.lista_grupos.push(nuevo.clone());
+                            if let Some(i) = e.mover {
+                                app.grupos[i] = Some(nuevo.clone());
+                                app.aviso = Some(format!("{} ahora está en el grupo {nuevo}.", instancias()[i].nombre));
+                            } else {
+                                app.aviso = Some(format!("Grupo {nuevo} creado."));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Mensaje::EliminarGrupo(nombre) => {
+            arrancar(app);
+            app.lista_grupos.retain(|g| *g != nombre);
+            app.cerrados.retain(|g| g.as_ref() != Some(&nombre));
+            let mut afectadas = 0;
+            for g in app.grupos.iter_mut() {
+                if g.as_ref() == Some(&nombre) {
+                    *g = None;
+                    afectadas += 1;
+                }
+            }
+            if app.general.grupo.as_ref() == Some(&nombre) {
+                app.general.grupo = None;
+            }
+            app.aviso = Some(format!("Grupo {nombre} eliminado; {afectadas} instancias quedaron sin grupo."));
+        }
         Mensaje::Ancho(v) => app.general.ancho = v,
         Mensaje::Alto(v) => app.general.alto = v,
         Mensaje::Completa(v) => app.general.pantalla_completa = v,
         Mensaje::Servidor(v) => app.general.servidor = Some(v),
-        Mensaje::Memoria(v) => app.general.memoria = v,
-        Mensaje::JavaAuto => app.java_auto = !app.java_auto,
+        Mensaje::JavaVersion(v) => app.configs[app.editor_inst].java = v,
+        Mensaje::MemMin(v) => {
+            let c = &mut app.configs[app.editor_inst];
+            c.memoria_min = v;
+            c.memoria_max = c.memoria_max.max(v);
+        }
+        Mensaje::MemMax(v) => {
+            let c = &mut app.configs[app.editor_inst];
+            c.memoria_max = v;
+            c.memoria_min = c.memoria_min.min(v);
+        }
+        Mensaje::Metaspace(v) => app.configs[app.editor_inst].metaspace = v,
+        Mensaje::ArgsJvm(v) => app.configs[app.editor_inst].argumentos = v,
         Mensaje::VistaRecursos(i) => app.vista_recursos = i,
         Mensaje::Paquete(i) => {
             if let Some(a) = app.paquetes_activos.get_mut(i) {
@@ -124,24 +328,48 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             }
         }
         Mensaje::Mundo(i) => app.mundo = i,
-        Mensaje::Archivo(i) => app.archivo = i,
+        Mensaje::ElegirArchivo(i) => app.exp.elegir(i),
+        Mensaje::EditarArchivo(a) => app.exp.editar(a),
+        Mensaje::NombreArchivo(n) => app.exp.escribir_nombre(n),
+        Mensaje::AccionArchivo(a) => match a {
+            AccionArchivo::Abrir => app.exp.abrir_en_sistema(),
+            AccionArchivo::Renombrar => app.exp.iniciar_renombrar(),
+            AccionArchivo::ConfirmarNombre => app.exp.confirmar_nombre(),
+            AccionArchivo::CancelarNombre => app.exp.cancelar_nombre(),
+            AccionArchivo::Duplicar => app.exp.duplicar(),
+            AccionArchivo::Papelera => app.exp.a_la_papelera(),
+            AccionArchivo::Guardar => app.exp.guardar(),
+            AccionArchivo::Descartar => app.exp.descartar(),
+            AccionArchivo::CopiarRuta => {
+                if let Some(ruta) = app.exp.ruta_texto() {
+                    return iced::clipboard::write(ruta);
+                }
+            }
+        },
         Mensaje::FiltroConsola(i) => app.filtro_consola = i,
         Mensaje::BuscarConsola(v) => app.busqueda_consola = v,
         Mensaje::FiltroCapturas(i) => app.filtro_capturas = i,
         Mensaje::Captura(i) => app.captura = Some(i),
         Mensaje::Ir(s) => {
             app.seccion = s;
+            arrancar(app);
             app.editor = None;
         }
-        Mensaje::Filtro(i) => app.filtro = i,
-        Mensaje::Seleccionar(i) => {
-            app.seleccionada = i;
-            app.menu = None;
+        Mensaje::Filtro(i) => {
+            app.filtro = i;
+            arrancar(app);
         }
         Mensaje::Menu(i) => {
             app.menu = i;
+            app.menu_grupos = false;
+            if i.is_some() && !app.reducir {
+                app.anim_menu = Some(std::time::Instant::now());
+                app.ahora = std::time::Instant::now();
+            }
             app.menu_en = app.cursor;
         }
+        Mensaje::VerGrupos(v) => app.menu_grupos = v,
+        Mensaje::Cuadro(t) => app.ahora = t,
         Mensaje::Cursor(c) => app.cursor = c,
         Mensaje::Tamano(s) => app.ventana = s,
         Mensaje::PedirEliminar => {
@@ -161,7 +389,16 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Reducir => app.reducir = !app.reducir,
         Mensaje::Simultaneas(n) => app.simultaneas = n.clamp(1, 8),
         Mensaje::Ajuste(i) => app.ajuste = i,
-        Mensaje::Arrastrar => return window::get_oldest().and_then(window::drag),
+        Mensaje::Arrastrar => {
+            // Doble clic en la barra: maximizar o restaurar.
+            let ahora = std::time::Instant::now();
+            if app.ultimo_clic.is_some_and(|u| ahora.duration_since(u).as_millis() < 400) {
+                app.ultimo_clic = None;
+                return window::get_oldest().and_then(window::toggle_maximize);
+            }
+            app.ultimo_clic = Some(ahora);
+            return window::get_oldest().and_then(window::drag);
+        }
         Mensaje::Minimizar => {
             return window::get_oldest().and_then(|id| window::minimize(id, true))
         }
@@ -194,8 +431,8 @@ fn instancias() -> Vec<DatosInstancia> {
     ]
 }
 
-fn suave<'a>(_app: &'a App, cuerpo: impl Into<Element<'a, Mensaje>>) -> Element<'a, Mensaje> {
-    desplazable(cuerpo)
+fn suave<'a>(app: &'a App, cuerpo: impl Into<Element<'a, Mensaje>>) -> Element<'a, Mensaje> {
+    con_entrada(app, desplazable(cuerpo))
 }
 
 fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
@@ -210,52 +447,149 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
     let herramientas = row![
         chips,
         Space::with_width(Length::Fill),
+        componentes::boton(p, "Nuevo grupo", Variante::Secundario, Some(Mensaje::NuevoGrupo)),
         componentes::boton(p, "Importar", Variante::Secundario, Some(Mensaje::Nada)),
         componentes::boton(p, "Crear instancia", Variante::Primario, Some(Mensaje::Nada)),
     ]
     .spacing(espacio::S2)
     .align_y(Alignment::Center);
 
-    let mut tarjetas: Vec<Element<Mensaje>> = Vec::new();
-    for (i, mut d) in instancias().into_iter().enumerate() {
-        d.seleccionada = i == app.seleccionada;
-        tarjetas.push(tarjeta_instancia(
-            p,
-            &d,
-            AccionesTarjeta {
-                seleccionar: Mensaje::Seleccionar(i),
-                principal: Mensaje::Nada,
-                mas: Mensaje::Menu(Some(i)),
-            },
-        ));
-    }
-    tarjetas.push(tarjeta_nueva(p, Mensaje::Nada));
-    let mut cuadricula = column![].spacing(espacio::S6);
-    let mut it = tarjetas.into_iter();
-    loop {
-        let mut fila = row![].spacing(espacio::S6);
-        let mut n = 0;
-        for _ in 0..3 {
-            match it.next() {
-                Some(t) => {
+    // Columnas que caben: barra lateral, márgenes y separación entre tarjetas.
+    let disponible = app.ventana.width - 232.0 - 2.0 * espacio::S12 + espacio::S6;
+    let columnas = ((disponible / (icaro_ui::instancias::ANCHO_TARJETA + espacio::S6)).floor() as usize).max(1);
+    let todas = instancias();
+    let filtro = ["", "fabric", "neoforge", "vanilla"][app.filtro.min(3)];
+    let visible = |i: usize| filtro.is_empty() || todas[i].version.to_lowercase().contains(filtro);
+    let mut cuadricula = column![].spacing(espacio::S8);
+    let mut etiquetas: Vec<Option<String>> = app.lista_grupos.iter().cloned().map(Some).collect();
+    etiquetas.push(None);
+    let hay_grupos = etiquetas.len() > 1;
+    for etiqueta in etiquetas {
+        let miembros: Vec<usize> = (0..todas.len())
+            .filter(|&i| app.grupos[i] == etiqueta && visible(i))
+            .collect();
+        if miembros.is_empty() && (!filtro.is_empty() || etiqueta.is_none()) {
+            continue;
+        }
+        let mut seccion = column![].spacing(espacio::S4);
+        if hay_grupos {
+            let cerrado = app.cerrados.contains(&etiqueta);
+            seccion = seccion.push(encabezado_grupo(p, etiqueta.clone(), miembros.len(), cerrado));
+            if cerrado {
+                cuadricula = cuadricula.push(seccion);
+                continue;
+            }
+        }
+        if miembros.is_empty() {
+            seccion = seccion.push(
+                text("Este grupo no tiene instancias. Muévelas desde el menú de sus tres puntos.")
+                    .size(texto::BODY.0)
+                    .color(p.text_muted),
+            );
+        }
+        let mut tarjetas: Vec<Element<Mensaje>> = Vec::new();
+        for i in miembros {
+            let mut d = todas[i].clone();
+            d.seleccionada = i == app.seleccionada;
+            tarjetas.push(tarjeta_instancia(
+                p,
+                &d,
+                AccionesTarjeta {
+                    seleccionar: Mensaje::AbrirInstancia(i),
+                    principal: Mensaje::Nada,
+                    mas: Mensaje::Menu(Some(i)),
+                },
+            ));
+        }
+        let mut it = tarjetas.into_iter();
+        let mut rejilla = column![].spacing(espacio::S6);
+        loop {
+            let mut fila = row![].spacing(espacio::S6);
+            let mut n = 0;
+            for _ in 0..columnas {
+                if let Some(t) = it.next() {
                     fila = fila.push(t);
                     n += 1;
                 }
-                None => fila = fila.push(Space::with_width(Length::Fill)),
             }
+            if n == 0 {
+                break;
+            }
+            rejilla = rejilla.push(fila);
         }
-        if n == 0 {
-            break;
-        }
-        cuadricula = cuadricula.push(fila);
+        cuadricula = cuadricula.push(seccion.push(rejilla));
     }
-    let cuerpo = column![herramientas, cuadricula]
+    cuadricula = cuadricula.push(tarjeta_nueva(p, Mensaje::Nada));
+    let mut cuerpo_col = column![herramientas].spacing(espacio::S6);
+    if let Some(e) = &app.edicion_grupo {
+        cuerpo_col = cuerpo_col.push(
+            row![
+                container(componentes::campo(
+                    p,
+                    if e.original.is_some() { "Nuevo nombre del grupo" } else { "Nombre del grupo" },
+                    &e.texto,
+                    Mensaje::TextoGrupo,
+                ))
+                .width(320),
+                componentes::boton(p, "Guardar grupo", Variante::Primario, Some(Mensaje::GuardarGrupo)),
+                componentes::boton(p, "Cancelar", Variante::Fantasma, Some(Mensaje::CancelarGrupo)),
+            ]
+            .spacing(espacio::S2)
+            .align_y(Alignment::Center),
+        );
+    }
+    cuerpo_col = cuerpo_col.push(cuadricula);
+    let cuerpo = cuerpo_col
         .spacing(espacio::S6)
         .padding(Padding::from([espacio::S6, espacio::S12]));
     column![
         banda(p, Lamina::CaidaCielo, "Instancias", Some(5)),
         suave(app, cuerpo)
     ]
+    .into()
+}
+
+fn encabezado_grupo(
+    p: icaro_ui::tema::Paleta,
+    grupo: Option<String>,
+    cantidad: usize,
+    cerrado: bool,
+) -> Element<'static, Mensaje> {
+    use icaro_ui::iconos::{icono, Icono, Tam};
+    let nombre = grupo.clone().unwrap_or_else(|| "Sin grupo".to_owned());
+    let cabeza = iced::widget::button(
+        container(
+            row![
+                icono(if cerrado { Icono::ChevronDerecha } else { Icono::ChevronAbajo }, Tam::Base, p.text),
+                text(nombre.to_uppercase())
+                    .font(fuentes::ETIQUETA)
+                    .size(texto::LABEL.0 + 2.0)
+                    .color(p.text),
+                text(cantidad.to_string())
+                    .font(fuentes::MONO)
+                    .size(texto::MONO.0)
+                    .color(p.text_muted),
+            ]
+            .spacing(espacio::S3)
+            .align_y(Alignment::Center),
+        )
+        .center_y(Length::Fill),
+    )
+    .height(40)
+    .padding(Padding::from([0.0, espacio::S2]))
+    .on_press(Mensaje::AlternarGrupo(grupo.clone()))
+    .style(icaro_ui::estilo::boton_fantasma(p));
+    let mut acciones = row![cabeza, Space::with_width(Length::Fill)].align_y(Alignment::Center);
+    if let Some(g) = grupo {
+        acciones = acciones
+            .push(componentes::boton(p, "Renombrar", Variante::Fantasma, Some(Mensaje::RenombrarGrupo(g.clone()))))
+            .push(componentes::boton(p, "Eliminar grupo", Variante::Fantasma, Some(Mensaje::EliminarGrupo(g))));
+    }
+    column![
+        acciones,
+        container(Space::new(Length::Fill, 2.0)).style(icaro_ui::estilo::bloque(p.text)),
+    ]
+    .spacing(espacio::S1)
     .into()
 }
 
@@ -267,7 +601,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         jugado: "41 h".into(),
         mods: "214".into(),
         tamano: "2,4 GB".into(),
-        memoria: "6.144 MB".into(),
+        memoria: format!("{} MB", app.configs[app.editor_inst].memoria_max),
         portada: Lamina::MelencoliaReloj,
     };
     let encabezado = encabezado_editor(
@@ -285,7 +619,10 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
     let cuerpo: Element<Mensaje> = match pestana {
         0 => pestana_general(
             p,
-            &app.general,
+            &EstadoGeneral {
+                grupos: app.lista_grupos.iter().cloned().chain(["Sin grupo".to_owned()]).collect(),
+                ..app.general.clone()
+            },
             &MensajesGeneral {
                 nombre: Mensaje::Nombre,
                 grupo: Mensaje::Grupo,
@@ -293,14 +630,19 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
                 alto: Mensaje::Alto,
                 pantalla_completa: Mensaje::Completa,
                 servidor: Mensaje::Servidor,
-                memoria: Mensaje::Memoria,
             },
-            16384,
         ),
         1 => pestana_java(
             p,
-            app.java_auto,
-            Mensaje::JavaAuto,
+            &app.configs[app.editor_inst],
+            &MensajesJava {
+                java: Mensaje::JavaVersion,
+                memoria_min: Mensaje::MemMin,
+                memoria_max: Mensaje::MemMax,
+                metaspace: Mensaje::Metaspace,
+                argumentos: Mensaje::ArgsJvm,
+            },
+            16384,
             &[
                 InstalacionJava { version: "21.0.5".into(), proveedor: "Temurin".into(), gestionada: true, ruta: "…/icaro/java/21".into(), usado_por: "1.20.5 en adelante".into(), existe: true },
                 InstalacionJava { version: "17.0.13".into(), proveedor: "Temurin".into(), gestionada: true, ruta: "…/icaro/java/17".into(), usado_por: "1.18 a 1.20.4".into(), existe: true },
@@ -340,22 +682,28 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         5 => container(consola(p, &lineas_consola(), app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
             .padding(Padding::from([espacio::S6, espacio::S12]))
             .into(),
-        6 => pestana_archivos(
-            p,
-            &[
-                Nodo { nombre: "mods".into(), profundidad: 0, carpeta: true, bloqueado: false },
-                Nodo { nombre: "fabric-api-0.112.0.jar".into(), profundidad: 1, carpeta: false, bloqueado: true },
-                Nodo { nombre: "sodium-0.6.5.jar".into(), profundidad: 1, carpeta: false, bloqueado: true },
-                Nodo { nombre: "config".into(), profundidad: 0, carpeta: true, bloqueado: false },
-                Nodo { nombre: "options.txt".into(), profundidad: 0, carpeta: false, bloqueado: false },
-            ],
-            app.archivo,
-            Mensaje::Archivo,
-            "version:3955\nautoJump:false\nrenderDistance:16\nresourcePacks:[\"file/Faithful 32x.zip\"]",
-        ),
+        6 => {
+            pestana_archivos(
+                p,
+                &VistaArchivos {
+                    arbol: &app.exp.nodos,
+                    elegido: app.exp.elegido,
+                    contenido: app.exp.contenido.as_ref(),
+                    modificado: app.exp.modificado(),
+                    nota: app.exp.nota.clone(),
+                    renombrando: app.exp.renombrando.as_deref(),
+                },
+                &MensajesArchivos {
+                    elegir: Mensaje::ElegirArchivo,
+                    accion: Mensaje::AccionArchivo,
+                    editar: Mensaje::EditarArchivo,
+                    nombre: Mensaje::NombreArchivo,
+                },
+            )
+        }
         _ => pendiente(app),
     };
-    column![encabezado, barra, cuerpo].into()
+    column![encabezado, barra, con_entrada(app, cuerpo)].into()
 }
 
 fn lineas_consola() -> Vec<Linea> {
@@ -618,30 +966,53 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         },
     );
     if app.menu.is_some() {
+        let grupo_menu = app.grupos[app.menu.unwrap_or(0)].clone();
+        let mut elementos_grupos: Vec<ElementoMenu<Mensaje>> = app
+            .lista_grupos
+            .iter()
+            .map(|g| ElementoMenu::Opcion {
+                icono: if grupo_menu.as_ref() == Some(g) { Icono::Check } else { Icono::Carpeta },
+                texto: g.clone().into(),
+                atajo: None,
+                peligro: false,
+                mensaje: Mensaje::MoverGrupo(Some(g.clone())),
+            })
+            .collect();
+        elementos_grupos.push(ElementoMenu::Opcion { icono: if grupo_menu.is_none() { Icono::Check } else { Icono::Carpeta }, texto: "Sin grupo".into(), atajo: None, peligro: false, mensaje: Mensaje::MoverGrupo(None) });
+        elementos_grupos.push(ElementoMenu::Separador);
+        elementos_grupos.push(ElementoMenu::Opcion { icono: Icono::Mas, texto: "Nuevo grupo".into(), atajo: None, peligro: false, mensaje: Mensaje::NuevoGrupoParaInstancia });
+        elementos_grupos.push(ElementoMenu::Opcion { icono: Icono::ChevronDerecha, texto: "Volver".into(), atajo: None, peligro: false, mensaje: Mensaje::VerGrupos(false) });
         let menu = menu_contextual(
             p,
-            vec![
-                ElementoMenu::Opcion { icono: Icono::Jugar, texto: "Jugar", atajo: Some("Enter"), peligro: false, mensaje: Mensaje::Menu(None) },
-                ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Abrir carpeta", atajo: Some("O"), peligro: false, mensaje: Mensaje::Menu(None) },
-                ElementoMenu::Opcion { icono: Icono::Editar, texto: "Editar", atajo: Some("E"), peligro: false, mensaje: Mensaje::Editar },
+            if app.menu_grupos { elementos_grupos } else { vec![
+                ElementoMenu::Opcion { icono: Icono::Jugar, texto: "Jugar".into(), atajo: Some("Enter"), peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Abrir carpeta".into(), atajo: Some("O"), peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Editar, texto: "Editar".into(), atajo: Some("E"), peligro: false, mensaje: Mensaje::Editar },
                 ElementoMenu::Separador,
-                ElementoMenu::Opcion { icono: Icono::Copiar, texto: "Duplicar", atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
-                ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar modpack", atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
-                ElementoMenu::Opcion { icono: Icono::Externo, texto: "Crear acceso directo", atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Mover a grupo".into(), atajo: Some(">"), peligro: false, mensaje: Mensaje::VerGrupos(true) },
                 ElementoMenu::Separador,
-                ElementoMenu::Opcion { icono: Icono::Papelera, texto: "Eliminar", atajo: Some("Supr"), peligro: true, mensaje: Mensaje::PedirEliminar },
-            ],
+                ElementoMenu::Opcion { icono: Icono::Copiar, texto: "Duplicar".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar modpack".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Externo, texto: "Crear acceso directo".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Separador,
+                ElementoMenu::Opcion { icono: Icono::Papelera, texto: "Eliminar".into(), atajo: Some("Supr"), peligro: true, mensaje: Mensaje::PedirEliminar },
+            ] },
         );
+        let caida = (1.0 - icaro_ui::movimiento::Curva::Pasos(4).aplicar(progreso(app.anim_menu, app.ahora, MS_MENU))) * 12.0;
         ventana = iced::widget::stack![
             ventana,
             iced::widget::mouse_area(
-                container(menu).padding(Padding {
-                    top: app.menu_en.y.clamp(0.0, (app.ventana.height - 280.0).max(0.0)),
+                container(menu)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .padding(Padding {
+                    top: caida + app.menu_en.y.clamp(0.0, (app.ventana.height - 420.0).max(0.0)),
                     left: app.menu_en.x.clamp(0.0, (app.ventana.width - 268.0).max(0.0)),
                     ..Padding::ZERO
                 }),
             )
             .on_press(Mensaje::Menu(None))
+            .on_scroll(|_| Mensaje::Menu(None))
         ]
         .into();
     }
@@ -690,7 +1061,15 @@ fn main() -> iced::Result {
     let mut app = iced::application("Ícaro", actualizar, vista)
         .theme(|_| iced::Theme::Dark)
         .default_font(fuentes::CUERPO)
-        .subscription(|_| window::resize_events().map(|(_, s)| Mensaje::Tamano(s)))
+        .subscription(|app| {
+            let mut subs = vec![window::resize_events().map(|(_, s)| Mensaje::Tamano(s))];
+            if progreso(app.anim, app.ahora, MS_ENTRADA) < 1.0
+                || progreso(app.anim_menu, app.ahora, MS_MENU) < 1.0
+            {
+                subs.push(window::frames().map(Mensaje::Cuadro));
+            }
+            iced::Subscription::batch(subs)
+        })
         .window(window::Settings {
             decorations: false,
             size: Size::new(1280.0, 800.0),
@@ -728,18 +1107,36 @@ fn main() -> iced::Result {
                 editor: std::env::var("ICARO_EDITOR").ok().and_then(|v| v.parse().ok()),
                 general: EstadoGeneral {
                     nombre: "Supervivencia".into(),
-                    grupo: Some("Con amigos"),
+                    grupo: Some("Con amigos".to_owned()),
+                    grupos: vec!["Con amigos".into(), "Técnicos".into(), "Sin grupo".into()],
                     ancho: "1920".into(),
                     alto: "1080".into(),
                     pantalla_completa: false,
                     servidor: Some("Amigos · 10.147.17.1"),
-                    memoria: 6144,
                 },
-                java_auto: true,
+                cerrados: vec![],
+                anim: None,
+                anim_menu: None,
+                ahora: std::time::Instant::now(),
+                ultimo_clic: None,
+                menu_grupos: false,
+                lista_grupos: vec!["Con amigos".into(), "Técnicos".into()],
+                edicion_grupo: None,
+                grupos: vec![Some("Con amigos".into()), Some("Técnicos".into()), Some("Con amigos".into()), None, None],
+                configs: (0..5)
+                    .map(|_| ConfigJava {
+                        java: None,
+                        memoria_min: 2048,
+                        memoria_max: 6144,
+                        metaspace: 512,
+                        argumentos: "-XX:+UseG1GC".into(),
+                    })
+                    .collect(),
+                editor_inst: 0,
+                exp: Explorador::abrir("Supervivencia"),
                 vista_recursos: 0,
                 paquetes_activos: [true, false, true],
                 mundo: 0,
-                archivo: 1,
                 filtro_consola: 0,
                 busqueda_consola: String::new(),
                 filtro_capturas: 0,

@@ -37,6 +37,8 @@ iconos! {
     Menos => "minus",
     Cerrar => "close",
     Flecha => "chevron-up",
+    ChevronAbajo => "chevron-down",
+    ChevronDerecha => "chevron-right",
     Carpeta => "folder",
     Editar => "pencil",
     Subir => "upload",

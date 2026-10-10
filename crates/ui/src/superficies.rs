@@ -99,7 +99,7 @@ pub fn con_velo<'a, M: Clone + 'a>(
 pub enum ElementoMenu<M> {
     Opcion {
         icono: Icono,
-        texto: &'static str,
+        texto: std::borrow::Cow<'static, str>,
         atajo: Option<&'static str>,
         /// Acción destructiva: va al final y en tono de error.
         peligro: bool,
@@ -127,7 +127,7 @@ pub fn menu_contextual<'a, M: Clone + 'a>(p: Paleta, elementos: Vec<ElementoMenu
                 let construir = |tinta: Color, atajo_c: Color, relleno: Option<Color>| -> Element<'a, M> {
                     let mut fila = row![
                         icono(glifo, Tam::Base, tinta),
-                        text(etiqueta)
+                        text(etiqueta.clone())
                             .size(texto::BODY.0)
                             .color(tinta)
                             .width(Length::Fill),
@@ -142,10 +142,10 @@ pub fn menu_contextual<'a, M: Clone + 'a>(p: Paleta, elementos: Vec<ElementoMenu
                                 .color(atajo_c),
                         );
                     }
-                    button(fila)
+                    button(container(fila).center_y(Length::Fill))
                         .width(Length::Fill)
-                        .height(34)
-                        .padding(Padding::from([0.0, espacio::S3]))
+                        .height(40)
+                        .padding(Padding::from([0.0, espacio::S4]))
                         .on_press(mensaje.clone())
                         .style(move |_: &Theme, _| button::Style {
                             background: relleno.map(Background::Color),
@@ -201,9 +201,12 @@ pub fn toast<'a, M: Clone + 'a>(
     if let Some((etiqueta, m)) = accion {
         fila = fila.push(
             button(
-                text(etiqueta.to_uppercase())
-                    .font(fuentes::ETIQUETA)
-                    .size(texto::LABEL.0),
+                container(
+                    text(etiqueta.to_uppercase())
+                            .font(fuentes::ETIQUETA)
+                            .size(texto::LABEL.0),
+                )
+                .center_y(Length::Fill),
             )
             .height(medida::CONTROL_SM)
             .padding(Padding::from([0.0, espacio::S3]))
@@ -258,9 +261,12 @@ pub fn banner<'a, M: Clone + 'a>(
     if let Some((etiqueta, m)) = accion {
         fila = fila.push(
             button(
-                text(etiqueta.to_uppercase())
-                    .font(fuentes::ETIQUETA)
-                    .size(texto::LABEL.0),
+                container(
+                    text(etiqueta.to_uppercase())
+                            .font(fuentes::ETIQUETA)
+                            .size(texto::LABEL.0),
+                )
+                .center_y(Length::Fill),
             )
             .height(medida::CONTROL_SM)
             .padding(Padding::from([0.0, espacio::S3]))
