@@ -1,0 +1,628 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 00faithlss
+
+//! Dibujo de los movimientos especiales del sistema: Umbral, Picar, Prensa,
+//! Colocar y Lupa. La lógica (tiempos, curvas, geometría) vive en
+//! [`crate::movimiento`]; aquí solo se pinta lo que esa lógica devuelve.
+//!
+//! Las capas animadas no guardan reloj propio: reciben los milisegundos
+//! transcurridos y se redibujan con los cuadros de la aplicación, igual que
+//! el resto de las transiciones.
+
+use std::sync::OnceLock;
+
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::renderer::{self, Quad};
+use iced::advanced::widget::{tree, Tree};
+use iced::advanced::{Clipboard, Shell, Widget};
+use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path};
+use iced::widget::image::Handle;
+use iced::widget::{button, column, container, stack, text, Space};
+use iced::{
+    alignment, keyboard, mouse, Alignment, Background, Border, Color, Element, Event, Length,
+    Padding, Point, Rectangle, Shadow, Size,
+};
+
+use crate::fuentes;
+use crate::instancias::{ALTO_PORTADA, ALTO_TARJETA, ANCHO_TARJETA};
+use crate::laminas::Lamina;
+use crate::movimiento::{self, FaseUmbral, Lupa, Preferencia};
+use crate::tema::{borde, espacio, Modo, Paleta};
+
+fn con_alfa(c: Color, a: f32) -> Color {
+    Color { a: c.a * a.clamp(0.0, 1.0), ..c }
+}
+
+// --- Umbral ---------------------------------------------------------------
+
+fn lamina_umbral() -> &'static Handle {
+    static CELDA: OnceLock<Handle> = OnceLock::new();
+    CELDA.get_or_init(|| {
+        Handle::from_bytes(&include_bytes!("../assets/laminas/umbral.webp")[..])
+    })
+}
+
+struct CapaUmbral {
+    fase: FaseUmbral,
+    paleta: Paleta,
+    /// Opacidad con la que se retira la luz si el arranque falla.
+    retirada: f32,
+}
+
+impl<M> canvas::Program<M> for CapaUmbral {
+    type State = ();
+
+    fn draw(
+        &self,
+        _estado: &(),
+        renderer: &iced::Renderer,
+        _tema: &iced::Theme,
+        limites: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let p = self.paleta;
+        let f = self.fase;
+        let tam = limites.size();
+        let mut frame = Frame::new(renderer, tam);
+
+        // La lámina va debajo, como widget de imagen: el lienzo pinta las
+        // imágenes por encima de sus formas, y la luz debe quedar sobre ella.
+        // Trama de líneas de la pantalla, 1 px de cada 3.
+        let mut y = 2.0;
+        while y < tam.height {
+            frame.fill_rectangle(Point::new(0.0, y), Size::new(tam.width, 1.0), Color { a: 0.18, ..Color::BLACK });
+            y += 3.0;
+        }
+        // Velo de tinta.
+        if f.velo > 0.0 {
+            frame.fill_rectangle(Point::ORIGIN, tam, Color { a: f.velo, ..Color::BLACK });
+        }
+
+        let arco = movimiento::arco_en(tam);
+        let ventana = Rectangle::new(Point::ORIGIN, tam);
+
+        // Halo del arco: círculos concéntricos que aproximan el degradado
+        // radial de 360 px.
+        if f.halo > 0.0 {
+            let centro = arco.center();
+            let radio = 180.0 * f.escala_halo;
+            const ANILLOS: usize = 14;
+            let a = 1.0 - 0.3_f32.powf(1.0 / ANILLOS as f32);
+            for i in 0..ANILLOS {
+                let r = radio * (1.0 - i as f32 / ANILLOS as f32);
+                frame.fill(&Path::circle(centro, r), con_alfa(Color::WHITE, a * f.halo));
+            }
+        }
+
+        // Líneas horizontales de 2 px, paso de 6 px, desde el arco al borde.
+        if f.lineas > 0.0 {
+            let r = movimiento::mezclar(arco, ventana, f.lineas);
+            let mut y = r.y;
+            while y < r.y + r.height {
+                frame.fill_rectangle(Point::new(r.x, y), Size::new(r.width, 2.0), con_alfa(p.fulgor, 1.0));
+                y += 6.0;
+            }
+        }
+
+        // Luz sólida, un poco detrás de las líneas.
+        let luz = movimiento::mezclar(arco, ventana, f.luz);
+        let alfa = f.luz_alfa * self.retirada;
+        if alfa > 0.0 {
+            frame.fill_rectangle(luz.position(), luz.size(), con_alfa(p.fulgor, alfa));
+        }
+
+        vec![frame.into_geometry()]
+    }
+}
+
+/// Pantalla de salida del Umbral: ABRIENDO EL UMBRAL y el registro de arranque.
+fn salida<'a, M: Clone + 'a>(
+    p: Paleta,
+    registro: usize,
+    lineas: &[String],
+    al_volver: M,
+) -> Element<'a, M> {
+    let mut log = column![].spacing(2);
+    for (i, l) in lineas.iter().enumerate() {
+        let alfa = if i < registro { 1.0 } else { 0.0 };
+        log = log.push(
+            text(l.clone())
+                .font(fuentes::MONO)
+                .size(12)
+                .line_height(iced::widget::text::LineHeight::Absolute(18.0.into()))
+                .color(con_alfa(p.on_fulgor, alfa)),
+        );
+    }
+    let volver = button(
+        text("Volver").font(fuentes::ETIQUETA).size(12).color(p.on_fulgor),
+    )
+    .padding(Padding::from([8.0, 14.0]))
+    .on_press(al_volver)
+    .style(move |_, _| button::Style {
+        background: None,
+        text_color: p.on_fulgor,
+        border: Border { color: p.on_fulgor, width: borde::MEDIO, radius: 0.0.into() },
+        ..Default::default()
+    });
+    container(
+        column![
+            text("ABRIENDO\nEL UMBRAL")
+                .font(fuentes::DISPLAY)
+                .size(72)
+                .line_height(iced::widget::text::LineHeight::Absolute(66.0.into()))
+                .color(p.on_fulgor),
+            log,
+            volver,
+        ]
+        .spacing(espacio::S6)
+        .align_x(Alignment::Start),
+    )
+    .padding(espacio::S12)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_y(alignment::Vertical::Bottom)
+    .into()
+}
+
+/// Umbral: momento firma al pulsar Jugar. `ms` son los milisegundos desde que
+/// se pulsó. Cubre toda la ventana y se pinta sobre cualquier otra capa.
+pub fn umbral<'a, M: Clone + 'a>(
+    p: Paleta,
+    ms: f32,
+    pref: Preferencia,
+    instancia: &str,
+    al_volver: M,
+) -> Element<'a, M> {
+    let fase = movimiento::umbral(ms, pref);
+    let lineas = [
+        format!("[{}] Java 21.0.5 · 6.144 MB asignados", hora()),
+        format!("[{}] Verificando mods de {instancia} · 0 conflictos", hora()),
+        format!("[{}] Cargando el cargador de mods", hora()),
+        format!("[{}] Minecraft arrancando", hora()),
+    ];
+    let capa = Canvas::new(CapaUmbral { fase, paleta: p, retirada: 1.0 })
+        .width(Length::Fill)
+        .height(Length::Fill);
+    let lamina = iced::widget::image(lamina_umbral().clone())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .content_fit(iced::ContentFit::Cover);
+    let fondo = container(lamina)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(crate::estilo::bloque(Color::from_rgb8(0x05, 0x05, 0x05)));
+    let mut pila = stack![fondo, capa];
+    if fase.salida {
+        pila = pila.push(salida(p, fase.registro, &lineas, al_volver));
+    }
+    // El Umbral bloquea la interfaz mientras dura: nada debajo recibe clics.
+    iced::widget::mouse_area(pila.width(Length::Fill).height(Length::Fill)).into()
+}
+
+fn hora() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) % 86_400;
+    format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
+}
+
+// --- Prensa ---------------------------------------------------------------
+
+struct CapaPrensa {
+    /// Color del fondo sobre el que se imprime la lámina.
+    fondo: Color,
+    barra: Color,
+    t: f32,
+}
+
+impl<M> canvas::Program<M> for CapaPrensa {
+    type State = ();
+
+    fn draw(
+        &self,
+        _estado: &(),
+        renderer: &iced::Renderer,
+        _tema: &iced::Theme,
+        limites: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let tam = limites.size();
+        let mut frame = Frame::new(renderer, tam);
+        let (impreso, alfa_barra) = movimiento::prensa_barra(self.t);
+        let y = tam.height * impreso;
+        // Lo que aún no pasó por la prensa sigue en blanco.
+        frame.fill_rectangle(Point::new(0.0, y), Size::new(tam.width, tam.height - y), self.fondo);
+        if alfa_barra > 0.0 {
+            let by = (tam.height - 3.0) * impreso;
+            frame.fill_rectangle(Point::new(0.0, by - 1.0), Size::new(tam.width, 5.0), con_alfa(self.fondo, alfa_barra));
+            frame.fill_rectangle(Point::new(0.0, by), Size::new(tam.width, 3.0), con_alfa(self.barra, alfa_barra));
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+/// Prensa: tapa de `fondo` que se retira de arriba abajo en ocho pasos, con la
+/// barra de tinta de 3 px al frente. `t` va de 0 a 1 (`dur-prensa`, 420 ms).
+/// Con `t >= 1` no ocupa nada visible.
+pub fn prensa<'a, M: 'a>(p: Paleta, fondo: Color, t: f32, alto: f32) -> Element<'a, M> {
+    let capa = Canvas::new(CapaPrensa { fondo, barra: p.text, t })
+        .width(Length::Fill)
+        .height(alto);
+    if t >= 1.0 {
+        Space::new(Length::Fill, alto).into()
+    } else {
+        capa.into()
+    }
+}
+
+// --- Picar y Colocar ------------------------------------------------------
+
+/// Fase de la eliminación manteniendo presionado.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FasePicar {
+    /// Etapa de grietas visible, de 0 a 10.
+    Grietas(u32),
+    /// La tarjeta ya se rompió; `ms` desde la rotura.
+    Rota(f32),
+}
+
+struct CapaPicar {
+    paleta: Paleta,
+    semilla: String,
+    fase: FasePicar,
+}
+
+impl<M> canvas::Program<M> for CapaPicar {
+    type State = ();
+
+    fn draw(
+        &self,
+        _estado: &(),
+        renderer: &iced::Renderer,
+        _tema: &iced::Theme,
+        limites: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let p = self.paleta;
+        let tam = limites.size();
+        let mut frame = Frame::new(renderer, tam);
+        match self.fase {
+            FasePicar::Grietas(etapa) => {
+                let pts = movimiento::grietas(&self.semilla);
+                let n = movimiento::grietas_visibles(pts.len(), etapa);
+                let (w, h) = (tam.width / 16.0, ALTO_PORTADA / 16.0);
+                let tinta = if p.modo == Modo::Piedra { Color::from_rgb8(0x0d, 0x0d, 0x0d) } else { p.text };
+                for (i, (x, y)) in pts.iter().take(n).enumerate() {
+                    // Una de cada cinco grietas deja pasar la luz.
+                    let color = if i % 5 == 3 { p.bg } else { tinta };
+                    frame.fill_rectangle(
+                        Point::new(f32::from(*x) * w, f32::from(*y) * h),
+                        Size::new(w, h),
+                        color,
+                    );
+                }
+            }
+            FasePicar::Rota(ms) => {
+                for cy in 0..movimiento::ESCOMBROS_FILAS {
+                    for cx in 0..movimiento::ESCOMBROS_COLS {
+                        if let Some(e) = movimiento::escombro(cx, cy, tam.width, tam.height, ms) {
+                            let color = if e.claro { p.text } else { p.text_muted };
+                            frame.fill_rectangle(
+                                Point::new(e.x + e.dx, e.y + e.dy),
+                                Size::new(e.lado, e.lado),
+                                con_alfa(color, e.alfa),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+/// Capa de Picar del tamaño de una tarjeta de instancia: grietas sobre la
+/// portada o, una vez rota, los escombros cayendo.
+pub fn picar<'a, M: 'a>(p: Paleta, semilla: &str, fase: FasePicar) -> Element<'a, M> {
+    Canvas::new(CapaPicar { paleta: p, semilla: semilla.to_owned(), fase })
+        .width(ANCHO_TARJETA)
+        .height(ALTO_TARJETA)
+        .into()
+}
+
+struct CapaAro {
+    color: Color,
+    grosor: f32,
+}
+
+impl<M> canvas::Program<M> for CapaAro {
+    type State = ();
+
+    fn draw(
+        &self,
+        _estado: &(),
+        renderer: &iced::Renderer,
+        _tema: &iced::Theme,
+        limites: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let tam = limites.size();
+        let mut frame = Frame::new(renderer, tam);
+        let g = self.grosor;
+        if g > 0.0 {
+            for (o, s) in [
+                (Point::ORIGIN, Size::new(tam.width, g)),
+                (Point::new(0.0, tam.height - g), Size::new(tam.width, g)),
+                (Point::ORIGIN, Size::new(g, tam.height)),
+                (Point::new(tam.width - g, 0.0), Size::new(g, tam.height)),
+            ] {
+                frame.fill_rectangle(o, s, self.color);
+            }
+        }
+        vec![frame.into_geometry()]
+    }
+}
+
+/// Colocar: aro de 2 px que rodea a una tarjeta recién puesta mientras se
+/// asienta (`dur-fast`). `t` va de 0 a 1.
+pub fn colocar<'a, M: 'a>(p: Paleta, t: f32, ancho: f32, alto: f32) -> Element<'a, M> {
+    Canvas::new(CapaAro { color: p.text, grosor: movimiento::colocar_aro(t) })
+        .width(ancho)
+        .height(alto)
+        .into()
+}
+
+// --- Lupa -----------------------------------------------------------------
+
+/// Estado de la lupa, guardado en el árbol de widgets.
+#[derive(Debug, Default)]
+struct EstadoLupa {
+    lupa: Lupa,
+    activa: bool,
+}
+
+struct LupaLamina {
+    paleta: Paleta,
+    lamina: Lamina,
+}
+
+/// Lámina ampliable: una lente cuadrada de 200 px sigue al puntero y la amplía
+/// de 2× a 6× (rueda, + y −; flechas la mueven 2 %, con Mayús 10 %). Solo
+/// aparece sobre láminas de 240 px o más.
+pub fn lupa<'a, M: 'a>(p: Paleta, lamina: Lamina) -> Element<'a, M> {
+    Element::new(LupaLamina { paleta: p, lamina })
+}
+
+impl<M> Widget<M, iced::Theme, iced::Renderer> for LupaLamina {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<EstadoLupa>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(EstadoLupa::default())
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn layout(&self, _arbol: &mut Tree, _renderer: &iced::Renderer, limites: &layout::Limits) -> layout::Node {
+        layout::atomic(limites, Length::Fill, Length::Fill)
+    }
+
+    fn on_event(
+        &mut self,
+        arbol: &mut Tree,
+        evento: Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &iced::Renderer,
+        _portapapeles: &mut dyn Clipboard,
+        shell: &mut Shell<'_, M>,
+        _visible: &Rectangle,
+    ) -> iced::event::Status {
+        let caja = layout.bounds();
+        let estado = arbol.state.downcast_mut::<EstadoLupa>();
+        let dentro = cursor.position_in(caja);
+        match evento {
+            Event::Mouse(mouse::Event::CursorMoved { .. }) | Event::Mouse(mouse::Event::CursorLeft) => {
+                let activa = dentro.is_some() && Lupa::cabe(caja.size());
+                if let Some(pos) = dentro {
+                    estado.lupa.apuntar(pos.x, pos.y, caja.size());
+                }
+                if activa || estado.activa {
+                    shell.request_redraw(iced::window::RedrawRequest::NextFrame);
+                }
+                estado.activa = activa;
+                iced::event::Status::Ignored
+            }
+            Event::Mouse(mouse::Event::WheelScrolled { delta }) if estado.activa => {
+                let y = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } | mouse::ScrollDelta::Pixels { y, .. } => y,
+                };
+                if y != 0.0 {
+                    estado.lupa.rueda(y > 0.0);
+                    shell.request_redraw(iced::window::RedrawRequest::NextFrame);
+                    return iced::event::Status::Captured;
+                }
+                iced::event::Status::Ignored
+            }
+            Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) if estado.activa => {
+                use keyboard::key::Named;
+                let mayus = modifiers.shift();
+                let hecho = match key.as_ref() {
+                    keyboard::Key::Named(Named::ArrowLeft) => {
+                        estado.lupa.mover(-1, 0, mayus);
+                        true
+                    }
+                    keyboard::Key::Named(Named::ArrowRight) => {
+                        estado.lupa.mover(1, 0, mayus);
+                        true
+                    }
+                    keyboard::Key::Named(Named::ArrowUp) => {
+                        estado.lupa.mover(0, -1, mayus);
+                        true
+                    }
+                    keyboard::Key::Named(Named::ArrowDown) => {
+                        estado.lupa.mover(0, 1, mayus);
+                        true
+                    }
+                    keyboard::Key::Character("+" | "=") => {
+                        estado.lupa.rueda(true);
+                        true
+                    }
+                    keyboard::Key::Character("-") => {
+                        estado.lupa.rueda(false);
+                        true
+                    }
+                    _ => false,
+                };
+                if hecho {
+                    shell.request_redraw(iced::window::RedrawRequest::NextFrame);
+                    iced::event::Status::Captured
+                } else {
+                    iced::event::Status::Ignored
+                }
+            }
+            _ => iced::event::Status::Ignored,
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        arbol: &Tree,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _visible: &Rectangle,
+        _renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        // El puntero lo reemplaza la cruz de la lente.
+        if arbol.state.downcast_ref::<EstadoLupa>().activa {
+            mouse::Interaction::Crosshair
+        } else {
+            mouse::Interaction::default()
+        }
+    }
+
+    fn draw(
+        &self,
+        arbol: &Tree,
+        renderer: &mut iced::Renderer,
+        _tema: &iced::Theme,
+        _estilo: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        visible: &Rectangle,
+    ) {
+        use iced::advanced::image::Renderer as _;
+        use iced::advanced::text::Renderer as _;
+        use iced::advanced::Renderer as _;
+
+        let caja = layout.bounds();
+        let Some(recorte) = caja.intersection(visible) else {
+            return;
+        };
+        let handle = self.lamina.imagen(self.paleta.modo).clone();
+        let natural = renderer.measure_image(&handle);
+        if natural.width == 0 || natural.height == 0 || caja.width <= 0.0 || caja.height <= 0.0 {
+            return;
+        }
+        let p = self.paleta;
+        let (iw, ih) = (natural.width as f32, natural.height as f32);
+        let escala = (caja.width / iw).max(caja.height / ih);
+        let (w, h) = (iw * escala, ih * escala);
+        // Mismo encuadre que `grabado`: centrada y sin deformar.
+        let dibujo = Rectangle {
+            x: caja.center_x() - w / 2.0,
+            y: caja.center_y() - h / 2.0,
+            width: w,
+            height: h,
+        };
+        let imagen = |handle: &Handle| iced::advanced::image::Image {
+            handle: handle.clone(),
+            filter_method: iced::advanced::image::FilterMethod::Linear,
+            rotation: iced::Radians(0.0),
+            opacity: 1.0,
+            snap: true,
+        };
+        renderer.with_layer(recorte, |renderer| {
+            renderer.draw_image(imagen(&handle), dibujo);
+        });
+
+        let estado = arbol.state.downcast_ref::<EstadoLupa>();
+        if !estado.activa {
+            return;
+        }
+        let lupa = estado.lupa;
+        let centro = Point::new(caja.x + lupa.x * caja.width, caja.y + lupa.y * caja.height);
+        let lado = movimiento::LUPA_LADO;
+        let lente = Rectangle {
+            x: centro.x - lado / 2.0,
+            y: centro.y - lado / 2.0,
+            width: lado,
+            height: lado,
+        };
+        let expandir = |r: Rectangle, d: f32| Rectangle {
+            x: r.x - d,
+            y: r.y - d,
+            width: r.width + 2.0 * d,
+            height: r.height + 2.0 * d,
+        };
+        renderer.with_layer(recorte, |renderer| {
+            // Doble regla: 2 px de tinta, 2 px de fondo y el marco de 2 px.
+            renderer.fill_quad(Quad { bounds: expandir(lente, 6.0), ..Quad::default() }, Background::Color(p.text));
+            renderer.fill_quad(Quad { bounds: expandir(lente, 4.0), ..Quad::default() }, Background::Color(p.bg));
+            renderer.fill_quad(
+                Quad {
+                    bounds: lente,
+                    border: Border { color: p.text, width: borde::MEDIO, radius: 0.0.into() },
+                    shadow: Shadow::default(),
+                },
+                Background::Color(p.surface_raised),
+            );
+            // Lámina limpia, sin la trama de la interfaz, ampliada: el punto
+            // apuntado queda en el centro de la lente.
+            let z = f32::from(lupa.aumento);
+            let ampliada = Rectangle {
+                x: lente.x + lado / 2.0 - (centro.x - caja.x) * z + (dibujo.x - caja.x) * z,
+                y: lente.y + lado / 2.0 - (centro.y - caja.y) * z + (dibujo.y - caja.y) * z,
+                width: dibujo.width * z,
+                height: dibujo.height * z,
+            };
+            // Una capa anidada no hereda el recorte de la exterior: se cruza a mano.
+            if let Some(interior) = expandir(lente, -borde::MEDIO).intersection(&recorte) {
+                renderer.with_layer(interior, |renderer| {
+                    renderer.draw_image(imagen(&handle), ampliada);
+                });
+            }
+        });
+        // Segunda capa: la cruz y la ficha quedan por encima de la imagen ampliada.
+        renderer.with_layer(recorte, |renderer| {
+            // Cruz central de 12 px.
+            let cruz = |b: Rectangle| Quad { bounds: b, ..Quad::default() };
+            renderer.fill_quad(cruz(Rectangle { x: centro.x - 1.0, y: centro.y - 6.0, width: 2.0, height: 12.0 }), Background::Color(p.text));
+            renderer.fill_quad(cruz(Rectangle { x: centro.x - 6.0, y: centro.y - 1.0, width: 12.0, height: 2.0 }), Background::Color(p.text));
+
+            // Lectura en la esquina inferior de la lámina, como una ficha.
+            let lectura = lupa.lectura(natural.width, natural.height);
+            let ancho = lectura.chars().count() as f32 * 6.4 + 12.0;
+            let ficha = Rectangle { x: caja.x + 8.0, y: caja.y + caja.height - 22.0, width: ancho, height: 14.0 + 4.0 };
+            renderer.fill_quad(cruz(ficha), Background::Color(p.text));
+            renderer.fill_text(
+                iced::advanced::Text {
+                    content: lectura,
+                    bounds: ficha.size(),
+                    size: iced::Pixels(10.0),
+                    line_height: iced::advanced::text::LineHeight::Absolute(iced::Pixels(18.0)),
+                    font: fuentes::MONO_MEDIO,
+                    horizontal_alignment: alignment::Horizontal::Left,
+                    vertical_alignment: alignment::Vertical::Top,
+                    shaping: iced::advanced::text::Shaping::Basic,
+                    wrapping: iced::advanced::text::Wrapping::None,
+                },
+                Point::new(ficha.x + 6.0, ficha.y),
+                p.bg,
+                ficha,
+            );
+        });
+    }
+}
