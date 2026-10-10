@@ -5,7 +5,11 @@
 //! 2 unidades, así que solo se usan en múltiplos de 12 px.
 
 use iced::widget::svg::{self, Handle, Svg};
-use iced::{Color, Length, Theme};
+use iced::advanced::layout::{Limits, Node};
+use iced::advanced::svg::Renderer as _;
+use iced::advanced::widget::Tree;
+use iced::advanced::{renderer, Layout, Widget};
+use iced::{mouse, Color, Element, Length, Radians, Size, Theme};
 
 macro_rules! iconos {
     ($($variante:ident => $archivo:literal),* $(,)?) => {
@@ -92,4 +96,49 @@ pub fn icono<'a>(icono: Icono, tam: Tam, color: Color) -> Svg<'a, Theme> {
 
 fn svg<'a>(handle: Handle) -> Svg<'a, Theme> {
     svg::Svg::new(handle)
+}
+
+/// Icono que toma la tinta del texto de su contenedor: dentro de un botón
+/// cambia con el hover, el presionado y el deshabilitado igual que su rótulo.
+pub fn icono_texto<'a, M: 'a>(glifo: Icono, tam: Tam) -> Element<'a, M> {
+    Element::new(IconoTexto {
+        handle: Handle::from_memory(glifo.bytes()),
+        px: tam.px(),
+    })
+}
+
+struct IconoTexto {
+    handle: Handle,
+    px: f32,
+}
+
+impl<M> Widget<M, Theme, iced::Renderer> for IconoTexto {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fixed(self.px), Length::Fixed(self.px))
+    }
+
+    fn layout(&self, _arbol: &mut Tree, _renderer: &iced::Renderer, _limites: &Limits) -> Node {
+        Node::new(Size::new(self.px, self.px))
+    }
+
+    fn draw(
+        &self,
+        _arbol: &Tree,
+        renderer: &mut iced::Renderer,
+        _tema: &Theme,
+        estilo: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _visible: &iced::Rectangle,
+    ) {
+        renderer.draw_svg(
+            iced::advanced::svg::Svg {
+                handle: self.handle.clone(),
+                color: Some(estilo.text_color),
+                rotation: Radians(0.0),
+                opacity: 1.0,
+            },
+            layout.bounds(),
+        );
+    }
 }

@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "image", "canvas", "advanced", "svg", "tokio"] }
+iced = { version = "0.13", default-features = false, features = ["wgpu", "tiny-skia", "image", "canvas", "advanced", "svg", "tokio", "lazy"] }
 
 [build-dependencies]
 embed-resource = "3"

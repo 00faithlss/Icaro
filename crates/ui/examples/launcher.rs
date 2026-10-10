@@ -14,16 +14,14 @@ use icaro_ui::editor::{
     InstalacionJava, MensajesEncabezado, MensajesGeneral, Mundo, AccionArchivo, ConfigJava,
     MensajesArchivos, MensajesJava, VistaArchivos,
 };
-use icaro_ui::descargas::{
-    cola_descargas, historial, limites, AccionesCola, Descarga, EntradaHistorial, EstadoDescarga,
-};
+use icaro_ui::descargas::{cola_descargas, historial, limites, AccionesCola};
 use icaro_ui::fuentes;
 use icaro_ui::iconos::{icono, Icono, Tam};
 use icaro_ui::instancias::{
     tarjeta_instancia, tarjeta_nueva, AccionesTarjeta, DatosInstancia, EstadoInstancia,
 };
-use icaro_ui::laminas::{banda, Lamina};
-use icaro_ui::servidores::{red_privada, tarjeta_servidor, EstadoServidor, Servidor};
+use icaro_ui::laminas::{banda, banda_completa, DatoBanda, Lamina, ALTO_BANDA};
+use icaro_ui::servidores::{lista_servidores, red_privada, AccionesLista};
 #[path = "launcher_aux/archivos.rs"]
 mod archivos;
 #[path = "launcher_aux/estado.rs"]
@@ -34,6 +32,8 @@ mod mods;
 mod modpacks;
 #[path = "launcher_aux/pantallas.rs"]
 mod pantallas;
+#[path = "launcher_aux/red.rs"]
+mod red;
 
 use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
@@ -110,6 +110,7 @@ struct App {
     filtro_capturas: usize,
     captura: Option<usize>,
     cursor: Point,
+    red: red::Estado,
     menu_en: Point,
     ventana: Size,
 }
@@ -209,6 +210,7 @@ enum Mensaje {
     Nada,
     Cursor(Point),
     Tamano(Size),
+    Red(red::Mensaje),
 }
 
 /// Inicia la entrada suave del contenido, salvo con movimiento reducido.
@@ -591,6 +593,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Cuadro(t) => {
             app.ahora = t;
+            app.red.tick(t, app.simultaneas);
             avanzar_instalaciones(app);
         }
         Mensaje::FiltroModpacks(i) => {
@@ -634,7 +637,16 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.ahora = std::time::Instant::now();
             app.aviso = Some(format!("Instalando {} como una instancia nueva.", m.nombre));
         }
-        Mensaje::Cursor(c) => app.cursor = c,
+        Mensaje::Cursor(c) => {
+            app.cursor = c;
+            app.red.mover(c.y);
+        }
+        Mensaje::Red(m) => {
+            if let Some(a) = app.red.actualizar(m, app.cursor.y, std::time::Instant::now()) {
+                app.aviso = Some(a);
+            }
+            app.ahora = std::time::Instant::now();
+        }
         Mensaje::Tamano(s) => app.ventana = s,
         Mensaje::PedirEliminar => {
             app.menu = None;
@@ -2443,37 +2455,45 @@ fn pantalla_capturas(app: &App) -> Element<'_, Mensaje> {
 
 fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
-    let amigos = Servidor {
-        nombre: "Amigos".into(),
-        direccion: "10.147.17.1:25565".into(),
-        motd: Some("Temporada 4: el nether está abierto".into()),
-        estado: EstadoServidor::EnLinea { jugadores: 12, maximo: 20, ms: 24 },
-        vinculo: Some(("Supervivencia".into(), true)),
-        version_distinta: None,
+    let acciones = AccionesLista {
+        jugar: |i| Mensaje::Red(red::Mensaje::Jugar(i)),
+        tomar: |i| Mensaje::Red(red::Mensaje::Tomar(i)),
+        sobre: |i| Mensaje::Red(red::Mensaje::Sobre(i)),
     };
-    let creativo = Servidor {
-        nombre: "Creativo de la U".into(),
-        direccion: "mc.creativo-u.cl".into(),
-        motd: None,
-        estado: EstadoServidor::FueraDeLinea("desde las 03:12".into()),
-        vinculo: None,
-        version_distinta: Some("1.20.1".into()),
-    };
+    // Colocar dura `dur-fast`: el avance de 0 a 1 sale del reloj de la ventana.
+    let colocando = app.red.colocando.map(|(i, t0)| {
+        let ms = app.ahora.saturating_duration_since(t0).as_millis() as f32;
+        (i, (ms / icaro_ui::tema::duracion::FAST as f32).clamp(0.0, 1.0))
+    });
     let cuerpo = column![
         red_privada(p, true, "Red Amigos", "10.147.17.4", (5, 7), Mensaje::Nada),
         row![
             text("Arrastra para ordenar").size(texto::BODY_SM.0).color(p.text_muted),
             Space::with_width(Length::Fill),
-            componentes::boton(p, "Agregar servidor", Variante::Primario, Some(Mensaje::Nada)),
+            componentes::boton_con_icono(
+                p,
+                Icono::Mas,
+                "Agregar servidor",
+                Variante::Primario,
+                Some(Mensaje::Red(red::Mensaje::Agregar)),
+                false,
+            ),
         ]
         .align_y(Alignment::Center),
-        tarjeta_servidor(p, &amigos, Mensaje::Nada),
-        tarjeta_servidor(p, &creativo, Mensaje::Nada),
+        lista_servidores(p, &app.red.servidores, &acciones, app.red.arrastre, app.red.sobre, colocando),
     ]
-    .spacing(espacio::S4)
-    .padding(Padding::from([espacio::S6, espacio::S12]));
+    .spacing(espacio::S8)
+    .padding(Padding::from([espacio::S8, espacio::S12]));
     column![
-        banda(p, Lamina::TivoliCiudad, "Servidores", Some(2)),
+        banda_completa(
+            p,
+            Lamina::TivoliCiudad,
+            Some((0.5, 0.4)),
+            "Servidores",
+            DatoBanda::Conteo(app.red.servidores.len()),
+            ALTO_BANDA,
+            texto::DISPLAY_XL,
+        ),
         suave(app, cuerpo)
     ]
     .into()
@@ -2481,51 +2501,51 @@ fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
 
 fn pantalla_descargas(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
-    let cola = vec![
-        Descarga {
-            nombre: "Assets de Minecraft 1.21.4".into(),
-            destino: "Skyblock".into(),
-            estado: EstadoDescarga::Activa(0.6),
-            detalle: "412,8 de 687,0 MB · 4,2 MB/s · quedan 1 min 05 s".into(),
-        },
-        Descarga {
-            nombre: "Fabric API 0.112.0".into(),
-            destino: "Supervivencia".into(),
-            estado: EstadoDescarga::Pausada(0.34),
-            detalle: "En pausa · 0,8 de 2,3 MB".into(),
-        },
-        Descarga {
-            nombre: "Iris Shaders 1.8.1".into(),
-            destino: "Supervivencia".into(),
-            estado: EstadoDescarga::Fallo("Modrinth no responde. Se reintentará en 30 s.".into()),
-            detalle: String::new(),
-        },
-        Descarga {
-            nombre: "Java 21 (Temurin)".into(),
-            destino: "Sistema".into(),
-            estado: EstadoDescarga::EnCola(1),
-            detalle: "46,1 MB".into(),
-        },
-    ];
     let acciones = AccionesCola {
-        pausar: |_| Mensaje::Nada,
-        cancelar: |_| Mensaje::Nada,
-        reintentar: |_| Mensaje::Nada,
+        pausar: |i| Mensaje::Red(red::Mensaje::Pausar(i)),
+        cancelar: |i| Mensaje::Red(red::Mensaje::Cancelar(i)),
+        reintentar: |i| Mensaje::Red(red::Mensaje::Reintentar(i)),
+        seguir: |i| Mensaje::Red(red::Mensaje::Seguir(i)),
     };
-    let hist = vec![
-        EntradaHistorial { nombre: "Fabric API 0.112.0".into(), destino: "Supervivencia".into(), tamano: "2,3 MB".into(), fecha: "Hoy 01:12".into() },
-        EntradaHistorial { nombre: "Java 21 (Temurin)".into(), destino: "Sistema".into(), tamano: "46,1 MB".into(), fecha: "Ayer 22:40".into() },
-    ];
+    let cola: Element<'_, Mensaje> = if app.red.hay_cola() {
+        cola_descargas(p, &app.red.descargas(), &acciones)
+    } else {
+        text("No hay descargas en curso.")
+            .size(texto::BODY.0)
+            .color(p.text_muted)
+            .into()
+    };
     let cuerpo = column![
-        cola_descargas(p, "6,1 MB/s", "3 activas · 2 en cola", &cola, &acciones),
-        historial(p, &hist, Mensaje::Nada),
-        limites(p, app.simultaneas, Mensaje::Simultaneas(app.simultaneas - 1), Mensaje::Simultaneas(app.simultaneas + 1), "Sin límite"),
+        cola,
+        historial(
+            p,
+            &app.red.historial,
+            app.red.historial_abierto,
+            Mensaje::Red(red::Mensaje::AlternarHistorial),
+            Mensaje::Red(red::Mensaje::LimpiarHistorial),
+        ),
     ]
     .spacing(espacio::S8)
-    .padding(Padding::from([espacio::S6, espacio::S12]));
+    .padding(Padding::from([espacio::S8, espacio::S12]));
+    let resumen = app.red.resumen();
     column![
-        banda(p, Lamina::MercurioFriso, "Descargas", None),
-        suave(app, cuerpo)
+        banda_completa(
+            p,
+            Lamina::MercurioFriso,
+            None,
+            "Descargas",
+            DatoBanda::Nota(&resumen),
+            ALTO_BANDA,
+            texto::DISPLAY_XL,
+        ),
+        suave(app, cuerpo),
+        limites(
+            p,
+            app.simultaneas,
+            Mensaje::Simultaneas(app.simultaneas - 1),
+            Mensaje::Simultaneas(app.simultaneas + 1),
+            "Sin límite",
+        ),
     ]
     .into()
 }
@@ -2704,7 +2724,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
     if let Some(a) = &app.aviso {
         ventana = iced::widget::stack![
             ventana,
-            container(toast(p, Icono::Check, a, Some(("Deshacer", Mensaje::CerrarAviso)), Some(Mensaje::CerrarAviso), false))
+            container(toast(p, Icono::Check, a, Some(("Deshacer", if app.red.anterior.is_some() { Mensaje::Red(red::Mensaje::Deshacer) } else { Mensaje::CerrarAviso })), Some(Mensaje::CerrarAviso), false))
                 .align_x(iced::alignment::Horizontal::Left)
                 .align_y(iced::alignment::Vertical::Bottom)
                 .width(Length::Fill)
@@ -2726,12 +2746,26 @@ fn main() -> iced::Result {
             let mut subs = vec![window::resize_events().map(|(_, s)| Mensaje::Tamano(s))];
             if !app.instalando.is_empty()
                 || matches!(app.pantalla, Some(pantallas::Pantalla::Codigo | pantallas::Pantalla::Integridad))
+                || app.red.animando(app.seccion == Seccion::Descargas)
                 || progreso(app.anim, app.ahora, MS_ENTRADA) < 1.0
                 || progreso(app.anim_menu, app.ahora, MS_MENU) < 1.0
                 || progreso(app.anim_panel, app.ahora, MS_PANEL) < 1.0
                 || (hay_dialogo(app) && progreso(app.anim_dialogo, app.ahora, MS_LOSA) < 1.0)
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
+            }
+            if app.red.arrastre.is_some() {
+                // Soltar en cualquier parte termina el orden; Escape lo cancela.
+                subs.push(iced::event::listen_with(|e, _, _| match e {
+                    iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                        Some(Mensaje::Red(red::Mensaje::Soltar))
+                    }
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                        key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                        ..
+                    }) => Some(Mensaje::Red(red::Mensaje::CancelarOrden)),
+                    _ => None,
+                }));
             }
             iced::Subscription::batch(subs)
         })
@@ -2858,6 +2892,7 @@ fn main() -> iced::Result {
                 ultimo_guardado: String::new(),
                 anim: None,
                 anim_menu: None,
+                red: red::Estado::nuevo(),
                 ahora: std::time::Instant::now(),
                 ultimo_clic: None,
                 menu_grupos: false,
