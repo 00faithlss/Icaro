@@ -4,7 +4,7 @@
 //! Las pantallas hechas hasta ahora, juntas. Ejecutar con
 //! `cargo run -p icaro-ui --example launcher`.
 
-use icaro_ui::ajustes::{encabezado_ajustes, fila_ajuste, indice_ajustes};
+use icaro_ui::ajustes::indice_ajustes;
 use icaro_ui::componentes::{self, Variante};
 use icaro_ui::capturas::{galeria, Captura};
 use icaro_ui::consola::{consola, Linea, MensajesConsola, Nivel};
@@ -32,11 +32,13 @@ mod estado;
 mod mods;
 #[path = "launcher_aux/modpacks.rs"]
 mod modpacks;
+#[path = "launcher_aux/pantallas.rs"]
+mod pantallas;
 
 use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
 use icaro_ui::shell::{app_shell, Cuenta, DescargasActivas, MensajesShell, Seccion};
-use icaro_ui::superficies::{con_velo, dialogo, menu_contextual, toast, ElementoMenu};
+use icaro_ui::superficies::{con_velo_losa, dialogo, menu_contextual, toast, ElementoMenu};
 use icaro_ui::tema::{espacio, texto, Modo};
 use iced::widget::{column, container, row, text, Space};
 use iced::{window, Alignment, Element, Length, Padding, Point, Size, Task};
@@ -63,7 +65,25 @@ struct App {
     edicion_grupo: Option<EdicionGrupo>,
     busqueda_mods: String,
     mods_vista: usize,
+    mods_filtro: usize,
+    mod_panel: Option<String>,
+    anim_panel: Option<std::time::Instant>,
+    anim_dialogo: Option<std::time::Instant>,
+    tienda_lista: Vec<String>,
+    tienda_cat: Vec<String>,
+    tienda_lado: usize,
+    tienda_orden: usize,
     modpack_filtro: usize,
+    pantalla: Option<pantallas::Pantalla>,
+    aj: pantallas::Ajustes,
+    asistente: Option<pantallas::Asistente>,
+    importar: Option<pantallas::Importar>,
+    cambiar: Option<usize>,
+    exportar: Option<pantallas::Exportar>,
+    codigo_inicio: std::time::Instant,
+    codigo_fase: pantallas::FaseCodigo,
+    intentos: u32,
+    detalle_fallo: bool,
     modpack_pagina: Option<usize>,
     modpack_pestana: usize,
     modpack_galeria: usize,
@@ -134,6 +154,16 @@ enum Mensaje {
     BuscarMods(String),
     AlternarMod(String),
     VistaMods(usize),
+    FiltroMods(usize),
+    PanelMod(Option<String>),
+    TiendaAgregar(String),
+    TiendaQuitar(String),
+    TiendaVaciar,
+    TiendaInstalar,
+    TiendaCat(String),
+    TiendaLado(usize),
+    TiendaOrden(usize),
+    Pant(pantallas::Accion),
     FiltroModpacks(usize),
     AbrirModpack(usize),
     CerrarModpack,
@@ -198,6 +228,8 @@ fn progreso(inicio: Option<std::time::Instant>, ahora: std::time::Instant, ms: u
 
 const MS_ENTRADA: u64 = 320;
 const MS_MENU: u64 = 160;
+const MS_PANEL: u64 = 240;
+const MS_LOSA: u64 = 280;
 
 /// Entrada del contenido: aparece despacio. Un velo parcial del color de fondo
 /// se disipa de forma continua (sin pasos, para que no parpadee) y arranca
@@ -233,14 +265,35 @@ fn abrir_instancia(app: &mut App, i: usize) {
 
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     mods::fijar_recurso(app.editor == Some(3));
+    let habia = hay_dialogo(app);
     let tarea = actualizar_estado(app, m);
+    if !habia && hay_dialogo(app) && !app.reducir {
+        app.anim_dialogo = Some(std::time::Instant::now());
+        app.ahora = std::time::Instant::now();
+    }
     guardar_si_cambio(app);
     tarea
 }
 
+fn hay_dialogo(app: &App) -> bool {
+    app.dialogo || app.asistente.is_some() || app.importar.is_some() || app.exportar.is_some() || app.cambiar.is_some()
+}
+
+/// Desfase de la losa del diálogo según su progreso.
+fn desfase_losa(app: &App) -> f32 {
+    icaro_ui::movimiento::losa(progreso(app.anim_dialogo, app.ahora, MS_LOSA))
+}
+
 /// Escribe el estado organizado por el usuario solo cuando cambia.
 fn guardar_si_cambio(app: &mut App) {
-    let texto = estado::Guardado::nuevo(&app.lista_grupos, &app.grupos, &app.cerrados, &app.configs).texto();
+    // Modpacks ya instalados (las 5 primeras instancias son las de ejemplo).
+    let instalados: Vec<String> = instancias()
+        .into_iter()
+        .skip(5)
+        .filter(|d| d.estado == EstadoInstancia::Lista)
+        .map(|d| d.nombre)
+        .collect();
+    let texto = estado::Guardado::nuevo(&app.lista_grupos, &app.grupos, &app.cerrados, &app.configs, &instalados).texto();
     if texto != app.ultimo_guardado {
         estado::Guardado::escribir(&texto);
         app.ultimo_guardado = texto;
@@ -421,6 +474,57 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::VerGrupos(v) => app.menu_grupos = v,
         Mensaje::BuscarMods(t) => app.busqueda_mods = t,
         Mensaje::AlternarMod(archivo) => mods::alternar(&instancias()[app.editor_inst].nombre, &archivo),
+        Mensaje::Pant(a) => return pantallas::actualizar(app, a),
+        Mensaje::FiltroMods(i) => {
+            app.mods_filtro = i;
+            arrancar(app);
+        }
+        Mensaje::PanelMod(id) => {
+            if id.is_some() && !app.reducir {
+                app.anim_panel = Some(std::time::Instant::now());
+                app.ahora = std::time::Instant::now();
+            }
+            app.mod_panel = id;
+        }
+        Mensaje::TiendaAgregar(id) => {
+            if !app.tienda_lista.contains(&id) {
+                app.tienda_lista.push(id);
+            }
+        }
+        Mensaje::TiendaQuitar(id) => app.tienda_lista.retain(|i| *i != id),
+        Mensaje::TiendaVaciar => app.tienda_lista.clear(),
+        Mensaje::TiendaCat(k) => {
+            if let Some(pos) = app.tienda_cat.iter().position(|c| *c == k) {
+                app.tienda_cat.remove(pos);
+            } else {
+                app.tienda_cat.push(k);
+            }
+        }
+        Mensaje::TiendaLado(i) => app.tienda_lado = i,
+        Mensaje::TiendaOrden(i) => app.tienda_orden = i,
+        Mensaje::TiendaInstalar => {
+            let inst = instancias()[app.editor_inst].nombre.clone();
+            let (mc, cargador) = juego_de_instancia(app);
+            let mut hechos = 0;
+            for id in app.tienda_lista.clone() {
+                if let Some(c) = mods::en_catalogo(&id) {
+                    let puestos = mods::listar(&inst);
+                    for dep in c.dependencias.iter().copied().chain(std::iter::once(c.id)) {
+                        if puestos.iter().all(|m| m.id != dep) {
+                            if let Some(d) = mods::en_catalogo(dep) {
+                                let v = compatibles(d, &mc, &cargador).first().map_or(d.lanzamientos[0].version, |l| l.version);
+                                mods::instalar(&inst, dep, v);
+                                hechos += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            app.tienda_lista.clear();
+            app.mods_vista = 0;
+            app.aviso = Some(format!("{hechos} instalado(s) en {inst}."));
+            arrancar(app);
+        }
         Mensaje::VistaMods(v) => {
             app.mods_vista = v;
             arrancar(app);
@@ -639,6 +743,11 @@ fn avanzar_instalaciones(app: &mut App) {
     app.instalando.retain(|(n, _)| !terminadas.contains(n));
 }
 
+/// Contenido desplazable para las pantallas de otro módulo.
+fn desplazable_pub<'a>(e: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+    desplazable(e)
+}
+
 fn suave<'a>(app: &'a App, cuerpo: impl Into<Element<'a, Mensaje>>) -> Element<'a, Mensaje> {
     con_entrada(app, desplazable(cuerpo))
 }
@@ -656,8 +765,8 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
         chips,
         Space::with_width(Length::Fill),
         componentes::boton(p, "Nuevo grupo", Variante::Secundario, Some(Mensaje::NuevoGrupo)),
-        componentes::boton(p, "Importar", Variante::Secundario, Some(Mensaje::Nada)),
-        componentes::boton(p, "Crear instancia", Variante::Primario, Some(Mensaje::Nada)),
+        componentes::boton(p, "Importar", Variante::Secundario, Some(Mensaje::Pant(pantallas::Accion::Importar))),
+        componentes::boton(p, "Crear instancia", Variante::Primario, Some(Mensaje::Pant(pantallas::Accion::NuevaInstancia))),
     ]
     .spacing(espacio::S2)
     .align_y(Alignment::Center);
@@ -704,7 +813,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
                 &d,
                 AccionesTarjeta {
                     seleccionar: Mensaje::AbrirInstancia(i),
-                    principal: Mensaje::Nada,
+                    principal: if matches!(d.estado, EstadoInstancia::Error) { Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Fallo)) } else { Mensaje::Nada },
                     mas: Mensaje::Menu(Some(i)),
                 },
             ));
@@ -727,7 +836,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
         }
         cuadricula = cuadricula.push(seccion.push(rejilla));
     }
-    cuadricula = cuadricula.push(tarjeta_nueva(p, Mensaje::Nada));
+    cuadricula = cuadricula.push(tarjeta_nueva(p, Mensaje::Pant(pantallas::Accion::NuevaInstancia)));
     let mut cuerpo_col = column![herramientas].spacing(espacio::S6);
     if let Some(e) = &app.edicion_grupo {
         cuerpo_col = cuerpo_col.push(
@@ -810,127 +919,464 @@ fn pestana_mods(app: &App) -> Element<'_, Mensaje> {
     }
 }
 
+/// Versión del juego y loader de la instancia que se edita.
+fn juego_de_instancia(app: &App) -> (String, String) {
+    let datos = &instancias()[app.editor_inst];
+    let mut partes = datos.version.split(" · ");
+    (partes.next().unwrap_or("").to_owned(), partes.next().unwrap_or("").to_owned())
+}
+
+/// Publicaciones que sirven para la instancia, de la más nueva a la más antigua.
+fn compatibles<'a>(c: &'a mods::ModCatalogo, mc: &str, cargador: &str) -> Vec<&'a mods::Lanzamiento> {
+    c.lanzamientos
+        .iter()
+        .filter(|l| {
+            l.canal == "release"
+                && l.minecraft == mc
+                && (mods::es_recurso() || c.cargadores_de(l).iter().any(|x| x.eq_ignore_ascii_case(cargador)))
+        })
+        .collect()
+}
+
+/// Icono procedural pequeño para un mod, derivado de su identificador.
+fn icono_mod<'a>(p: icaro_ui::tema::Paleta, id: &str, lado: f32) -> Element<'a, Mensaje> {
+    let mut h: u32 = 2_166_136_261;
+    for b in id.bytes() {
+        h = (h ^ u32::from(b)).wrapping_mul(16_777_619);
+    }
+    let celda = lado / 8.0;
+    let mut col = column![];
+    for _ in 0..8 {
+        let mut mitad = [0u32; 4];
+        for m in mitad.iter_mut() {
+            h ^= h << 13;
+            h ^= h >> 17;
+            h ^= h << 5;
+            *m = h % 3;
+        }
+        let mut fila = row![];
+        for i in 0..8 {
+            let color = match mitad[if i < 4 { i } else { 7 - i }] {
+                0 => p.surface_sunken,
+                1 => p.text_muted,
+                _ => p.text,
+            };
+            fila = fila.push(container(Space::new(celda, celda)).style(icaro_ui::estilo::bloque(color)));
+        }
+        col = col.push(fila);
+    }
+    container(col).style(icaro_ui::estilo::marco(p)).into()
+}
+
 fn lista_mods(app: &App) -> Element<'_, Mensaje> {
+    if app.mods_vista == 1 {
+        return tienda_mods(app);
+    }
     let p = app.modo.paleta();
     let instancia = instancias()[app.editor_inst].nombre.clone();
+    let (mc_inst, cargador_inst) = juego_de_instancia(app);
     let instalados = mods::listar(&instancia);
     let consulta = app.busqueda_mods.trim().to_lowercase();
     let coincide = |texto: &str| consulta.is_empty() || texto.to_lowercase().contains(&consulta);
 
+    // Estado de cada mod respecto de la instancia.
+    let estado_de = |m: &mods::ModInstalado| -> (u8, Option<&'static str>) {
+        let Some(c) = mods::en_catalogo(&m.id) else { return (3, None) };
+        let comp = compatibles(c, &mc_inst, &cargador_inst);
+        match comp.first() {
+            None => (3, None),
+            Some(nueva) if nueva.version != m.version => (2, Some(nueva.version)),
+            _ => (1, None),
+        }
+    };
+
+    let nombres = ["Todos", "Activos", "Con actualización", "Con problemas"];
+    let mut chips = row![].spacing(espacio::S2);
+    for (i, n) in nombres.iter().enumerate() {
+        chips = chips.push(componentes::chip(p, n, app.mods_filtro == i, Mensaje::FiltroMods(i)));
+    }
     let barra = row![
-        componentes::segmentado(p, &["Instalados", "Descargar"], app.mods_vista, Mensaje::VistaMods),
-        container(componentes::campo(
-            p,
-            if app.mods_vista == 0 { "Buscar entre los instalados" } else { "Buscar en el catálogo" },
-            &app.busqueda_mods,
-            Mensaje::BuscarMods,
-        ))
-        .width(340),
+        container(componentes::campo(p, "Buscar", &app.busqueda_mods, Mensaje::BuscarMods)).width(200),
+        chips,
         Space::with_width(Length::Fill),
         text(format!(
-            "{} de {} activos",
+            "{}/{} activos",
             instalados.iter().filter(|m| m.activo).count(),
             instalados.len()
         ))
         .font(fuentes::MONO)
         .size(texto::MONO_SM.0)
-        .color(p.text_muted),
+        .color(p.text_muted)
+        .width(Length::Shrink),
+        componentes::boton(
+            p,
+            if mods::es_recurso() { "Descargar packs" } else { "Descargar mods" },
+            Variante::Primario,
+            Some(Mensaje::VistaMods(1)),
+        ),
     ]
     .spacing(espacio::S4)
     .align_y(Alignment::Center);
 
     let mut lista = column![].spacing(espacio::S2);
-    if app.mods_vista == 0 {
-        for m in instalados.iter().filter(|m| coincide(&m.archivo)) {
-            let titulo = mods::en_catalogo(&m.id).map_or_else(|| m.id.clone(), |c| c.titulo.to_owned());
-            let nombre = iced::widget::button(
-                container(
-                    row![
-                        text(titulo)
-                            .size(texto::BODY.0)
-                            .color(if m.activo { p.text } else { p.text_muted })
-                            .width(Length::Fill),
-                        text(m.version.clone()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
-                        icono(Icono::ChevronDerecha, Tam::Base, p.text_muted),
-                    ]
-                    .spacing(espacio::S4)
-                    .align_y(Alignment::Center),
-                )
-                .center_y(Length::Fill),
-            )
-            .width(Length::Fill)
-            .height(52)
-            .padding(Padding::from([0.0, espacio::S4]))
-            .on_press(Mensaje::AbrirModPagina(m.id.clone()))
-            .style(icaro_ui::estilo::boton_fantasma(p));
-            let estado = if m.activo { icaro_ui::componentes::Estado::Exito } else { icaro_ui::componentes::Estado::Info };
-            lista = lista.push(
-                container(
-                    row![
-                        nombre,
-                        icaro_ui::componentes::insignia(p, estado, if m.activo { "Activo" } else { "Desactivado" }),
-                        componentes::interruptor(p, m.activo, Mensaje::AlternarMod(m.archivo.clone())),
-                    ]
-                    .spacing(espacio::S4)
-                    .padding(Padding::from([0.0, espacio::S4]))
-                    .align_y(Alignment::Center),
-                )
-                .style(icaro_ui::estilo::tarjeta(p, false)),
-            );
+    let mut n = 0;
+    for m in instalados.iter().filter(|m| coincide(&m.archivo)) {
+        let (estado, nueva) = estado_de(m);
+        let pasa = match app.mods_filtro {
+            1 => m.activo,
+            2 => estado == 2,
+            3 => estado == 3,
+            _ => true,
+        };
+        if !pasa {
+            continue;
         }
-        if instalados.is_empty() {
-            lista = lista.push(
-                text("Esta instancia no tiene nada instalado aquí. Ve a Descargar para agregar algo.")
-                    .size(texto::BODY.0)
-                    .color(p.text_muted),
-            );
+        n += 1;
+        let cat = mods::en_catalogo(&m.id);
+        let titulo = cat.map_or_else(|| m.id.clone(), |c| c.titulo.to_owned());
+        let tinta = if m.activo { p.text } else { p.text_disabled };
+        let nombre = iced::widget::button(
+            column![
+                text(titulo).font(fuentes::TITULO).size(texto::BODY.0).color(tinta),
+                text(cat.map_or("Sin ficha en el catálogo", |c| c.descripcion)).size(texto::BODY_SM.0).color(if m.activo { p.text_muted } else { p.text_disabled }),
+            ]
+            .spacing(espacio::S1),
+        )
+        .width(Length::Fill)
+        .padding(0)
+        .on_press(Mensaje::AbrirModPagina(m.id.clone()))
+        .style(icaro_ui::estilo::sin_estilo(tinta));
+        let insignia_estado: Element<Mensaje> = match estado {
+            2 => icaro_ui::componentes::insignia(p, icaro_ui::componentes::Estado::Info, &format!("Nueva {}", nueva.unwrap_or(""))),
+            3 => icaro_ui::componentes::insignia(p, icaro_ui::componentes::Estado::Aviso, "Sin versión para tu instancia"),
+            _ => icaro_ui::componentes::insignia(p, icaro_ui::componentes::Estado::Exito, "Compatible"),
+        };
+        let mut fila = row![
+            componentes::interruptor(p, m.activo, Mensaje::AlternarMod(m.archivo.clone())),
+            icono_mod(p, &m.id, 40.0),
+            nombre,
+            insignia_estado,
+        ]
+        .spacing(espacio::S4)
+        .align_y(Alignment::Center);
+        if let Some(v) = nueva {
+            fila = fila.push(componentes::boton(p, "Actualizar", Variante::Secundario, Some(Mensaje::VersionMod(m.archivo.clone(), v.to_owned()))));
         }
-    } else {
-        for c in mods::catalogo_actual().iter().filter(|c| coincide(c.titulo) || coincide(c.descripcion)) {
-            let puesto = instalados.iter().find(|m| m.id == c.id);
-            let accion: Element<Mensaje> = match puesto {
-                Some(m) => icaro_ui::componentes::insignia(p, icaro_ui::componentes::Estado::Exito, &format!("Instalado {}", m.version)),
-                None => componentes::boton(
-                    p,
-                    &format!("Instalar {}", c.lanzamientos[0].version),
-                    Variante::Primario,
-                    Some(Mensaje::InstalarMod(c.id.to_owned(), c.lanzamientos[0].version.to_owned())),
-                ),
-            };
-            let titulo = iced::widget::button(
-                text(c.titulo).font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text),
-            )
-            .padding(0)
-            .on_press(Mensaje::AbrirModPagina(c.id.to_owned()))
-            .style(icaro_ui::estilo::sin_estilo(p.text));
-            lista = lista.push(
-                container(
-                    row![
-                        column![
-                            titulo,
-                            text(c.descripcion).size(texto::BODY_SM.0).color(p.text_muted),
-                            text(format!("{} · {} descargas · {}", c.autor, c.descargas, c.cargadores.join(", ")))
-                                .font(fuentes::MONO)
-                                .size(texto::MONO_SM.0)
-                                .color(p.text_muted),
-                        ]
-                        .spacing(espacio::S1)
-                        .width(Length::Fill),
-                        accion,
-                    ]
-                    .spacing(espacio::S4)
-                    .align_y(Alignment::Center),
-                )
-                .padding(espacio::S4)
+        fila = fila
+            .push(text(m.version.clone()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(70))
+            .push(
+                iced::widget::button(icono(Icono::Acciones, Tam::Base, p.text))
+                    .padding(espacio::S2)
+                    .on_press(Mensaje::PanelMod(Some(m.id.clone())))
+                    .style(icaro_ui::estilo::boton_fantasma(p)),
+            );
+        lista = lista.push(
+            container(fila.padding(Padding::from([14.0, 16.0])))
                 .width(Length::Fill)
-                .style(icaro_ui::estilo::tarjeta(p, false)),
-            );
-        }
+                .style(icaro_ui::estilo::tarjeta(p, app.mod_panel.as_deref() == Some(m.id.as_str()))),
+        );
+    }
+    if n == 0 {
+        lista = lista.push(
+            text(if instalados.is_empty() {
+                "Esta instancia no tiene nada instalado aquí. Pulsa Descargar para agregar algo."
+            } else {
+                "Nada coincide con el filtro."
+            })
+            .size(texto::BODY.0)
+            .color(p.text_muted),
+        );
     }
     column![barra, lista]
         .spacing(espacio::S6)
         .padding(Padding::from([espacio::S6, espacio::S12]))
         .into()
+}
+
+/// Tienda: filtros a la izquierda, resultados y barra inferior invertida con
+/// la lista de instalación que se arma antes de instalar todo junto.
+fn tienda_mods(app: &App) -> Element<'_, Mensaje> {
+    use icaro_ui::componentes::{casilla, etiqueta, insignia, Estado};
+    let p = app.modo.paleta();
+    let instancia = instancias()[app.editor_inst].nombre.clone();
+    let (mc_inst, cargador_inst) = juego_de_instancia(app);
+    let instalados = mods::listar(&instancia);
+    let consulta = app.busqueda_mods.trim().to_lowercase();
+
+    let mut categorias: Vec<&str> = Vec::new();
+    for c in mods::catalogo_actual() {
+        for k in c.categorias {
+            if !categorias.contains(k) {
+                categorias.push(k);
+            }
+        }
+    }
+    let mut filtros = column![etiqueta(p, "Fuente"), componentes::segmentado(p, &["Modrinth", "CurseForge"], 0, |_| Mensaje::Nada), Space::with_height(espacio::S3), etiqueta(p, "Categorías")]
+        .spacing(espacio::S2)
+        .width(190);
+    for k in &categorias {
+        let marcada = app.tienda_cat.iter().any(|c| c == k);
+        let k2 = (*k).to_owned();
+        filtros = filtros.push(casilla(p, k, marcada, move |_| Mensaje::TiendaCat(k2.clone())));
+    }
+    filtros = filtros.push(Space::with_height(espacio::S3)).push(etiqueta(p, "Lado"));
+    for (i, n) in ["Cliente y servidor", "Solo cliente"].iter().enumerate() {
+        filtros = filtros.push(
+            iced::widget::button(
+                row![
+                    icono(if app.tienda_lado == i { Icono::Check } else { Icono::Carpeta }, Tam::Base, p.text),
+                    text(*n).size(texto::BODY_SM.0).color(p.text),
+                ]
+                .spacing(espacio::S2)
+                .align_y(Alignment::Center),
+            )
+            .padding(0)
+            .on_press(Mensaje::TiendaLado(i))
+            .style(icaro_ui::estilo::sin_estilo(p.text)),
+        );
+    }
+
+    let mut resultados = column![].spacing(espacio::S2);
+    let mut hay = 0;
+    let mut orden: Vec<&mods::ModCatalogo> = mods::catalogo_actual().iter().collect();
+    if app.tienda_orden == 1 {
+        orden.sort_by(|a, b| a.titulo.cmp(b.titulo));
+    }
+    for c in orden {
+        if !(consulta.is_empty() || c.titulo.to_lowercase().contains(&consulta) || c.descripcion.to_lowercase().contains(&consulta)) {
+            continue;
+        }
+        if !app.tienda_cat.is_empty() && !c.categorias.iter().any(|k| app.tienda_cat.iter().any(|s| s == k)) {
+            continue;
+        }
+        let solo_cliente = mods::extras(c.id).entorno == "Cliente";
+        if app.tienda_lado == 1 && !solo_cliente {
+            continue;
+        }
+        hay += 1;
+        let puesto = instalados.iter().find(|m| m.id == c.id);
+        let en_lista = app.tienda_lista.iter().any(|i| i == c.id);
+        let compat = !compatibles(c, &mc_inst, &cargador_inst).is_empty();
+        let accion: Element<Mensaje> = if puesto.is_some() {
+            insignia(p, Estado::Exito, "Instalado")
+        } else if en_lista {
+            componentes::boton(p, "En la lista", Variante::Secundario, Some(Mensaje::TiendaQuitar(c.id.to_owned())))
+        } else if compat {
+            componentes::boton(p, "Agregar", Variante::Secundario, Some(Mensaje::TiendaAgregar(c.id.to_owned())))
+        } else {
+            insignia(p, Estado::Aviso, "Sin versión para tu instancia")
+        };
+        let titulo = iced::widget::button(
+            row![
+                text(c.titulo).font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text),
+                text(c.autor).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
+            ]
+            .spacing(espacio::S3)
+            .align_y(Alignment::Center),
+        )
+        .padding(0)
+        .on_press(Mensaje::PanelMod(Some(c.id.to_owned())))
+        .style(icaro_ui::estilo::sin_estilo(p.text));
+        let mut chips = row![].spacing(espacio::S2).align_y(Alignment::Center);
+        for k in c.categorias.iter().take(2) {
+            chips = chips.push(insignia(p, Estado::Info, k));
+        }
+        chips = chips.push(text(format!("{} descargas", c.descargas)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted));
+        resultados = resultados.push(
+            container(
+                row![
+                    icono_mod(p, c.id, 48.0),
+                    column![titulo, text(c.descripcion).size(texto::BODY_SM.0).color(p.text_muted), chips].spacing(espacio::S1).width(Length::Fill),
+                    accion,
+                ]
+                .spacing(espacio::S4)
+                .align_y(Alignment::Center),
+            )
+            .padding(espacio::S4)
+            .width(Length::Fill)
+            .style(icaro_ui::estilo::tarjeta(p, en_lista)),
+        );
+    }
+    if hay == 0 {
+        resultados = resultados.push(text("Nada coincide con la búsqueda y los filtros.").size(texto::BODY.0).color(p.text_muted));
+    }
+
+    let cabecera = column![
+        row![
+            componentes::boton(p, "Volver a instalados", Variante::Fantasma, Some(Mensaje::VistaMods(0))),
+            text(if mods::es_recurso() { "AGREGAR PACKS" } else { "AGREGAR MODS" }).font(fuentes::DISPLAY).size(texto::DISPLAY.0 - 8.0).color(p.text),
+        ]
+        .spacing(espacio::S4)
+        .align_y(Alignment::Center),
+        row![
+            chip_dato(p, &format!("{instancia} · {mc_inst} · {cargador_inst}")),
+            Space::with_width(Length::Fill),
+            container(componentes::campo(p, "Buscar", &app.busqueda_mods, Mensaje::BuscarMods)).width(260),
+            componentes::selector(p, vec!["Más descargados".to_owned(), "Nombre".to_owned()], Some(["Más descargados", "Nombre"][app.tienda_orden.min(1)].to_owned()), |v| Mensaje::TiendaOrden(usize::from(v == "Nombre"))),
+        ]
+        .spacing(espacio::S4)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(espacio::S3);
+
+    let cuerpo = row![
+        filtros,
+        column![text(format!("{hay} resultados")).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted), resultados].spacing(espacio::S3).width(Length::Fill),
+    ]
+    .spacing(espacio::S6);
+
+    let n = app.tienda_lista.len();
+    let barra: Element<Mensaje> = if n == 0 {
+        Space::with_height(0).into()
+    } else {
+        let mut nombres: Vec<String> = Vec::new();
+        let mut deps: Vec<String> = Vec::new();
+        for id in &app.tienda_lista {
+            if let Some(c) = mods::en_catalogo(id) {
+                nombres.push(c.titulo.to_owned());
+                for d in c.dependencias {
+                    let titulo = mods::en_catalogo(d).map_or((*d).to_owned(), |x| x.titulo.to_owned());
+                    if !instalados.iter().any(|m| m.id == *d) && !app.tienda_lista.iter().any(|i| i == d) && !deps.contains(&titulo) {
+                        deps.push(titulo);
+                    }
+                }
+            }
+        }
+        let mut resumen = nombres.join(", ");
+        if !deps.is_empty() {
+            resumen.push_str(&format!(" + {} (dependencia)", deps.join(", ")));
+        }
+        container(
+            row![
+                text(format!("{n} en la lista")).font(fuentes::TITULO).size(texto::BODY.0).color(p.bg),
+                text(resumen).size(texto::BODY_SM.0).color(p.bg).width(Length::Fill),
+                iced::widget::button(text("VACIAR").font(fuentes::ETIQUETA).size(texto::LABEL.0).color(p.bg))
+                    .padding(Padding::from([espacio::S2, espacio::S4]))
+                    .on_press(Mensaje::TiendaVaciar)
+                    .style(move |_, _| iced::widget::button::Style {
+                        text_color: p.bg,
+                        border: iced::Border { color: p.bg, width: 2.0, radius: 0.0.into() },
+                        ..Default::default()
+                    }),
+                iced::widget::button(text(format!("INSTALAR {n}")).font(fuentes::ETIQUETA).size(texto::LABEL.0).color(p.text))
+                    .padding(Padding::from([espacio::S2, espacio::S4]))
+                    .on_press(Mensaje::TiendaInstalar)
+                    .style(move |_, _| iced::widget::button::Style {
+                        background: Some(iced::Background::Color(p.bg)),
+                        text_color: p.text,
+                        ..Default::default()
+                    }),
+            ]
+            .spacing(espacio::S4)
+            .align_y(Alignment::Center)
+            .padding(Padding::from([espacio::S3, espacio::S4])),
+        )
+        .width(Length::Fill)
+        .style(icaro_ui::estilo::bloque(p.text))
+        .into()
+    };
+    column![
+        column![cabecera, cuerpo].spacing(espacio::S6).padding(Padding::from([espacio::S6, espacio::S12])),
+        barra,
+    ]
+    .into()
+}
+
+/// Panel lateral de 640 px con la ficha rápida de un mod.
+fn ficha_mod<'a>(app: &'a App, id: &str) -> Element<'a, Mensaje> {
+    use icaro_ui::componentes::{etiqueta, insignia, Estado};
+    let p = app.modo.paleta();
+    let instancia = instancias()[app.editor_inst].nombre.clone();
+    let (mc_inst, cargador_inst) = juego_de_instancia(app);
+    let instalados = mods::listar(&instancia);
+    let puesto = instalados.iter().find(|m| m.id == id);
+    let Some(c) = mods::en_catalogo(id) else {
+        return container(text("Sin ficha").size(texto::BODY.0).color(p.text)).into();
+    };
+    let en_lista = app.tienda_lista.iter().any(|i| i == id);
+    let accion: Element<Mensaje> = if let Some(m) = puesto {
+        insignia(p, Estado::Exito, &format!("Instalado {}", m.version))
+    } else if en_lista {
+        componentes::boton(p, "Quitar de la lista", Variante::Secundario, Some(Mensaje::TiendaQuitar(id.to_owned())))
+    } else {
+        componentes::boton(p, "Agregar a la lista", Variante::Primario, Some(Mensaje::TiendaAgregar(id.to_owned())))
+    };
+    let cabecera = row![
+        icono_mod(p, id, 56.0),
+        column![
+            text(c.titulo).font(fuentes::TITULO).size(texto::HEADING.0 + 2.0).color(p.text),
+            text(format!("{} · {} descargas", c.autor, c.descargas)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
+        ]
+        .spacing(espacio::S1)
+        .width(Length::Fill),
+        iced::widget::button(icono(Icono::Cerrar, Tam::Base, p.text))
+            .padding(espacio::S2)
+            .on_press(Mensaje::PanelMod(None))
+            .style(icaro_ui::estilo::boton_fantasma(p)),
+    ]
+    .spacing(espacio::S4)
+    .align_y(Alignment::Center);
+    let laminas = galeria_de(id);
+    let mut galeria = row![].spacing(espacio::S2);
+    for l in laminas {
+        galeria = galeria.push(container(icaro_ui::laminas::grabado(p, l, Length::Fill, 90)).width(Length::FillPortion(1)).style(icaro_ui::estilo::marco(p)));
+    }
+    let mut versiones = column![etiqueta(p, &format!("Versiones para {mc_inst} · {cargador_inst}"))].spacing(espacio::S2);
+    let comp = compatibles(c, &mc_inst, &cargador_inst);
+    if comp.is_empty() {
+        versiones = versiones.push(text("No hay versiones para tu instancia.").size(texto::BODY_SM.0).color(p.text_muted));
+    }
+    for l in comp {
+        versiones = versiones.push(
+            row![
+                text(l.version).font(fuentes::MONO).size(texto::MONO.0).color(p.text).width(100),
+                insignia(p, Estado::Exito, "Estable"),
+                Space::with_width(Length::Fill),
+                text(l.fecha).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
+            ]
+            .spacing(espacio::S3)
+            .align_y(Alignment::Center),
+        );
+    }
+    let mut deps = column![etiqueta(p, "Dependencias")].spacing(espacio::S2);
+    if c.dependencias.is_empty() {
+        deps = deps.push(text("No necesita otros mods.").size(texto::BODY_SM.0).color(p.text_muted));
+    }
+    for d in c.dependencias {
+        let titulo = mods::en_catalogo(d).map_or((*d).to_owned(), |x| x.titulo.to_owned());
+        let puesta = instalados.iter().any(|m| m.id == *d);
+        deps = deps.push(
+            row![
+                icono_mod(p, d, 24.0),
+                text(titulo).size(texto::BODY.0).color(p.text).width(Length::Fill),
+                if puesta { insignia(p, Estado::Exito, "Instalada") } else { insignia(p, Estado::Aviso, "Se instalará") },
+            ]
+            .spacing(espacio::S3)
+            .align_y(Alignment::Center),
+        );
+    }
+    let cuerpo = column![
+        cabecera,
+        row![
+            accion,
+            componentes::boton(p, "Ver página", Variante::Secundario, Some(Mensaje::AbrirModPagina(id.to_owned()))),
+        ]
+        .spacing(espacio::S3),
+        text(c.descripcion).size(texto::BODY.0).color(p.text),
+        galeria,
+        versiones,
+        deps,
+    ]
+    .spacing(espacio::S5);
+    row![
+        container(Space::new(2.0, Length::Fill)).style(icaro_ui::estilo::bloque(p.text)),
+        container(desplazable(container(cuerpo).padding(espacio::S6)))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(icaro_ui::estilo::flotante(p)),
+    ]
+    .width(640)
+    .into()
 }
 
 /// Días desde 1970 de una fecha civil (algoritmo de Howard Hinnant).
@@ -1097,6 +1543,21 @@ fn tarjetas_informacion<'a>(
     ]
 }
 
+/// Tres láminas para la galería de un mod o modpack, siempre las mismas para el
+/// mismo nombre y sin repetir entre ellos (cuando alcanzan).
+fn galeria_de(clave: &str) -> [Lamina; 3] {
+    const POZO: [Lamina; 15] = [
+        Lamina::ArcoPuente, Lamina::CadenasReja, Lamina::FuegoArco, Lamina::EscaleraPuentes, Lamina::TorreReja,
+        Lamina::PuenteTorre, Lamina::MercadoCarros, Lamina::SoldadosAldea, Lamina::TivoliRocas, Lamina::FortalezasValle,
+        Lamina::CabanaCasas, Lamina::OceanoPez, Lamina::TetisDelfin, Lamina::JeronimoCalabaza, Lamina::HuidaCiudad,
+    ];
+    let mut h: usize = 0;
+    for b in clave.bytes() {
+        h = h.wrapping_mul(31).wrapping_add(usize::from(b));
+    }
+    [POZO[h % 15], POZO[(h + 5) % 15], POZO[(h + 10) % 15]]
+}
+
 /// Índice de la versión que sirve para la instancia: la más nueva con su
 /// versión del juego y su cargador (y estable, salvo que se pidan pruebas).
 fn para_instancia(c: &mods::ModCatalogo, mc: &str, cargador: &str, pruebas: bool) -> Option<usize> {
@@ -1180,14 +1641,7 @@ fn pagina_mod<'a>(app: &'a App, id: &str) -> Element<'a, Mensaje> {
             .into()
         }
         (Some(_), "Galería") => {
-            let laminas = [
-                Lamina::TivoliCiudad,
-                Lamina::ValleRocas,
-                Lamina::ProdigoAldea,
-                Lamina::CastilloTorres,
-                Lamina::MelencoliaReloj,
-                Lamina::FaetonPaisaje,
-            ];
+            let laminas = galeria_de(id);
             let sel = app.mod_galeria.min(extras.galeria.len() - 1);
             let principal = column![
                 container(icaro_ui::laminas::grabado(p, laminas[sel % laminas.len()], Length::Fill, 300))
@@ -1533,7 +1987,7 @@ fn pagina_modpack(app: &App, i: usize) -> Element<'_, Mensaje> {
         .spacing(espacio::S4)
         .into(),
         "Galería" => {
-            let laminas = [m.portada, Lamina::TivoliCiudad, Lamina::ValleRocas];
+            let laminas = [m.portada, galeria_de(m.nombre)[0], galeria_de(m.nombre)[1]];
             let titulos = ["Primer vistazo", "Exploración", "Construcciones"];
             let sel = app.modpack_galeria.min(2);
             let mut miniaturas = row![].spacing(espacio::S4);
@@ -1827,7 +2281,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         mods: "214".into(),
         tamano: "2,4 GB".into(),
         memoria: format!("{} MB", app.configs[app.editor_inst].memoria_max),
-        portada: Lamina::MelencoliaReloj,
+        portada: Lamina::CaballeroCastillo,
     };
     let encabezado = encabezado_editor(
         p,
@@ -1954,12 +2408,12 @@ fn pantalla_consola(app: &App) -> Element<'_, Mensaje> {
 fn pantalla_capturas(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
     let ejemplos = [
-        ("2026-10-09_01.12.04.png", "Hoy 01:12", Lamina::CaballeroYelmo),
-        ("2026-10-08_22.40.31.png", "Ayer 22:40", Lamina::ValleRocas),
-        ("2026-10-07_19.03.55.png", "Hace 2 días", Lamina::CastilloTorres),
-        ("2026-10-05_16.20.10.png", "Hace 4 días", Lamina::ProdigoAldea),
-        ("2026-10-02_11.48.09.png", "Hace 1 semana", Lamina::DragonCabeza),
-        ("2026-09-28_09.15.42.png", "Hace 11 días", Lamina::IcaroDedalo),
+        ("2026-10-09_01.12.04.png", "Hoy 01:12", Lamina::ParejaAldea),
+        ("2026-10-08_22.40.31.png", "Ayer 22:40", Lamina::CascadaAgua),
+        ("2026-10-07_19.03.55.png", "Hace 2 días", Lamina::SoldadosCastillo),
+        ("2026-10-05_16.20.10.png", "Hace 4 días", Lamina::IxionNubes),
+        ("2026-10-02_11.48.09.png", "Hace 1 semana", Lamina::DemogorgonCueva),
+        ("2026-09-28_09.15.42.png", "Hace 11 días", Lamina::MelencoliaCometa),
     ];
     let capturas: Vec<Captura> = ejemplos
         .iter()
@@ -2078,38 +2532,8 @@ fn pantalla_descargas(app: &App) -> Element<'_, Mensaje> {
 
 fn pantalla_ajustes(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
-    let secciones = [
-        "General", "Apariencia", "Java y memoria", "Almacenamiento", "Red", "Comportamiento",
-        "Atajos", "Acerca de",
-    ];
-    let pagina = column![
-        encabezado_ajustes(p, "Apariencia", None),
-        fila_ajuste(
-            p,
-            "Tema",
-            "Tinta es oscuro, Piedra es claro. Sistema sigue a tu equipo.",
-            componentes::segmentado(p, &["Tinta", "Piedra", "Sistema"], app.tema, Mensaje::Tema),
-        ),
-        fila_ajuste(
-            p,
-            "Reducir movimiento",
-            "Quita animaciones; el Umbral pasa a ser un fundido.",
-            componentes::interruptor(p, app.reducir, Mensaje::Reducir),
-        ),
-        fila_ajuste(
-            p,
-            "Descargas simultáneas",
-            "Con internet lento, bájalo a 2.",
-            componentes::contador(
-                p,
-                app.simultaneas,
-                Mensaje::Simultaneas(app.simultaneas - 1),
-                Mensaje::Simultaneas(app.simultaneas + 1),
-            ),
-        ),
-    ]
-    .spacing(espacio::S2)
-    .width(Length::Fill);
+    let secciones = pantallas::SECCIONES;
+    let pagina = pantallas::pagina_ajustes(app);
     let cuerpo = row![
         indice_ajustes(p, &secciones, app.ajuste, Mensaje::Ajuste),
         pagina
@@ -2126,7 +2550,10 @@ fn pantalla_ajustes(app: &App) -> Element<'_, Mensaje> {
 fn vista(app: &App) -> Element<'_, Mensaje> {
     mods::fijar_recurso(app.editor == Some(3));
     let p = app.modo.paleta();
-    let contenido = match app.seccion {
+    let contenido = if let Some(pant) = app.pantalla {
+        pantallas::vista_pantalla(app, pant)
+    } else {
+        match app.seccion {
         Seccion::Instancias => pantalla_instancias(app),
         Seccion::Servidores => pantalla_servidores(app),
         Seccion::Descargas => pantalla_descargas(app),
@@ -2134,6 +2561,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         Seccion::Modpacks => pantalla_modpacks(app),
         Seccion::Consola => pantalla_consola(app),
         Seccion::Capturas => pantalla_capturas(app),
+        }
     };
     let pie = row![
         column![
@@ -2189,13 +2617,14 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             p,
             if app.menu_grupos { elementos_grupos } else { vec![
                 ElementoMenu::Opcion { icono: Icono::Jugar, texto: "Jugar".into(), atajo: Some("Enter"), peligro: false, mensaje: Mensaje::Menu(None) },
-                ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Abrir carpeta".into(), atajo: Some("O"), peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Abrir carpeta".into(), atajo: Some("O"), peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::AbrirCarpetaInstancia(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Editar, texto: "Editar".into(), atajo: Some("E"), peligro: false, mensaje: Mensaje::Editar },
                 ElementoMenu::Separador,
                 ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Mover a grupo".into(), atajo: Some(">"), peligro: false, mensaje: Mensaje::VerGrupos(true) },
                 ElementoMenu::Separador,
-                ElementoMenu::Opcion { icono: Icono::Copiar, texto: "Duplicar".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
-                ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar modpack".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
+                ElementoMenu::Opcion { icono: Icono::Copiar, texto: "Duplicar".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::Duplicar(app.menu.unwrap_or(0))) },
+                ElementoMenu::Opcion { icono: Icono::Actualizar, texto: "Cambiar versión".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::CambiarVersion(app.menu.unwrap_or(0))) },
+                ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar modpack".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::Exportar(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Externo, texto: "Crear acceso directo".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
                 ElementoMenu::Separador,
                 ElementoMenu::Opcion { icono: Icono::Papelera, texto: "Eliminar".into(), atajo: Some("Supr"), peligro: true, mensaje: Mensaje::PedirEliminar },
@@ -2219,12 +2648,40 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ]
         .into();
     }
+    if let (Some(id), Some(2 | 3)) = (&app.mod_panel, app.editor) {
+        let t = icaro_ui::movimiento::Curva::Salida.aplicar(progreso(app.anim_panel, app.ahora, MS_PANEL));
+        let desfase = (1.0 - t) * 640.0;
+        ventana = iced::widget::stack![
+            ventana,
+            container(row![
+                Space::with_width(Length::Fill),
+                container(ficha_mod(app, id)).height(Length::Fill),
+                Space::with_width(desfase),
+            ])
+            .padding(Padding { top: 38.0, ..Padding::ZERO })
+            .width(Length::Fill)
+            .height(Length::Fill),
+        ]
+        .into();
+    }
+    if let Some(s) = &app.asistente {
+        ventana = con_velo_losa(p, ventana, pantallas::asistente(app, s), Mensaje::Pant(pantallas::Accion::AsistenteCancelar), desfase_losa(app));
+    }
+    if let Some(i) = app.cambiar {
+        ventana = con_velo_losa(p, ventana, pantallas::cambiar_version(app, i), Mensaje::Pant(pantallas::Accion::CambiarCancelar), desfase_losa(app));
+    }
+    if let Some(s) = &app.importar {
+        ventana = con_velo_losa(p, ventana, pantallas::importar(app, s), Mensaje::Pant(pantallas::Accion::ImportarCancelar), desfase_losa(app));
+    }
+    if let Some(s) = &app.exportar {
+        ventana = con_velo_losa(p, ventana, pantallas::exportar(app, s), Mensaje::Pant(pantallas::Accion::ExportarCancelar), desfase_losa(app));
+    }
     if app.dialogo {
         let cuerpo = text("Se borrarán la instancia, sus 214 mods y 3 mundos (2,4 GB). Esta acción no se puede deshacer.")
             .size(texto::BODY.0)
             .color(p.text_muted)
             .into();
-        ventana = con_velo(
+        ventana = con_velo_losa(
             p,
             ventana,
             dialogo(
@@ -2241,6 +2698,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                 Mensaje::CerrarDialogo,
             ),
             Mensaje::CerrarDialogo,
+            desfase_losa(app),
         );
     }
     if let Some(a) = &app.aviso {
@@ -2267,8 +2725,11 @@ fn main() -> iced::Result {
         .subscription(|app| {
             let mut subs = vec![window::resize_events().map(|(_, s)| Mensaje::Tamano(s))];
             if !app.instalando.is_empty()
+                || matches!(app.pantalla, Some(pantallas::Pantalla::Codigo | pantallas::Pantalla::Integridad))
                 || progreso(app.anim, app.ahora, MS_ENTRADA) < 1.0
                 || progreso(app.anim_menu, app.ahora, MS_MENU) < 1.0
+                || progreso(app.anim_panel, app.ahora, MS_PANEL) < 1.0
+                || (hay_dialogo(app) && progreso(app.anim_dialogo, app.ahora, MS_LOSA) < 1.0)
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
             }
@@ -2300,6 +2761,24 @@ fn main() -> iced::Result {
     let con_dialogo = std::env::var_os("ICARO_DIALOGO").is_some();
     app.run_with(move || {
         let guardado = estado::Guardado::cargar();
+        // Vuelve a crear las instancias que vinieron de modpacks.
+        if let Some(g) = &guardado {
+            for nombre in &g.modpacks {
+                if let Some(m) = modpacks::CATALOGO.iter().find(|m| m.nombre == nombre) {
+                    lista_instancias().lock().unwrap().push(DatosInstancia {
+                        nombre: m.nombre.into(),
+                        version: format!("{} · {}", m.minecraft, m.cargador),
+                        ultima_vez: "Hace un momento".into(),
+                        mods: format!("{} mods", m.mods),
+                        portada: m.portada,
+                        estado: EstadoInstancia::Lista,
+                        seleccionada: false,
+                        detalle: String::new(),
+                    });
+                }
+            }
+        }
+        let total = instancias().len();
         (
             App {
                 modo: if piedra { Modo::Piedra } else { Modo::Tinta },
@@ -2326,8 +2805,44 @@ fn main() -> iced::Result {
                 },
                 cerrados: guardado.as_ref().map_or_else(Vec::new, |g| g.cerrados.clone()),
                 busqueda_mods: String::new(),
-                mods_vista: 0,
+                mods_vista: usize::from(std::env::var("ICARO_TIENDA").is_ok()),
+                mods_filtro: 0,
+                mod_panel: std::env::var("ICARO_PANEL").ok(),
+                anim_panel: None,
+                anim_dialogo: None,
+                tienda_lista: Vec::new(),
+                tienda_cat: Vec::new(),
+                tienda_lado: 0,
+                tienda_orden: 0,
                 modpack_filtro: 0,
+                pantalla: match std::env::var("ICARO_PANTALLA").ok().as_deref() {
+                    Some("primera") => Some(pantallas::Pantalla::Primera),
+                    Some("codigo") => Some(pantallas::Pantalla::Codigo),
+                    Some("fallo") => Some(pantallas::Pantalla::Fallo),
+                    Some("tienda") => Some(pantallas::Pantalla::ErrorTienda),
+                    Some("noverif") => Some(pantallas::Pantalla::NoVerificados),
+                    Some("sync") => Some(pantallas::Pantalla::Sincronizar),
+                    Some("integridad") => Some(pantallas::Pantalla::Integridad),
+                    Some("update") => Some(pantallas::Pantalla::Actualizacion),
+                    _ => guardado.is_none().then_some(pantallas::Pantalla::Primera),
+                },
+                aj: pantallas::Ajustes::default(),
+                asistente: (std::env::var("ICARO_DIALOGO_NUEVO").is_ok()).then(|| pantallas::Asistente {
+                    paso: std::env::var("ICARO_PASO").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+                    tipo_version: 0,
+                    busqueda: String::new(),
+                    version: 0,
+                    loader: 1,
+                    nombre: "Fabric 1.21.4".into(),
+                    portada: 0,
+                }),
+                cambiar: std::env::var("ICARO_CAMBIAR").is_ok().then_some(0),
+                importar: std::env::var("ICARO_IMPORTAR").is_ok().then(|| pantallas::Importar { origen: 0, archivo: None, launchers: [true, false, false], clon_origen: 0, con_mundos: false }),
+                exportar: std::env::var("ICARO_EXPORTAR").is_ok().then(|| pantallas::Exportar { instancia: 0, nombre: "Supervivencia".into(), version: "1.0.0".into(), autor: "Mineral_7".into(), carpetas: [true, true, false, false] }),
+                codigo_inicio: std::time::Instant::now(),
+                codigo_fase: pantallas::FaseCodigo::Esperando,
+                intentos: 0,
+                detalle_fallo: false,
                 modpack_pagina: std::env::var("ICARO_PACK").ok().and_then(|v| v.parse().ok()),
                 modpack_pestana: std::env::var("ICARO_PACKTAB").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
                 modpack_galeria: 0,
@@ -2348,12 +2863,16 @@ fn main() -> iced::Result {
                 menu_grupos: false,
                 lista_grupos: guardado.as_ref().map_or_else(|| vec!["Con amigos".into(), "Técnicos".into()], |g| g.lista_grupos.clone()),
                 edicion_grupo: None,
-                grupos: guardado.as_ref().filter(|g| g.grupos.len() >= 5).map_or_else(
-                    || vec![Some("Con amigos".into()), Some("Técnicos".into()), Some("Con amigos".into()), None, None],
-                    |g| g.grupos[..5].to_vec(),
+                grupos: guardado.as_ref().filter(|g| g.grupos.len() == total).map_or_else(
+                    || {
+                        let mut v: Vec<Option<String>> = vec![Some("Con amigos".into()), Some("Técnicos".into()), Some("Con amigos".into()), None, None];
+                        v.resize(total, None);
+                        v
+                    },
+                    |g| g.grupos.clone(),
                 ),
-                configs: guardado.as_ref().map(|g| g.configs()).filter(|c| c.len() >= 5).map(|c| c[..5].to_vec()).unwrap_or_else(|| {
-                    (0..5)
+                configs: guardado.as_ref().map(|g| g.configs()).filter(|c| c.len() == total).unwrap_or_else(|| {
+                    (0..total)
                         .map(|_| ConfigJava {
                             java: None,
                             memoria_min: 2048,

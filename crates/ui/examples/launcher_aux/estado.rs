@@ -24,6 +24,9 @@ pub struct Guardado {
     pub lista_grupos: Vec<String>,
     pub grupos: Vec<Option<String>>,
     pub cerrados: Vec<Option<String>>,
+    /// Modpacks instalados como instancias, por nombre.
+    #[serde(default)]
+    pub modpacks: Vec<String>,
     configs: Vec<JavaGuardado>,
 }
 
@@ -37,11 +40,13 @@ impl Guardado {
         grupos: &[Option<String>],
         cerrados: &[Option<String>],
         configs: &[ConfigJava],
+        modpacks: &[String],
     ) -> Self {
         Self {
             lista_grupos: lista_grupos.to_vec(),
             grupos: grupos.to_vec(),
             cerrados: cerrados.to_vec(),
+            modpacks: modpacks.to_vec(),
             configs: configs
                 .iter()
                 .map(|c| JavaGuardado {

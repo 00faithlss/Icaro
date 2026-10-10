@@ -33,7 +33,7 @@ pub const CATALOGO: &[Modpack] = &[
         tamano: "48 MB",
         descargas: "9,2 M",
         categoria: "Rendimiento",
-        portada: Lamina::TivoliCiudad,
+        portada: Lamina::CascadaMolino,
     },
     Modpack {
         nombre: "Create: Above and Beyond",
@@ -45,7 +45,7 @@ pub const CATALOGO: &[Modpack] = &[
         tamano: "412 MB",
         descargas: "3,4 M",
         categoria: "Técnico",
-        portada: Lamina::MelencoliaReloj,
+        portada: Lamina::RuedaRueda,
     },
     Modpack {
         nombre: "Aventura Épica",
@@ -57,7 +57,7 @@ pub const CATALOGO: &[Modpack] = &[
         tamano: "620 MB",
         descargas: "5,1 M",
         categoria: "Aventura",
-        portada: Lamina::DragonCabeza,
+        portada: Lamina::DragonAla,
     },
     Modpack {
         nombre: "Vanilla Plus",
@@ -69,7 +69,7 @@ pub const CATALOGO: &[Modpack] = &[
         tamano: "26 MB",
         descargas: "7,8 M",
         categoria: "Vanilla+",
-        portada: Lamina::ValleRocas,
+        portada: Lamina::ValleBosque,
     },
     Modpack {
         nombre: "Industria Moderna",
@@ -81,7 +81,7 @@ pub const CATALOGO: &[Modpack] = &[
         tamano: "355 MB",
         descargas: "1,9 M",
         categoria: "Técnico",
-        portada: Lamina::CastilloTorres,
+        portada: Lamina::PozoCuerdas,
     },
     Modpack {
         nombre: "Exploración Salvaje",
@@ -93,6 +93,6 @@ pub const CATALOGO: &[Modpack] = &[
         tamano: "140 MB",
         descargas: "2,6 M",
         categoria: "Aventura",
-        portada: Lamina::IcaroDedalo,
+        portada: Lamina::HuidaBosque,
     },
 ];

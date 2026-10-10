@@ -283,3 +283,20 @@ pub fn banner<'a, M: Clone + 'a>(
     ]
     .into()
 }
+
+/// Como `con_velo`, con el diálogo cayendo desde arriba (Losa): `desfase` son
+/// los píxeles por encima de su sitio; negativo es el impacto final.
+pub fn con_velo_losa<'a, M: Clone + 'a>(
+    p: Paleta,
+    fondo: Element<'a, M>,
+    dialogo: Element<'a, M>,
+    al_cerrar: M,
+    desfase: f32,
+) -> Element<'a, M> {
+    let relleno = if desfase >= 0.0 {
+        Padding { bottom: desfase * 2.0, ..Padding::ZERO }
+    } else {
+        Padding { top: -desfase * 2.0, ..Padding::ZERO }
+    };
+    con_velo(p, fondo, container(dialogo).padding(relleno).into(), al_cerrar)
+}

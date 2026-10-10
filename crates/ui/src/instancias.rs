@@ -11,13 +11,13 @@ use crate::estilo;
 use crate::fuentes;
 use crate::iconos::{icono, Icono, Tam};
 use crate::laminas::Lamina;
-use crate::tema::{borde, espacio, medida, texto, Paleta};
+use crate::tema::{borde, espacio, texto, Paleta};
 
 /// Alto de la portada dentro de la tarjeta.
-pub const ALTO_PORTADA: f32 = 170.0;
+pub const ALTO_PORTADA: f32 = 131.0;
 
 /// Alto de la tarjeta; fijo para que toda la cuadrícula quede pareja.
-pub const ALTO_TARJETA: f32 = 350.0;
+pub const ALTO_TARJETA: f32 = 340.0;
 /// Ancho fijo de la tarjeta: no crece al maximizar la ventana.
 pub const ANCHO_TARJETA: f32 = 300.0;
 
@@ -56,42 +56,82 @@ pub struct AccionesTarjeta<M> {
     pub mas: M,
 }
 
-fn boton_pie<'a, M: Clone + 'a>(
+/// Botón del pie: ghost, sin contorno; el fondo aparece al pasar el puntero.
+fn pie_fantasma<'a, M: Clone + 'a>(
     p: Paleta,
-    glifo: Icono,
-    etiqueta: Option<String>,
-    color: Color,
+    contenido: Option<(Icono, String)>,
+    tinta: Color,
     mensaje: Option<M>,
-) -> Element<'a, M> {
-    // Contenido y botón en un color dado; el invertido se muestra al pasar el
-    // puntero y cambia a la vez el relleno, el icono y la etiqueta.
-    let construir = |tinta: Color, relleno: Option<Color>| -> Element<'a, M> {
-        let mut contenido = row![icono(glifo, Tam::Base, tinta)]
-            .spacing(espacio::S2)
-            .align_y(Alignment::Center);
-        if let Some(e) = etiqueta.clone() {
-            contenido = contenido.push(
-                text(e.to_uppercase())
-                    .font(fuentes::ETIQUETA)
-                    .size(texto::LABEL.0)
-                    .color(tinta),
+    invertido: bool,
+) -> iced::widget::Button<'a, M> {
+    let mut fila = row![].spacing(espacio::S2).align_y(Alignment::Center);
+    match contenido {
+        Some((g, e)) => {
+            fila = fila.push(icono(g, Tam::Base, tinta)).push(
+                text(e.to_uppercase()).font(fuentes::ETIQUETA).size(texto::LABEL.0).color(tinta),
             );
         }
-        button(container(contenido).center_y(Length::Fill))
-            .height(medida::CONTROL)
-            .padding(Padding::from([0.0, espacio::S3]))
-            .on_press_maybe(mensaje.clone())
-            .style(estilo::boton_pie(tinta, relleno, mensaje.is_some()))
-            .into()
-    };
-    // El pie invertido y las acciones de error o deshabilitadas no se invierten.
-    let normal = construir(color, None);
-    if mensaje.is_some() && (color == p.text || color == p.bg) {
-        let (relleno, tinta) = if color == p.text { (p.text, p.bg) } else { (p.bg, p.text) };
-        iced::widget::hover(normal, construir(tinta, Some(relleno)))
-    } else {
-        normal
+        None => fila = fila.push(icono(Icono::Acciones, Tam::Base, tinta)),
     }
+    let activo = mensaje.is_some();
+    button(container(fila).center(Length::Fill))
+        .height(Length::Fill)
+        .padding(0)
+        .on_press_maybe(mensaje)
+        .style(move |_, estado| {
+            let encima = activo && matches!(estado, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: encima.then_some(iced::Background::Color(if invertido {
+                    Color { a: 0.18, ..p.bg }
+                } else {
+                    p.surface_hover
+                })),
+                text_color: tinta,
+                ..Default::default()
+            }
+        })
+}
+
+/// Icono procedural de 48 px: una trama de 8 × 8 píxeles simétrica sacada del
+/// nombre, estampada sobre el borde de la portada.
+fn sello<'a, M: 'a>(p: Paleta, nombre: &str) -> Element<'a, M> {
+    let mut h: u32 = 2_166_136_261;
+    for b in nombre.bytes() {
+        h = (h ^ u32::from(b)).wrapping_mul(16_777_619);
+    }
+    let mut estado = h;
+    let mut siguiente = move || {
+        estado ^= estado << 13;
+        estado ^= estado >> 17;
+        estado ^= estado << 5;
+        estado
+    };
+    let mut col = column![];
+    for _ in 0..8 {
+        let mut mitad = [0u32; 4];
+        for m in mitad.iter_mut() {
+            *m = siguiente() % 3;
+        }
+        let mut fila = row![];
+        for i in 0..8 {
+            let v = mitad[if i < 4 { i } else { 7 - i }];
+            let color = match v {
+                0 => p.bg,
+                1 => p.text_muted,
+                _ => p.text,
+            };
+            fila = fila.push(container(Space::new(6.0, 6.0)).style(estilo::bloque(color)));
+        }
+        col = col.push(fila);
+    }
+    container(col)
+        .padding(2)
+        .style(move |_: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(p.bg)),
+            border: iced::Border { color: p.text, width: 2.0, radius: 0.0.into() },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// Tarjeta de instancia con portada de grabado y pie de acciones.
@@ -100,7 +140,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     datos: &DatosInstancia,
     acciones: AccionesTarjeta<M>,
 ) -> Element<'a, M> {
-    let portada = crate::laminas::grabado(p, datos.portada, Length::Fill, ALTO_PORTADA);
+    let portada = crate::laminas::grabado_zoom(p, datos.portada, Length::Fill, ALTO_PORTADA);
 
     let mut cuerpo = column![
         text(datos.nombre.clone())
@@ -167,33 +207,31 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
         EstadoInstancia::Jugando => (Icono::Detener, "Detener".to_owned(), tinta, true),
         EstadoInstancia::Error => (Icono::Instancias, "Reparar".to_owned(), p.error, true),
     };
+    let regla_pie = if invertido { Color { a: 0.3, ..p.bg } } else { p.border };
     let pie = row![
-        boton_pie(
-            p,
-            glifo,
-            Some(etiqueta),
-            color,
-            activo.then(|| acciones.principal.clone())
-        ),
-        Space::with_width(Length::Fill),
-        boton_pie(p, Icono::Acciones, None, tinta, Some(acciones.mas.clone())),
+        pie_fantasma(p, Some((glifo, etiqueta)), color, activo.then(|| acciones.principal.clone()), invertido)
+            .width(Length::Fill),
+        container(Space::new(1.0, Length::Fill)).style(estilo::bloque(regla_pie)),
+        pie_fantasma(p, None, tinta, Some(acciones.mas.clone()), invertido).width(44),
     ]
-    .align_y(Alignment::Center);
-    let pie = container(pie)
-        .padding(Padding::from([espacio::S2, espacio::S2]))
-        .width(Length::Fill)
-        .style(estilo::bloque(if invertido {
-            p.text
-        } else {
-            Color::TRANSPARENT
-        }));
+    .height(44);
+    let pie = column![
+        container(Space::new(Length::Fill, 1.0)).style(estilo::bloque(
+            if datos.estado == EstadoInstancia::Error { p.error } else { regla_pie }
+        )),
+        container(pie).style(estilo::bloque(if invertido { p.text } else { Color::TRANSPARENT })),
+    ];
 
     let interior = column![
         portada,
         container(cuerpo)
-            .padding(Padding::from([espacio::S4, espacio::S4]))
+            .padding(Padding { top: 36.0, right: 20.0, bottom: 16.0, left: 20.0 })
             .height(Length::Fill),
         pie,
+    ];
+    let interior = iced::widget::stack![
+        interior,
+        container(sello(p, &datos.nombre)).padding(Padding { top: ALTO_PORTADA - 24.0, left: 20.0, ..Padding::ZERO }),
     ];
 
     // Contorno: 1 px en reposo, 2 px seleccionada, 3 px en ejecución, tono de error.
