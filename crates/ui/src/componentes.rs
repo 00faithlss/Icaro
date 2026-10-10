@@ -10,6 +10,7 @@ use iced::{Element, Length, Padding};
 
 use crate::estilo;
 use crate::fuentes;
+use crate::iconos::{Icono, Tam};
 use crate::tema::{espacio, medida, texto, Paleta};
 
 /// Variante visual de un botón.
@@ -46,6 +47,119 @@ pub fn boton<'a, M: Clone + 'a>(
         Variante::Peligro => b.style(estilo::boton_peligro(p)),
     }
     .into()
+}
+
+/// Botón de texto de alto `control-sm` (28 px) para tablas, barras y filas.
+pub fn boton_compacto<'a, M: Clone + 'a>(
+    p: Paleta,
+    etiqueta: &str,
+    variante: Variante,
+    al_pulsar: Option<M>,
+) -> Element<'a, M> {
+    let contenido = text(etiqueta.to_uppercase())
+        .font(fuentes::ETIQUETA)
+        .size(texto::LABEL.0);
+    let b = button(
+        container(contenido)
+            .height(Length::Fill)
+            .align_y(iced::alignment::Vertical::Center),
+    )
+    .height(medida::CONTROL_SM)
+    .padding(Padding::from([0.0, espacio::S3]))
+    .on_press_maybe(al_pulsar);
+    match variante {
+        Variante::Primario => b.style(estilo::boton_primario(p)),
+        Variante::Secundario => b.style(estilo::boton_secundario(p)),
+        Variante::Fantasma => b.style(estilo::boton_fantasma(p)),
+        Variante::Peligro => b.style(estilo::boton_peligro(p)),
+    }
+    .into()
+}
+
+/// Botón con un icono delante del rótulo. `compacto` usa el alto `control-sm`
+/// (28 px) de las tablas y barras; sin mensaje queda deshabilitado, con el
+/// rayado de grabado sobre el contorno.
+pub fn boton_con_icono<'a, M: Clone + 'a>(
+    p: Paleta,
+    glifo: Icono,
+    etiqueta: &str,
+    variante: Variante,
+    al_pulsar: Option<M>,
+    compacto: bool,
+) -> Element<'a, M> {
+    let deshabilitado = al_pulsar.is_none();
+    let contenido = row![
+        crate::iconos::icono_texto(glifo, Tam::Base),
+        text(etiqueta.to_uppercase())
+            .font(fuentes::ETIQUETA)
+            .size(texto::LABEL.0),
+    ]
+    .spacing(espacio::S1)
+    .align_y(iced::alignment::Vertical::Center);
+    let b = button(
+        container(contenido)
+            .height(Length::Fill)
+            .align_y(iced::alignment::Vertical::Center),
+    )
+    .height(if compacto { medida::CONTROL_SM } else { medida::CONTROL })
+    .padding(Padding {
+        top: 0.0,
+        right: if compacto { espacio::S3 } else { espacio::S4 },
+        bottom: 0.0,
+        left: if compacto { espacio::S2 } else { espacio::S3 },
+    })
+    .on_press_maybe(al_pulsar);
+    let b: Element<'a, M> = match variante {
+        Variante::Primario => b.style(estilo::boton_primario(p)),
+        Variante::Secundario => b.style(estilo::boton_secundario(p)),
+        Variante::Fantasma => b.style(estilo::boton_fantasma(p)),
+        Variante::Peligro => b.style(estilo::boton_peligro(p)),
+    }
+    .into();
+    if !deshabilitado {
+        return b;
+    }
+    iced::widget::stack![
+        b,
+        iced::widget::canvas(Rayado { color: p.border })
+            .width(Length::Fill)
+            .height(Length::Fill)
+    ]
+    .into()
+}
+
+/// Rayado diagonal a 135° de un control deshabilitado: una línea de 1 px
+/// cada 6 px, como el sombreado de un grabado.
+struct Rayado {
+    color: iced::Color,
+}
+
+impl<M> iced::widget::canvas::Program<M> for Rayado {
+    type State = ();
+
+    fn draw(
+        &self,
+        _estado: &(),
+        renderer: &iced::Renderer,
+        _tema: &iced::Theme,
+        limites: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        use iced::widget::canvas::{Frame, Path, Stroke};
+        let mut marco = Frame::new(renderer, limites.size());
+        let (w, h) = (limites.width, limites.height);
+        // Las líneas suben a la derecha; el paso se mide en perpendicular.
+        let paso = 6.0 * std::f32::consts::SQRT_2;
+        let mut x = -h;
+        while x < w {
+            marco.stroke(
+                &Path::line(iced::Point::new(x, h), iced::Point::new(x + h, 0.0)),
+                Stroke::default().with_color(self.color).with_width(1.0),
+            );
+            x += paso;
+        }
+        vec![marco.into_geometry()]
+    }
 }
 
 /// Campo de texto de alto `control`.
@@ -97,6 +211,18 @@ pub fn insignia<'a, M: 'a>(p: Paleta, estado: Estado, palabra: &str) -> Element<
     )
     .padding(Padding::from([espacio::S1 + 2.0, espacio::S3]))
     .style(estilo::insignia(fondo, tinta))
+    .into()
+}
+
+/// Insignia neutra: solo contorno de tinta, sin color de estado.
+pub fn insignia_contorno<'a, M: 'a>(p: Paleta, palabra: &str) -> Element<'a, M> {
+    container(
+        text(palabra.to_uppercase())
+            .font(fuentes::ETIQUETA)
+            .size(texto::LABEL.0),
+    )
+    .padding(Padding::from([espacio::S1 + 2.0, espacio::S3]))
+    .style(estilo::insignia(iced::Color::TRANSPARENT, p.text))
     .into()
 }
 
