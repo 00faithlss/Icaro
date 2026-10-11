@@ -566,7 +566,7 @@ pub fn senal<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
 pub fn contador<'a, M: Clone + 'a>(p: Paleta, valor: i32, restar: M, sumar: M) -> Element<'a, M> {
     let paso = |glifo: crate::iconos::Icono, m: M| {
         button(
-            container(crate::iconos::icono(glifo, crate::iconos::Tam::Base, p.text))
+            container(crate::iconos::icono_texto(glifo, crate::iconos::Tam::Base))
                 .center(Length::Fill),
         )
         .width(medida::CONTROL_SM)
@@ -615,11 +615,10 @@ pub fn boton_jugar<'a, M: Clone + 'a>(
     al_pulsar: M,
 ) -> Element<'a, M> {
     let mut fila = row![
-        crate::iconos::icono(crate::iconos::Icono::Jugar, crate::iconos::Tam::Base, p.on_accent),
+        crate::iconos::icono_texto(crate::iconos::Icono::Jugar, crate::iconos::Tam::Base),
         text(etiqueta.to_uppercase())
             .font(fuentes::TITULO)
-            .size(texto::HEADING.0)
-            .color(p.on_accent),
+            .size(texto::HEADING.0),
     ]
     .spacing(espacio::S3)
     .align_y(iced::Alignment::Center);
@@ -627,8 +626,7 @@ pub fn boton_jugar<'a, M: Clone + 'a>(
         fila = fila.push(Space::with_width(Length::Fill)).push(
             text(m.to_owned())
                 .font(fuentes::MONO)
-                .size(texto::MONO_SM.0)
-                .color(p.on_accent),
+                .size(texto::MONO_SM.0),
         );
     }
     button(container(fila).center_y(Length::Fill))

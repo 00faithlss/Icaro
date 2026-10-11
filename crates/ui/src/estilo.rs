@@ -16,6 +16,36 @@ fn contorno(ancho: f32, color: Color) -> Border {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminancia(c: Color) -> f32 {
+        let lineal = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * lineal(c.r) + 0.7152 * lineal(c.g) + 0.0722 * lineal(c.b)
+    }
+
+    #[test]
+    fn todos_los_botones_conservan_contraste_en_reposo_hover_y_presionado() {
+        for p in [crate::tema::TINTA, crate::tema::PIEDRA] {
+            for estado in [button::Status::Active, button::Status::Hovered, button::Status::Pressed] {
+                for estilo in [boton_primario(p)(&Theme::Dark, estado), boton_secundario(p)(&Theme::Dark, estado),
+                    boton_fantasma(p)(&Theme::Dark, estado), boton_peligro(p)(&Theme::Dark, estado)] {
+                    let fondo = match estilo.background {
+                        Some(Background::Color(c)) => c,
+                        None => p.bg,
+                        _ => panic!("fondo inesperado"),
+                    };
+                    let a = luminancia(estilo.text_color);
+                    let b = luminancia(fondo);
+                    let contraste = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                    assert!(contraste >= 4.5, "{:?} {estado:?}: {contraste}", p.modo);
+                }
+            }
+        }
+    }
+}
+
 /// Botón primario: bloque de acento; en hover y presionado cambia de relleno.
 pub fn boton_primario(p: Paleta) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, estado| {

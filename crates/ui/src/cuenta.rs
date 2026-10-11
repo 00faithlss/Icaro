@@ -551,52 +551,23 @@ fn boton_base<'a, M: Clone + 'a>(
     ancho: Length,
     al_pulsar: Option<M>,
 ) -> Element<'a, M> {
-    let tinta = move |activo: bool| match tipo {
-        Tipo::Primario => p.on_accent,
-        Tipo::Peligro => if activo { p.on_error } else { p.error },
-        _ => if activo { p.bg } else { p.text },
-    };
-    let desactivado = al_pulsar.is_none();
-    let color = if desactivado { p.text_disabled } else { tinta(false) };
     let mut fila = row![].align_y(Alignment::Center).spacing(4.0);
     if let Some(g) = glifo {
-        fila = fila.push(icono(g, Tam::Base, color));
+        fila = fila.push(crate::iconos::icono_texto(g, Tam::Base));
     }
-    fila = fila.push(txt::<M>(etiqueta_.to_uppercase(), fuentes::ETIQUETA, texto::LABEL, color));
+    fila = fila.push(text(etiqueta_.to_uppercase()).font(fuentes::ETIQUETA)
+        .size(texto::LABEL.0)
+        .line_height(iced::widget::text::LineHeight::Absolute(texto::LABEL.1.into())));
     let relleno = if glifo.is_some() {
         Padding { top: 0.0, right: 12.0, bottom: 0.0, left: 8.0 }
     } else {
         Padding::from([0.0, 12.0])
     };
-    let base = match tipo {
-        Tipo::Primario => 0,
-        Tipo::Normal => 1,
-        Tipo::Fantasma => 2,
-        Tipo::Peligro => 3,
-    };
-    let estilo = move |_: &Theme, st: button::Status| {
-        let hov = matches!(st, button::Status::Hovered | button::Status::Pressed);
-        let off = st == button::Status::Disabled;
-        let (fondo, borde_c) = match base {
-            0 => {
-                let f = match st {
-                    button::Status::Hovered => p.accent_hover,
-                    button::Status::Pressed => p.accent_pressed,
-                    button::Status::Disabled => p.surface_sunken,
-                    _ => p.accent,
-                };
-                (Some(f), f)
-            }
-            1 => (hov.then_some(p.text), if off { p.border } else { p.text }),
-            2 => (hov.then_some(p.surface_hover), if hov { p.surface_hover } else { Color::TRANSPARENT }),
-            _ => (hov.then_some(p.error), p.error),
-        };
-        button::Style {
-            background: fondo.map(Background::Color),
-            text_color: if off { p.text_disabled } else { tinta(hov && base != 0 && base != 2) },
-            border: Border { color: borde_c, width: borde::MEDIO, radius: 0.0.into() },
-            ..Default::default()
-        }
+    let estilo = move |tema: &Theme, st: button::Status| match tipo {
+        Tipo::Primario => estilo::boton_primario(p)(tema, st),
+        Tipo::Normal => estilo::boton_secundario(p)(tema, st),
+        Tipo::Fantasma => estilo::boton_fantasma(p)(tema, st),
+        Tipo::Peligro => estilo::boton_peligro(p)(tema, st),
     };
     let _ = medida::CONTROL;
     let contenido = if ancho == Length::Fill {
@@ -622,9 +593,7 @@ fn boton_solo_icono<'a, M: Clone + 'a>(p: Paleta, glifo: Icono, al_pulsar: M) ->
             ..Default::default()
         }
     };
-    let normal: Element<'a, M> = container(icono(glifo, Tam::Base, p.text)).into();
-    let invertido: Element<'a, M> = container(icono(glifo, Tam::Base, p.bg)).into();
-    let est = hover(normal, invertido);
+    let est = container(crate::iconos::icono_texto(glifo, Tam::Base));
     button(est).width(28).height(28).padding(0).on_press(al_pulsar).style(estilo).into()
 }
 
@@ -732,7 +701,7 @@ pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: Me
             .align_y(Alignment::Center);
             fila = fila.push(Space::with_width(Length::Fill));
             if elegida {
-                fila = fila.push(icono(Icono::Check, Tam::Base, if invertida { p.bg } else { p.text }));
+                fila = fila.push(icono(Icono::Check, Tam::Base, if invertida { p.bg } else { p.success }));
             }
             container(fila)
                 .height(56)
@@ -743,7 +712,7 @@ pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: Me
                     background: Some(Background::Color(if invertida {
                         p.text
                     } else if elegida {
-                        p.accent_soft
+                        p.bg
                     } else {
                         Color::TRANSPARENT
                     })),
@@ -798,9 +767,9 @@ pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: Me
     ];
     container(col)
         .width(320)
-        .padding(Padding::from([4.0, 0.0]))
+        .padding(Padding::from([4.0, borde::MEDIO]))
         .style(move |_: &Theme| container::Style {
-            background: Some(Background::Color(p.surface_raised)),
+            background: Some(Background::Color(p.bg)),
             border: Border { color: p.text, width: borde::MEDIO, radius: 0.0.into() },
             text_color: Some(p.text),
             ..Default::default()

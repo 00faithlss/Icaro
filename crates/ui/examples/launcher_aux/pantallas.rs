@@ -262,7 +262,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         Accion::Escala(n) => app.aj.escala = n.clamp(80, 150),
         Accion::LimpiarCache => {
             app.aj.cache_limpia = true;
-            app.aviso = Some("Caché limpiada: se liberaron 380 MB.".into());
+            app.avisar("Caché limpiada: se liberaron 380 MB.".into());
         }
         Accion::AbrirCarpetaDatos => {
             let dir = std::env::temp_dir().join("icaro-demo");
@@ -339,7 +339,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 let nombre = nombre_unico(if s.nombre.trim().is_empty() { "Nueva instancia" } else { s.nombre.trim() });
                 let version = format!("{} · {}", VERSIONES[s.tipo_version][s.version].0, LOADERS[s.loader].0);
                 agregar_instancia(app, nueva_instancia(&nombre, version, PORTADAS[s.portada].1));
-                app.aviso = Some(format!("Instancia {nombre} creada."));
+                app.avisar(format!("Instancia {nombre} creada."));
                 arrancar(app);
             }
         }
@@ -424,7 +424,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 for d in creadas {
                     agregar_instancia(app, d);
                 }
-                app.aviso = Some(if n == 0 { "No se importó nada.".into() } else { format!("{n} instancia(s) importada(s).") });
+                app.avisar(if n == 0 { "No se importó nada.".into() } else { format!("{n} instancia(s) importada(s).") });
                 arrancar(app);
             }
         }
@@ -477,7 +477,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     "instancia": instancias()[s.instancia.min(instancias().len() - 1)].nombre,
                 });
                 let _ = std::fs::write(&archivo, serde_json::to_string_pretty(&indice).unwrap_or_default());
-                app.aviso = Some(format!("Modpack exportado: {}", archivo.display()));
+                app.avisar(format!("Modpack exportado: {}", archivo.display()));
             }
         }
         // ---- Cuenta y errores
@@ -499,13 +499,13 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         Accion::JugarComoInvitado => {
             app.pantalla = None;
             app.sesion.estado = icaro_ui::cuenta::EstadoSesion::Invitado;
-            app.aviso = Some("Sigues como invitado. Puedes iniciar sesión luego desde la cuenta.".into());
+            app.avisar("Sigues como invitado. Puedes iniciar sesión luego desde la cuenta.".into());
             arrancar(app);
         }
         Accion::Reintentar => app.intentos += 1,
         Accion::DesactivarYJugar => {
             app.pantalla = None;
-            app.aviso = Some("Iris Shaders se desactivó. Ya puedes jugar.".into());
+            app.avisar("Iris Shaders se desactivó. Ya puedes jugar.".into());
             arrancar(app);
         }
         Accion::CopiarInforme => {
@@ -525,7 +525,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             if let Some(d) = lista_instancias().lock().unwrap().get_mut(i) {
                 d.version = "1.20.1 · Fabric".into();
             }
-            app.aviso = Some(format!("{nombre} ahora usa 1.20.1. Se guardó una copia de los mundos."));
+            app.avisar(format!("{nombre} ahora usa 1.20.1. Se guardó una copia de los mundos."));
         }
         Accion::DetalleTecnico => app.detalle_fallo = !app.detalle_fallo,
         Accion::Duplicar(i) => {
@@ -539,7 +539,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 d.ultima_vez = "Nueva".into();
                 let nombre = d.nombre.clone();
                 agregar_instancia(app, d);
-                app.aviso = Some(format!("Se creó {nombre}."));
+                app.avisar(format!("Se creó {nombre}."));
             }
         }
         Accion::AbrirCarpetaInstancia(i) => {
@@ -796,8 +796,8 @@ fn fallo<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
         .spacing(espacio::S3),
         iced::widget::button(
             row![
-                text("Detalle técnico").font(fuentes::TITULO).size(texto::BODY.0).color(p.text).width(Length::Fill),
-                icono(if app.detalle_fallo { Icono::Flecha } else { Icono::ChevronAbajo }, Tam::Base, p.text),
+                text("Detalle técnico").font(fuentes::TITULO).size(texto::BODY.0).width(Length::Fill),
+                icaro_ui::iconos::icono_texto(if app.detalle_fallo { Icono::Flecha } else { Icono::ChevronAbajo }, Tam::Base),
             ]
             .align_y(Alignment::Center),
         )

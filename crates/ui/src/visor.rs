@@ -3,18 +3,17 @@
 
 //! Visor a pantalla completa de capturas y de piezas del Gabinete: velo casi
 //! opaco, la imagen centrada sin marco, barra superior con nombre y acciones,
-//! flechas para recorrer y zoom en pasos de 25 %. Se abre y se cierra con el
-//! Rastrillo.
+//! flechas para recorrer y zoom en pasos de 25 %. Apertura y cierre inmediatos.
 
 use std::time::Instant;
 
 use iced::advanced::image::{Image, Renderer as _};
 use iced::advanced::layout::{self, Layout, Node};
-use iced::advanced::renderer::{self, Quad};
+use iced::advanced::renderer;
 use iced::advanced::widget::{tree, Tree};
 use iced::advanced::{Clipboard, Renderer as _, Shell, Widget};
 use iced::widget::image::Handle;
-use iced::widget::{button, column, container, opaque, row, stack, text, Space};
+use iced::widget::{button, column, container, opaque, row, text, Space};
 use iced::{
     event, mouse, window, Alignment, Background, Border, Color, Element, Event, Length, Padding,
     Point, Rectangle, Size, Vector,
@@ -25,18 +24,15 @@ use crate::estilo;
 use crate::fuentes;
 use crate::iconos::Icono;
 use crate::laminas::Lamina;
-use crate::movimiento;
-use crate::tema::{borde, duracion, espacio, texto, Modo, Paleta, TINTA};
+use crate::tema::{borde, espacio, texto, Modo, Paleta, TINTA};
 
 /// Zoom mínimo, máximo y paso, en porcentaje.
 pub const ZOOM_MIN: u32 = 25;
 pub const ZOOM_MAX: u32 = 400;
 pub const ZOOM_PASO: u32 = 25;
-/// Cierre del Rastrillo: sale más rápido de lo que entra.
-pub const MS_CIERRE: u64 = 240;
 
 /// Velo del visor: casi opaco, igual en ambos temas.
-const VELO: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 0.92 };
+const VELO: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
 
 /// Estado del visor abierto.
 #[derive(Debug, Clone, Copy)]
@@ -44,14 +40,11 @@ pub struct EstadoVisor {
     pub indice: usize,
     /// Porcentaje de zoom; 100 es la imagen ajustada a la ventana.
     pub zoom: u32,
-    pub abierto: Instant,
-    /// Instante en que empezó a cerrarse, si ya se pidió.
-    pub cierre: Option<Instant>,
 }
 
 impl EstadoVisor {
-    pub fn nuevo(indice: usize, ahora: Instant) -> Self {
-        Self { indice, zoom: 100, abierto: ahora, cierre: None }
+    pub fn nuevo(indice: usize, _ahora: Instant) -> Self {
+        Self { indice, zoom: 100 }
     }
 
     pub fn acercar(&mut self) {
@@ -68,38 +61,6 @@ impl EstadoVisor {
         self.zoom = 100;
     }
 
-    /// Posición del Rastrillo: 0 con las barras abajo (cubriendo) y 1 con
-    /// las barras fuera de la vista.
-    pub fn rastrillo(&self, ahora: Instant, reducir: bool) -> f32 {
-        if reducir {
-            return 1.0;
-        }
-        match self.cierre {
-            None => movimiento::rastrillo(avance(self.abierto, ahora, duracion::RASTRILLO)),
-            Some(c) => 1.0 - movimiento::rastrillo(avance(c, ahora, MS_CIERRE)),
-        }
-    }
-
-    /// Si el Rastrillo todavía se mueve y hay que seguir dibujando cuadros.
-    pub fn animando(&self, ahora: Instant, reducir: bool) -> bool {
-        if reducir {
-            return false;
-        }
-        match self.cierre {
-            None => avance(self.abierto, ahora, duracion::RASTRILLO) < 1.0,
-            Some(c) => avance(c, ahora, MS_CIERRE) < 1.0,
-        }
-    }
-
-    /// Si el cierre ya terminó y se puede quitar el visor.
-    pub fn cerrado(&self, ahora: Instant, reducir: bool) -> bool {
-        self.cierre
-            .is_some_and(|c| reducir || avance(c, ahora, MS_CIERRE) >= 1.0)
-    }
-}
-
-fn avance(desde: Instant, ahora: Instant, ms: u64) -> f32 {
-    (ahora.saturating_duration_since(desde).as_millis() as f32 / ms as f32).clamp(0.0, 1.0)
 }
 
 /// Datos de la imagen que se muestra.
@@ -107,6 +68,8 @@ pub struct ItemVisor {
     pub titulo: String,
     pub detalle: String,
     pub lamina: Lamina,
+    /// Marco 16:9 para capturas; `None` conserva la proporción del grabado.
+    pub aspecto: Option<f32>,
 }
 
 /// Acciones de la barra superior; las que faltan no se dibujan.
@@ -125,8 +88,8 @@ pub struct MensajesVisor<M> {
 pub fn visor<'a, M: Clone + 'a>(
     modo: Modo,
     estado: &EstadoVisor,
-    ahora: Instant,
-    reducir: bool,
+    _ahora: Instant,
+    _reducir: bool,
     item: &ItemVisor,
     total: usize,
     m: MensajesVisor<M>,
@@ -165,6 +128,7 @@ pub fn visor<'a, M: Clone + 'a>(
     let regla_inferior = container(Space::new(Length::Fill, borde::FINO)).style(estilo::bloque(p.border));
 
     let imagen = ImagenVisor {
+        aspecto: item.aspecto,
         handle: item.lamina.imagen(modo).clone(),
         zoom: estado.zoom as f32 / 100.0,
         acercar: m.acercar.clone(),
@@ -194,19 +158,17 @@ pub fn visor<'a, M: Clone + 'a>(
     .padding(espacio::S3);
 
     let cuerpo = column![
+        Space::with_height(espacio::S6),
         barra,
         regla_inferior,
         container(medio).padding(Padding::from([espacio::S4, 0.0])).height(Length::Fill),
         pie,
     ];
-    let rastrillo = Rastrillo { posicion: estado.rastrillo(ahora, reducir), color: p.text };
-    opaque(stack![
-        container(cuerpo)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(estilo::bloque(VELO)),
-        Element::new(rastrillo),
-    ])
+    opaque(container(cuerpo)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(Padding::from([0.0, espacio::S4]))
+        .style(estilo::bloque(VELO)))
 }
 
 /// Botón fantasma de la acción destructiva: texto cinabrio.
@@ -222,8 +184,9 @@ fn fantasma_error(p: Paleta) -> impl Fn(&iced::Theme, button::Status) -> button:
 
 // ------------------------------------------------------------- imagen
 
-/// Imagen ajustada a la ventana (`contain`) con zoom y arrastre.
+/// Grabado ajustado sin recorte o captura dentro de un marco 16:9.
 struct ImagenVisor<M> {
+    aspecto: Option<f32>,
     handle: Handle,
     zoom: f32,
     acercar: M,
@@ -238,11 +201,20 @@ struct EstadoImagen {
 }
 
 impl<M> ImagenVisor<M> {
+    fn marco(&self, caja: Rectangle) -> Rectangle {
+        let Some(aspecto) = self.aspecto else { return caja };
+        let w = caja.width.min(caja.height * aspecto);
+        let h = w / aspecto;
+        Rectangle { x: caja.center_x() - w / 2.0, y: caja.center_y() - h / 2.0, width: w, height: h }
+    }
+
     /// Rectángulo donde se dibuja la imagen dentro de `caja`, ya con el
     /// desplazamiento limitado a que la imagen no se salga del todo.
     fn rectangulo(&self, tam: Size<u32>, caja: Rectangle, mover: Vector) -> Rectangle {
         let (iw, ih) = (tam.width as f32, tam.height as f32);
-        let ajuste = (caja.width / iw).min(caja.height / ih);
+        let ajuste = if self.aspecto.is_some() {
+            (caja.width / iw).max(caja.height / ih)
+        } else { (caja.width / iw).min(caja.height / ih) };
         let (w, h) = (iw * ajuste * self.zoom, ih * ajuste * self.zoom);
         let tope_x = ((w - caja.width) / 2.0).max(0.0);
         let tope_y = ((h - caja.height) / 2.0).max(0.0);
@@ -287,7 +259,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for ImagenVisor<M> {
         if estado.imagen != id_de(&self.handle) {
             *estado = EstadoImagen { imagen: id_de(&self.handle), ..Default::default() };
         }
-        let caja = layout.bounds();
+        let caja = self.marco(layout.bounds());
         let Event::Mouse(raton) = evento else {
             return event::Status::Ignored;
         };
@@ -360,7 +332,7 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for ImagenVisor<M> {
         _: mouse::Cursor,
         visible: &Rectangle,
     ) {
-        let caja = layout.bounds();
+        let caja = self.marco(layout.bounds());
         let Some(recorte) = caja.intersection(visible) else {
             return;
         };
@@ -387,77 +359,30 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for ImagenVisor<M> {
     }
 }
 
-// ----------------------------------------------------------- rastrillo
-
-/// Reja de hierro: barrotes verticales de 4 px cada 22 y travesaños de 4 px
-/// cada 48, que suben (o bajan) fuera de la vista.
-struct Rastrillo {
-    /// 0: cubre todo el visor. 1: fuera de la vista.
-    posicion: f32,
-    color: Color,
-}
-
-impl<M> Widget<M, iced::Theme, iced::Renderer> for Rastrillo {
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
-    }
-
-    fn layout(&self, _: &mut Tree, _: &iced::Renderer, limites: &layout::Limits) -> Node {
-        layout::atomic(limites, Length::Fill, Length::Fill)
-    }
-
-    fn mouse_interaction(
-        &self,
-        _: &Tree,
-        _: Layout<'_>,
-        _: mouse::Cursor,
-        _: &Rectangle,
-        _: &iced::Renderer,
-    ) -> mouse::Interaction {
-        mouse::Interaction::None
-    }
-
-    fn draw(
-        &self,
-        _: &Tree,
-        renderer: &mut iced::Renderer,
-        _: &iced::Theme,
-        _: &renderer::Style,
-        layout: Layout<'_>,
-        _: mouse::Cursor,
-        visible: &Rectangle,
-    ) {
-        if self.posicion >= 1.0 {
-            return;
-        }
-        let caja = layout.bounds();
-        let Some(recorte) = caja.intersection(visible) else {
-            return;
-        };
-        let subida = caja.height * self.posicion;
-        renderer.with_layer(recorte, |renderer| {
-            let quad = |x, y, w, h| Quad {
-                bounds: Rectangle { x, y, width: w, height: h },
-                ..Default::default()
-            };
-            let mut x = caja.x;
-            while x < caja.x + caja.width {
-                renderer.fill_quad(quad(x, caja.y - subida, 4.0, caja.height), self.color);
-                x += 22.0;
-            }
-            let mut y = caja.y - subida;
-            while y < caja.y + caja.height - subida {
-                renderer.fill_quad(quad(caja.x, y, caja.width, 4.0), self.color);
-                y += 48.0;
-            }
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+
+    #[test]
+    fn las_capturas_usan_marco_16_9_y_los_grabados_su_proporcion() {
+        let mut imagen = ImagenVisor {
+            aspecto: Some(16.0 / 9.0),
+            handle: Handle::from_rgba(1, 1, vec![0; 4]),
+            zoom: 1.0,
+            acercar: (),
+            alejar: (),
+        };
+        let caja = Rectangle::new(Point::new(12.0, 90.0), Size::new(1200.0, 650.0));
+        let marco = imagen.marco(caja);
+        assert!((marco.width / marco.height - 16.0 / 9.0).abs() < 0.001);
+        assert_eq!(marco.center(), caja.center());
+        let dibujo = imagen.rectangulo(Size::new(640, 480), marco, Vector::ZERO);
+        assert!(dibujo.width >= marco.width && dibujo.height >= marco.height);
+        assert!((dibujo.width / dibujo.height - 4.0 / 3.0).abs() < 0.001);
+        imagen.aspecto = None;
+        let dibujo = imagen.rectangulo(Size::new(600, 1200), caja, Vector::ZERO);
+        assert!((dibujo.width / dibujo.height - 0.5).abs() < 0.001);
+    }
 
     #[test]
     fn el_zoom_avanza_de_25_en_25_con_tope() {
@@ -482,29 +407,6 @@ mod tests {
         assert_eq!((v.indice, v.zoom), (3, 100));
     }
 
-    #[test]
-    fn el_rastrillo_sube_y_baja_en_pasos() {
-        let t0 = Instant::now();
-        let mut v = EstadoVisor::nuevo(0, t0);
-        assert_eq!(v.rastrillo(t0, false), 0.0);
-        let fin = t0 + Duration::from_millis(duracion::RASTRILLO);
-        assert_eq!(v.rastrillo(fin, false), 1.0);
-        assert!(!v.animando(fin, false));
-        v.cierre = Some(fin);
-        assert_eq!(v.rastrillo(fin, false), 1.0);
-        let abajo = fin + Duration::from_millis(MS_CIERRE);
-        assert_eq!(v.rastrillo(abajo, false), 0.0);
-        assert!(v.cerrado(abajo, false));
-    }
-
-    #[test]
-    fn con_movimiento_reducido_no_hay_reja() {
-        let t0 = Instant::now();
-        let mut v = EstadoVisor::nuevo(0, t0);
-        assert_eq!(v.rastrillo(t0, true), 1.0);
-        v.cierre = Some(t0);
-        assert!(v.cerrado(t0, true));
-    }
 }
 
 /// Huella de la imagen, para detectar que cambió.

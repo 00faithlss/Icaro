@@ -228,3 +228,32 @@ impl<'a, M> Widget<M, Theme, Renderer> for Suave<'a, M> {
             .overlay(&mut arbol.children[0], hijo, renderer, traslado)
     }
 }
+
+#[cfg(test)]
+mod pruebas_capas {
+    use super::*;
+
+    fn vista(con_menu: bool) -> Element<'static, ()> {
+        crate::superficies::capa_flotante(
+            desplazable(iced::widget::Space::with_height(1600)),
+            con_menu.then(|| iced::widget::Space::new(260, 407).into()),
+        )
+    }
+
+    #[test]
+    fn abrir_y_cerrar_menu_conserva_el_desplazamiento_y_la_inercia() {
+        let cerrada = vista(false);
+        let mut arbol = Tree::new(cerrada.as_widget());
+        let estado = arbol.children[0].state.downcast_mut::<Estado>();
+        estado.actual = 710.0;
+        estado.objetivo = 740.0;
+        estado.ultimo = Some(Instant::now());
+        for con_menu in [true, true, false, true, false] {
+            arbol.diff(vista(con_menu).as_widget());
+            let estado = arbol.children[0].state.downcast_ref::<Estado>();
+            assert_eq!(estado.actual, 710.0);
+            assert_eq!(estado.objetivo, 740.0);
+            assert!(estado.ultimo.is_some());
+        }
+    }
+}

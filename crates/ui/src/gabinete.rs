@@ -12,9 +12,8 @@ use crate::botones::{boton, TamBoton};
 use crate::componentes::Variante;
 use crate::estilo;
 use crate::fuentes;
-use crate::grabados::{Acercar, Imagen, Mosaico};
+use crate::grabados::{Imagen, Mosaico};
 use crate::laminas::Lamina;
-use crate::movimiento::{Curva, Preferencia};
 use crate::tema::{espacio, texto, Paleta};
 use crate::visor::ItemVisor;
 
@@ -22,10 +21,6 @@ use crate::visor::ItemVisor;
 pub const COLUMNAS: usize = 12;
 pub const FILA: f32 = 72.0;
 pub const HUECO: f32 = 16.0;
-
-/// Acercamiento de una pieza al pasar el puntero: 8 % en 1,6 s, lento como un
-/// paso de museo.
-pub const ACERCAR: Acercar = Acercar { escala: 1.08, ms: 1600, curva: Curva::Salida };
 
 /// Una pieza del gabinete: un recorte con su leyenda.
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +67,7 @@ pub fn items_visor() -> Vec<ItemVisor> {
             titulo: z.titulo.to_owned(),
             detalle: z.autor.to_owned(),
             lamina: z.lamina,
+            aspecto: None,
         })
         .collect()
 }
@@ -109,20 +105,17 @@ pub fn encabezado<'a, M: 'a>(p: Paleta) -> Element<'a, M> {
 /// pieza elegida invierte su leyenda y ofrece "Usar como portada".
 pub fn gabinete<'a, M: Clone + 'a>(
     p: Paleta,
-    encima: Option<usize>,
+    _encima: Option<usize>,
     elegida: Option<usize>,
-    reducir: bool,
+    _reducir: bool,
     m: &MensajesGabinete<M>,
 ) -> Element<'a, M> {
-    let pref = Preferencia { reducir };
     let mut pared = Mosaico::nuevo(COLUMNAS, FILA, HUECO);
     for (i, z) in PIEZAS.iter().enumerate() {
         let imagen = Imagen::nueva(p, z.lamina)
             .barrido(p)
             .registro(p.text)
             .foco(z.foco.0, z.foco.1)
-            .acercar(ACERCAR, pref)
-            .encima(encima == Some(i))
             .tamano(Length::Fill, Length::Fill);
         let es_elegida = elegida == Some(i);
         let tinta_titulo = if es_elegida { p.bg } else { p.text };

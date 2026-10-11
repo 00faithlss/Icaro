@@ -67,11 +67,11 @@ fn pie_fantasma<'a, M: Clone + 'a>(
     let mut fila = row![].spacing(espacio::S2).align_y(Alignment::Center);
     match contenido {
         Some((g, e)) => {
-            fila = fila.push(icono(g, Tam::Base, tinta)).push(
-                text(e.to_uppercase()).font(fuentes::ETIQUETA).size(texto::LABEL.0).color(tinta),
+            fila = fila.push(crate::iconos::icono_texto(g, Tam::Base)).push(
+                text(e.to_uppercase()).font(fuentes::ETIQUETA).size(texto::LABEL.0),
             );
         }
-        None => fila = fila.push(icono(Icono::Acciones, Tam::Base, tinta)),
+        None => fila = fila.push(crate::iconos::icono_texto(Icono::Acciones, Tam::Base)),
     }
     let activo = mensaje.is_some();
     button(container(fila).center(Length::Fill))

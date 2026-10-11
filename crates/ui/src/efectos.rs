@@ -387,7 +387,7 @@ struct LupaLamina {
 
 /// Lámina ampliable: una lente cuadrada de 200 px sigue al puntero y la amplía
 /// de 2× a 6× (rueda, + y −; flechas la mueven 2 %, con Mayús 10 %). Solo
-/// aparece sobre láminas de 240 px o más.
+/// se activa con un clic sobre láminas de 240 px o más.
 pub fn lupa<'a, M: 'a>(p: Paleta, lamina: Lamina) -> Element<'a, M> {
     Element::new(LupaLamina { paleta: p, lamina })
 }
@@ -424,15 +424,23 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for LupaLamina {
         let estado = arbol.state.downcast_mut::<EstadoLupa>();
         let dentro = cursor.position_in(caja);
         match evento {
-            Event::Mouse(mouse::Event::CursorMoved { .. }) | Event::Mouse(mouse::Event::CursorLeft) => {
-                let activa = dentro.is_some() && Lupa::cabe(caja.size());
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+                if dentro.is_some() && Lupa::cabe(caja.size()) => {
+                estado.activa = !estado.activa;
+                if let Some(pos) = dentro { estado.lupa.apuntar(pos.x, pos.y, caja.size()); }
+                shell.request_redraw(iced::window::RedrawRequest::NextFrame);
+                iced::event::Status::Captured
+            }
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if estado.activa => {
                 if let Some(pos) = dentro {
                     estado.lupa.apuntar(pos.x, pos.y, caja.size());
-                }
-                if activa || estado.activa {
                     shell.request_redraw(iced::window::RedrawRequest::NextFrame);
                 }
-                estado.activa = activa;
+                iced::event::Status::Ignored
+            }
+            Event::Mouse(mouse::Event::CursorLeft) if estado.activa => {
+                estado.activa = false;
+                shell.request_redraw(iced::window::RedrawRequest::NextFrame);
                 iced::event::Status::Ignored
             }
             Event::Mouse(mouse::Event::WheelScrolled { delta }) if estado.activa => {

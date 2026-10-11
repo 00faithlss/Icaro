@@ -698,7 +698,7 @@ pub fn pestana_archivos<'a, M: Clone + 'a>(
             accion("Abrir", Variante::Secundario, hay, AccionArchivo::Abrir),
             accion("Renombrar", Variante::Secundario, libre, AccionArchivo::Renombrar),
             accion("Duplicar", Variante::Secundario, libre, AccionArchivo::Duplicar),
-            accion("Papelera", Variante::Secundario, libre, AccionArchivo::Papelera),
+            accion("Eliminar", Variante::Secundario, libre, AccionArchivo::Papelera),
             accion("Copiar ruta", Variante::Fantasma, hay, AccionArchivo::CopiarRuta),
         ]
         .spacing(espacio::S2)

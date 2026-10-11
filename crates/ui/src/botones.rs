@@ -121,7 +121,7 @@ pub fn boton_icono<'a, M: Clone + 'a>(
     etiqueta: &str,
     al_pulsar: M,
 ) -> Element<'a, M> {
-    let b = button(container(crate::iconos::icono(glifo, Tam::Base, p.text)).center(Length::Fill))
+    let b = button(container(icono_heredado(glifo, Tam::Base)).center(Length::Fill))
         .width(medida::CONTROL_SM)
         .height(medida::CONTROL_SM)
         .padding(0)

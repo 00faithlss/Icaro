@@ -26,7 +26,7 @@ pub const fn hex_a(v: u32, alfa: f32) -> Color {
 }
 
 /// Tema de la interfaz.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Modo {
     /// Oscuro.
     #[default]

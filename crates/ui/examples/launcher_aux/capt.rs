@@ -5,25 +5,20 @@
 //! Los datos son de muestra: las capturas son recortes de grabados y las
 //! acciones de copiar y abrir carpeta son simuladas.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use icaro_ui::capturas::{galeria, Captura, MensajesCapturas, VistaCapturas};
 use icaro_ui::fuentes;
 use icaro_ui::gabinete::{self, MensajesGabinete};
-use icaro_ui::iconos::Icono;
 use icaro_ui::laminas::Lamina;
 use icaro_ui::movimiento;
-use icaro_ui::superficies::toast;
 use icaro_ui::tema::{duracion, espacio, texto};
 use icaro_ui::vacios::{self, Contexto};
 use icaro_ui::visor::{visor, EstadoVisor, ItemVisor, MensajesVisor};
 use iced::widget::{column, container, text};
-use iced::{Element, Length, Padding, Subscription, Task};
+use iced::{Element, Padding, Subscription, Task};
 
 use crate::{instancias, App, Mensaje};
-
-/// Cuánto dura un aviso antes de retirarse solo.
-const AVISO_MS: u64 = 5000;
 
 /// De dónde sale la lista que recorre el visor.
 #[derive(Debug, Clone, PartialEq)]
@@ -76,8 +71,6 @@ pub enum Accion {
     LimpiarSeleccion,
     VerTodas,
     Deshacer,
-    CerrarAviso,
-    Tic(Instant),
     // Visor
     VisorPaso(i32),
     VisorAcercar,
@@ -149,9 +142,7 @@ impl Estado {
 
     /// Si hay algo moviéndose que exija seguir dibujando cuadros.
     pub fn animando(&self, ahora: Instant, reducir: bool) -> bool {
-        self.visor.as_ref().is_some_and(|v| v.estado.animando(ahora, reducir))
-            || (!reducir && prensa_en_curso(self.prensa, ahora))
-
+        !reducir && prensa_en_curso(self.prensa, ahora)
     }
 }
 
@@ -223,12 +214,6 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         Accion::LimpiarSeleccion => app.capt.seleccion.clear(),
         Accion::VerTodas => app.capt.filtro = 0,
         Accion::Deshacer => deshacer(&mut app.capt),
-        Accion::CerrarAviso => app.capt.aviso = None,
-        Accion::Tic(t) => {
-            if app.capt.aviso.as_ref().is_some_and(|v| t.saturating_duration_since(v.desde) > Duration::from_millis(AVISO_MS)) {
-                app.capt.aviso = None;
-            }
-        }
         Accion::VisorPaso(d) => {
             if let Some(v) = &mut app.capt.visor {
                 let total = total_visor(&app.capt.capturas, &v.ambito) as i32;
@@ -248,7 +233,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 v.estado.alejar();
             }
         }
-        Accion::VisorCerrar => cerrar_visor(app, ahora),
+        Accion::VisorCerrar => cerrar_visor(app),
         Accion::VisorCopiar => {
             if let Some(i) = captura_del_visor(app) {
                 copiar(app, i);
@@ -284,12 +269,8 @@ fn abrir_visor(app: &mut App, indice: usize, ambito: Ambito) {
     app.capt.visor = Some(Abierto { estado: EstadoVisor::nuevo(indice, ahora), ambito });
 }
 
-fn cerrar_visor(app: &mut App, ahora: Instant) {
-    if let Some(v) = &mut app.capt.visor {
-        if v.estado.cierre.is_none() {
-            v.estado.cierre = Some(ahora);
-        }
-    }
+fn cerrar_visor(app: &mut App) {
+    app.capt.visor = None;
 }
 
 fn total_visor(capturas: &[Captura], ambito: &Ambito) -> usize {
@@ -352,18 +333,11 @@ fn eliminar(app: &mut App, indices: &[usize]) {
         true,
     );
     // El visor sigue en la que quedó en ese lugar, o se cierra si no queda ninguna.
-    let ahora = Instant::now();
     let total = app.capt.visor.as_ref().map(|v| total_visor(&app.capt.capturas, &v.ambito));
-    if let (Some(v), Some(total)) = (&mut app.capt.visor, total) {
-        if total == 0 {
-            if v.estado.cierre.is_none() {
-                v.estado.cierre = Some(ahora);
-            }
-        } else if v.estado.indice >= total {
-            v.estado.ir_a(total - 1);
-        } else {
-            v.estado.ir_a(v.estado.indice);
-        }
+    if total == Some(0) {
+        cerrar_visor(app);
+    } else if let (Some(v), Some(total)) = (&mut app.capt.visor, total) {
+        v.estado.ir_a(v.estado.indice.min(total - 1));
     }
 }
 
@@ -480,7 +454,7 @@ pub fn pared(app: &App) -> Element<'_, Mensaje> {
     .into()
 }
 
-/// Apila el visor y el aviso sobre la ventana.
+/// El visor reemplaza la ventana para excluir el fondo de los eventos.
 pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
     let p = app.modo.paleta();
     let mut resultado = ventana;
@@ -493,6 +467,7 @@ pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mens
                     titulo: String::new(),
                     detalle: String::new(),
                     lamina: Lamina::Umbral,
+                    aspecto: None,
                 });
                 (item, total, false)
             }
@@ -500,66 +475,44 @@ pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mens
                 let lista = app.capt.visibles(instancia.as_deref());
                 let c = lista.get(v.estado.indice).map(|&i| &app.capt.capturas[i]);
                 let item = c.map_or(
-                    ItemVisor { titulo: String::new(), detalle: String::new(), lamina: Lamina::Umbral },
+                    ItemVisor { titulo: String::new(), detalle: String::new(), lamina: Lamina::Umbral, aspecto: Some(16.0 / 9.0) },
                     |c| ItemVisor {
                         titulo: c.archivo.clone(),
                         detalle: format!("{} · {}", c.instancia, c.fecha),
                         lamina: c.imagen,
+                        aspecto: Some(16.0 / 9.0),
                     },
                 );
                 (item, lista.len(), true)
             }
         };
         let m = |a: Accion| Mensaje::Capt(a);
-        resultado = iced::widget::stack![
-            resultado,
-            visor(
-                p.modo,
-                &v.estado,
-                app.ahora,
-                app.reducir,
-                &item,
-                total,
-                MensajesVisor {
-                    cerrar: m(Accion::VisorCerrar),
-                    anterior: m(Accion::VisorPaso(-1)),
-                    siguiente: m(Accion::VisorPaso(1)),
-                    acercar: m(Accion::VisorAcercar),
-                    alejar: m(Accion::VisorAlejar),
-                    copiar: acciones.then(|| m(Accion::VisorCopiar)),
-                    carpeta: acciones.then(|| m(Accion::VisorCarpeta)),
-                    eliminar: acciones.then(|| m(Accion::VisorEliminar)),
-                },
-            ),
-        ]
-        .into();
-    }
-    if let Some(a) = &app.capt.aviso {
-        resultado = iced::widget::stack![
-            resultado,
-            container(toast(
-                p,
-                Icono::Check,
-                &a.texto,
-                a.deshacer.then_some(("Deshacer", Mensaje::Capt(Accion::Deshacer))),
-                Some(Mensaje::Capt(Accion::CerrarAviso)),
-                false,
-            ))
-            .align_x(iced::alignment::Horizontal::Left)
-            .align_y(iced::alignment::Vertical::Bottom)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .padding(Padding::from([espacio::S6, 256.0]))
-        ]
-        .into();
+        resultado = visor(
+            p.modo,
+            &v.estado,
+            app.ahora,
+            app.reducir,
+            &item,
+            total,
+            MensajesVisor {
+                cerrar: m(Accion::VisorCerrar),
+                anterior: m(Accion::VisorPaso(-1)),
+                siguiente: m(Accion::VisorPaso(1)),
+                acercar: m(Accion::VisorAcercar),
+                alejar: m(Accion::VisorAlejar),
+                copiar: acciones.then(|| m(Accion::VisorCopiar)),
+                carpeta: acciones.then(|| m(Accion::VisorCarpeta)),
+                eliminar: acciones.then(|| m(Accion::VisorEliminar)),
+            },
+        );
     }
     resultado
 }
 
-/// Teclado del visor y reloj del aviso.
+/// Teclado del visor.
 pub fn suscripcion(app: &App) -> Subscription<Mensaje> {
     let mut subs = Vec::new();
-    if app.capt.visor.as_ref().is_some_and(|v| v.estado.cierre.is_none()) {
+    if app.capt.visor.is_some() {
         subs.push(iced::keyboard::on_key_press(|tecla, _| {
             use iced::keyboard::key::Named;
             use iced::keyboard::Key;
@@ -574,19 +527,7 @@ pub fn suscripcion(app: &App) -> Subscription<Mensaje> {
             Some(Mensaje::Capt(a))
         }));
     }
-    if app.capt.aviso.is_some() {
-        subs.push(iced::time::every(Duration::from_millis(500)).map(|t| Mensaje::Capt(Accion::Tic(t))));
-    }
     Subscription::batch(subs)
-}
-
-/// Quita el visor cuando el Rastrillo terminó de bajar.
-pub fn cuadro(app: &mut App) {
-    let reducir = app.reducir;
-    let ahora = app.ahora;
-    if app.capt.visor.as_ref().is_some_and(|v| v.estado.cerrado(ahora, reducir)) {
-        app.capt.visor = None;
-    }
 }
 
 // ------------------------------------------------------ estados vacíos

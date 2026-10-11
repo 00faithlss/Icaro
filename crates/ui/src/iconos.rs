@@ -9,6 +9,7 @@ use iced::advanced::layout::{Limits, Node};
 use iced::advanced::svg::Renderer as _;
 use iced::advanced::widget::Tree;
 use iced::advanced::{renderer, Layout, Widget};
+use iced::advanced::Renderer as _;
 use iced::{mouse, Color, Element, Length, Radians, Size, Theme};
 
 macro_rules! iconos {
@@ -39,6 +40,7 @@ iconos! {
     Buscar => "search",
     Mas => "plus",
     Menos => "minus",
+    Maximizar => "maximize",
     Cerrar => "close",
     Flecha => "chevron-up",
     ChevronAbajo => "chevron-down",
@@ -128,8 +130,8 @@ impl<M> Widget<M, Theme, iced::Renderer> for IconoTexto {
         Size::new(Length::Fixed(self.px), Length::Fixed(self.px))
     }
 
-    fn layout(&self, _arbol: &mut Tree, _renderer: &iced::Renderer, _limites: &Limits) -> Node {
-        Node::new(Size::new(self.px, self.px))
+    fn layout(&self, _arbol: &mut Tree, _renderer: &iced::Renderer, limites: &Limits) -> Node {
+        distribucion_icono(self.px, limites)
     }
 
     fn draw(
@@ -140,16 +142,40 @@ impl<M> Widget<M, Theme, iced::Renderer> for IconoTexto {
         estilo: &renderer::Style,
         layout: Layout<'_>,
         _cursor: mouse::Cursor,
-        _visible: &iced::Rectangle,
+        visible: &iced::Rectangle,
     ) {
-        renderer.draw_svg(
-            iced::advanced::svg::Svg {
-                handle: self.handle.clone(),
-                color: Some(estilo.text_color),
-                rotation: Radians(0.0),
-                opacity: 1.0,
-            },
-            layout.bounds(),
-        );
+        let caja = layout.bounds();
+        let Some(recorte) = caja.intersection(visible) else { return };
+        if recorte.width <= 0.0 || recorte.height <= 0.0 { return }
+        renderer.with_layer(recorte, |renderer| {
+            renderer.draw_svg(
+                iced::advanced::svg::Svg {
+                    handle: self.handle.clone(),
+                    color: Some(estilo.text_color),
+                    rotation: Radians(0.0),
+                    opacity: 1.0,
+                },
+                caja,
+            );
+        });
+    }
+}
+
+fn distribucion_icono(px: f32, limites: &Limits) -> Node {
+    iced::advanced::layout::atomic(limites, Length::Fixed(px), Length::Fixed(px))
+}
+
+#[cfg(test)]
+mod pruebas_limites {
+    use super::*;
+
+    #[test]
+    fn el_icono_no_desborda_un_control_sin_espacio() {
+        for alto in [0.0, 6.0, 24.0, 40.0] {
+            let limites = Limits::new(Size::ZERO, Size::new(18.0, alto));
+            let caja = distribucion_icono(24.0, &limites).size();
+            assert_eq!(caja.width, 18.0);
+            assert_eq!(caja.height, alto.min(24.0));
+        }
     }
 }

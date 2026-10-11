@@ -37,6 +37,7 @@ enum Mensaje {
     Maximizar,
     Cerrar,
     Nada,
+    ImagenesActualizadas,
 }
 
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
@@ -61,18 +62,20 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Maximizar => return window::get_oldest().and_then(window::toggle_maximize),
         Mensaje::Cerrar => return window::get_oldest().and_then(window::close),
-        Mensaje::Nada => {}
+        Mensaje::Nada | Mensaje::ImagenesActualizadas => {}
     }
     Task::none()
 }
 
 fn suscripcion(app: &App) -> Subscription<Mensaje> {
-    match (app.aviso, app.ahora) {
+    let animacion = match (app.aviso, app.ahora) {
         (Some(inicio), Some(ahora)) if progreso(inicio, ahora) < 1.0 => {
             window::frames().map(Mensaje::Cuadro)
         }
         _ => Subscription::none(),
-    }
+    };
+    Subscription::batch([animacion,
+        icaro_ui::laminas::suscripcion().map(|()| Mensaje::ImagenesActualizadas)])
 }
 
 fn progreso(inicio: Instant, ahora: Instant) -> f32 {

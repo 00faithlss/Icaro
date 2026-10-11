@@ -174,7 +174,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             app.sesion.menu = false;
             app.sesion.banner_jugar = false;
             app.pantalla = None;
-            app.aviso = Some("Sigues como invitado. Puedes iniciar sesión luego desde la cuenta.".into());
+            app.avisar("Sigues como invitado. Puedes iniciar sesión luego desde la cuenta.".into());
             crate::arrancar(app);
         }
         Accion::AgregarCuenta | Accion::IniciarSesion | Accion::VolverAEntrar => {
@@ -188,7 +188,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             app.sesion.estado = EstadoSesion::Invitado;
             app.sesion.menu = false;
             app.pantalla = Some(pantallas::Pantalla::Cuenta);
-            app.aviso = Some(format!("Cerraste la sesión de {nombre}. Sigues como invitado."));
+            app.avisar(format!("Cerraste la sesión de {nombre}. Sigues como invitado."));
         }
         Accion::Comprar => {
             let _ = std::process::Command::new("cmd")
@@ -208,7 +208,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         Accion::ElegirSkin(i) => app.sesion.elegida = i,
         Accion::UsarDeNuevo => {
             app.sesion.en_uso = app.sesion.elegida;
-            app.aviso = Some("Volviste a usar esa skin en tu cuenta.".into());
+            app.avisar("Volviste a usar esa skin en tu cuenta.".into());
         }
         Accion::Modelo(i) => app.sesion.modelo = i,
         Accion::Capa(i, v) => {
@@ -249,7 +249,7 @@ pub fn avanzar(app: &mut App) {
         if app.ahora.saturating_duration_since(inicio).as_millis() >= MS_SUBIDA {
             app.sesion.subiendo = None;
             app.sesion.textura = None;
-            app.aviso = Some(format!("Skin aplicada a {}.", app.sesion.estado.nombre()));
+            app.avisar(format!("Skin aplicada a {}.", app.sesion.estado.nombre()));
         }
     }
 }

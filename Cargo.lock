@@ -1359,8 +1359,10 @@ version = "0.1.0"
 dependencies = [
  "embed-resource",
  "iced",
+ "image",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

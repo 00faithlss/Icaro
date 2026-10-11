@@ -4,132 +4,67 @@
 //! Láminas de grabado: imágenes de dominio público (CC0) que abren cada
 //! sección. Cada una existe en positivo (tema Piedra) y en negativo (Tinta).
 
-use std::sync::OnceLock;
 
 use iced::widget::image::Handle;
 use iced::widget::{column, container, row, stack, text, Space};
 use iced::{Alignment, Element, Length, Padding};
 
+pub use crate::imagenes::suscripcion;
+
 use crate::estilo;
 use crate::fuentes;
 use crate::tema::{borde, espacio, texto, Modo, Paleta};
 
-/// Archivo de la lámina en Tinta. Las marcadas con `@unica` tienen fondo
-/// negro y se ven igual en ambos temas, así que no tienen negativo.
-macro_rules! archivo_tinta {
-    ($archivo:literal) => {
-        concat!("../assets/laminas/", $archivo, "-negativo.webp")
-    };
-    ($archivo:literal, unica) => {
-        concat!("../assets/laminas/", $archivo, ".webp")
-    };
-}
-
 macro_rules! laminas {
     ($($variante:ident => $archivo:literal $(@ $unica:ident)?),* $(,)?) => {
         /// Láminas empaquetadas con el programa.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum Lamina { $($variante),* }
 
+        #[cfg(test)]
+        pub(crate) const TODAS: &[Lamina] = &[$(Lamina::$variante),*];
+
         impl Lamina {
-            /// Imagen para el tema dado. El manejador se crea una sola vez.
-            pub fn imagen(self, modo: Modo) -> &'static Handle {
+            /// Píxeles preparados en segundo plano y compartidos entre vistas.
+            pub fn imagen(self, modo: Modo) -> Handle {
+                crate::imagenes::imagen(self, modo)
+            }
+
+            pub(crate) fn bytes(self, modo: Modo) -> &'static [u8] {
                 match (self, modo) {
                     $(
-                        (Lamina::$variante, Modo::Piedra) => {
-                            static CELDA: OnceLock<Handle> = OnceLock::new();
-                            CELDA.get_or_init(|| Handle::from_bytes(
-                                &include_bytes!(concat!("../assets/laminas/", $archivo, ".webp"))[..],
-                            ))
-                        }
-                        (Lamina::$variante, Modo::Tinta) => {
-                            static CELDA: OnceLock<Handle> = OnceLock::new();
-                            CELDA.get_or_init(|| Handle::from_bytes(
-                                &include_bytes!(archivo_tinta!($archivo $(, $unica)?))[..],
-                            ))
-                        }
+                        (Lamina::$variante, Modo::Piedra) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-piedra.png")),
+                        (Lamina::$variante, Modo::Tinta) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-tinta.png")),
                     )*
+                }
+            }
+
+            pub(crate) fn previa(self, modo: Modo) -> Handle {
+                let bytes: &'static [u8] = match (self, modo) {
+                    $(
+                        (Lamina::$variante, Modo::Piedra) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-piedra.rgba")),
+                        (Lamina::$variante, Modo::Tinta) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-tinta.rgba")),
+                    )*
+                };
+                let w = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                let h = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                Handle::from_rgba(w, h, iced::advanced::image::Bytes::from_static(&bytes[8..]))
+            }
+
+            /// Anticipa las bandas y los grabados de las pantallas vacías.
+            pub fn precargar(modo: Modo) {
+                for lamina in [Self::FaetonPaisaje, Self::CaidaCielo,
+                    Self::TivoliCiudad, Self::HidraCabezas, Self::MercurioFriso,
+                    Self::Mano, Self::Orbita, Self::Alas, Self::Forja,
+                    Self::Umbral, Self::JeronimoSanto] {
+                    let _ = lamina.imagen(modo);
                 }
             }
         }
     };
 }
 
-laminas! {
-    CaidaCielo => "caida-cielo",
-    TivoliCiudad => "tivoli-ciudad",
-    HidraCabezas => "hidra-cabezas",
-    MercurioFriso => "mercurio-friso",
-    FarnesioCielo => "farnesio-cielo",
-    CaballeroYelmo => "caballero-yelmo",
-    CaballeroDiablo => "caballero-diablo",
-    CastilloTorres => "castillo-torres",
-    IcaroDedalo => "icaro-g-dedalo",
-    MelencoliaReloj => "melencolia-reloj",
-    ProdigoAldea => "prodigo-aldea",
-    ValleRocas => "valle-rocas",
-    DragonCabeza => "dragon-cabeza",
-    CaballeroCastillo => "caballero-castillo",
-    FaetonMano => "faeton-mano",
-    PiranesiRueda => "piranesi-rueda",
-    Icaro => "icaro",
-    Hermes => "hermes",
-    Faeton => "faeton",
-    Rostro => "rostro",
-    ApoloBelvedere => "apolo-belvedere",
-    Saturno => "saturno",
-    Minerva => "minerva",
-    Hidra => "hidra",
-    HermesHilos => "hermes-hilos",
-    CaidaDeFaeton => "caida-de-faeton",
-    CascadaMolino => "cascada-molino",
-    RuedaRueda => "rueda-rueda",
-    DragonAla => "dragon-ala",
-    ValleBosque => "valle-bosque",
-    PozoCuerdas => "pozo-cuerdas",
-    HuidaBosque => "huida-bosque",
-    ArcoPuente => "arco-puente",
-    CadenasReja => "cadenas-reja",
-    FuegoArco => "fuego-arco",
-    EscaleraPuentes => "escalera-puentes",
-    TorreReja => "torre-reja",
-    PuenteTorre => "puente-torre",
-    MercadoCarros => "mercado-carros",
-    SoldadosAldea => "soldados-aldea",
-    TivoliRocas => "tivoli-rocas",
-    FortalezasValle => "fortalezas-valle",
-    CabanaCasas => "cabana-casas",
-    OceanoPez => "oceano-pez",
-    TetisDelfin => "tetis-delfin",
-    JeronimoCalabaza => "jeronimo-calabaza",
-    CastilloPasarela => "castillo-pasarela",
-    TivoliCascada => "tivoli-cascada",
-    MercadoAldea => "mercado-aldea",
-    ParejaAldea => "pareja-aldea",
-    CascadaAgua => "cascada-agua",
-    SoldadosCastillo => "soldados-castillo",
-    IxionNubes => "ixion-nubes",
-    DemogorgonCueva => "demogorgon-cueva",
-    MelencoliaCometa => "melencolia-cometa",
-    HuidaCiudad => "huida-ciudad",
-    FaetonPaisaje => "faeton-paisaje",
-    HilosMascara => "hilos-mascara",
-    // Láminas de fondo negro: iguales en ambos temas.
-    Umbral => "umbral" @unica,
-    Mano => "mano" @unica,
-    Orbita => "orbita" @unica,
-    Alas => "alas" @unica,
-    Forja => "forja" @unica,
-    // Detalles del Gabinete y del vacío de la Consola.
-    FaetonCuerpo => "faeton-cuerpo",
-    SaturnoRostro => "saturno-rostro",
-    MercurioCaduceo => "mercurio-caduceo",
-    MinervaRostro => "minerva-rostro",
-    ApoloMano => "apolo-mano",
-    BelvedereRostro => "belvedere-rostro",
-    FarnesioEspalda => "farnesio-espalda",
-    JeronimoSanto => "jeronimo-santo",
-}
+include!("catalogo_laminas.rs");
 
 /// Alto de la banda de sección.
 pub const ALTO_BANDA: f32 = 170.0;
@@ -174,8 +109,7 @@ pub enum DatoBanda<'a> {
 ///
 /// El rótulo es un bloque `bg` anclado abajo a la izquierda, con reglas de
 /// 2 px arriba y a la derecha; su texto queda alineado con el margen del
-/// contenido. Una regla de 2 px cierra la banda por debajo, y el barrido de
-/// 3 px cubre la lámina.
+/// contenido. Una regla de 2 px cierra la banda por debajo.
 pub fn banda_completa<'a, M: 'a>(
     p: Paleta,
     lamina: Lamina,
@@ -316,38 +250,21 @@ pub fn grabado<'a, M: 'a>(
         ancho: ancho.into(),
         alto: alto.into(),
         foco: lamina.foco(),
-        zoom: false,
         entero: false,
-        prensa: false,
-        tinta: p.text,
         posicion: None,
     })
 }
 
-/// Igual que [`grabado`], pero la lámina se imprime de arriba abajo al
-/// cargar (Prensa): ocho pasos en `dur-prensa` con una barra de tinta al
-/// frente. Con movimiento reducido es un fundido de 120 ms.
+/// Grabado sin animación de revelado.
 pub fn grabado_prensa<'a, M: 'a>(
-    p: Paleta,
-    lamina: Lamina,
-    ancho: impl Into<Length>,
-    alto: impl Into<Length>,
+    p: Paleta, lamina: Lamina,
+    ancho: impl Into<Length>, alto: impl Into<Length>,
 ) -> Element<'a, M> {
-    Element::new(Grabado {
-        handle: lamina.imagen(p.modo).clone(),
-        ancho: ancho.into(),
-        alto: alto.into(),
-        foco: lamina.foco(),
-        zoom: false,
-        entero: false,
-        prensa: true,
-        tinta: p.text,
-        posicion: None,
-    })
+    grabado(p, lamina, ancho, alto)
 }
 
 /// Grabado entero y centrado, sin recortar (figuras sobre fondo transparente y
-/// medallones). No se amplía más de 1,5 veces para no perder nitidez.
+/// medallones). Conserva la proporción de la imagen.
 pub fn grabado_entero<'a, M: 'a>(
     p: Paleta,
     lamina: Lamina,
@@ -359,33 +276,17 @@ pub fn grabado_entero<'a, M: 'a>(
         ancho: ancho.into(),
         alto: alto.into(),
         foco: (0.5, 0.5),
-        zoom: false,
         entero: true,
-        prensa: false,
-        tinta: p.text,
         posicion: None,
     })
 }
 
-/// Igual que [`grabado`], con el acercamiento lento de 7 % en 1,2 s al pasar
-/// el puntero (la única animación de una imagen en el sistema).
+/// Grabado estático, sin acercamiento al pasar el puntero.
 pub fn grabado_zoom<'a, M: 'a>(
-    p: Paleta,
-    lamina: Lamina,
-    ancho: impl Into<Length>,
-    alto: impl Into<Length>,
+    p: Paleta, lamina: Lamina,
+    ancho: impl Into<Length>, alto: impl Into<Length>,
 ) -> Element<'a, M> {
-    Element::new(Grabado {
-        handle: lamina.imagen(p.modo).clone(),
-        ancho: ancho.into(),
-        alto: alto.into(),
-        foco: lamina.foco(),
-        zoom: true,
-        entero: false,
-        prensa: true,
-        tinta: p.text,
-        posicion: None,
-    })
+    grabado(p, lamina, ancho, alto)
 }
 
 /// Igual que [`grabado`], con el encuadre de `object-position`: `posicion`
@@ -403,10 +304,7 @@ pub fn grabado_posicion<'a, M: 'a>(
         ancho: ancho.into(),
         alto: alto.into(),
         foco: lamina.foco(),
-        zoom: false,
         entero: false,
-        prensa: false,
-        tinta: p.text,
         posicion: Some(posicion),
     })
 }
@@ -416,42 +314,14 @@ struct Grabado {
     ancho: Length,
     alto: Length,
     foco: (f32, f32),
-    zoom: bool,
     /// Se muestra entera, sin recortar, centrada en la caja.
     entero: bool,
-    /// Se imprime de arriba abajo al cargar (Prensa).
-    prensa: bool,
-    /// Color de la barra de tinta de la Prensa.
-    tinta: iced::Color,
     /// Como `object-position` de CSS: fracción de la imagen que se alinea con
     /// la misma fracción de la caja.
     posicion: Option<(f32, f32)>,
 }
 
-#[derive(Default)]
-struct EstadoZoom {
-    /// Escala actual, de 1,0 a 1,07.
-    escala: f32,
-    encima: bool,
-    ultimo: Option<std::time::Instant>,
-    /// Instante en que la lámina se mostró por primera vez (Prensa).
-    cargada: Option<std::time::Instant>,
-    /// Milisegundos transcurridos desde que se mostró, para el dibujo.
-    prensa_ms: f32,
-}
-
-const ZOOM_MAX: f32 = 1.07;
-const ZOOM_MS: f32 = 1200.0;
-
 impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
-    fn tag(&self) -> iced::advanced::widget::tree::Tag {
-        iced::advanced::widget::tree::Tag::of::<EstadoZoom>()
-    }
-
-    fn state(&self) -> iced::advanced::widget::tree::State {
-        iced::advanced::widget::tree::State::new(EstadoZoom { escala: 1.0, ..Default::default() })
-    }
-
     fn size(&self) -> iced::Size<Length> {
         iced::Size::new(self.ancho, self.alto)
     }
@@ -482,66 +352,9 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
         iced::advanced::layout::atomic(limites, self.ancho, self.alto)
     }
 
-    fn on_event(
-        &mut self,
-        arbol: &mut iced::advanced::widget::Tree,
-        evento: iced::Event,
-        layout: iced::advanced::Layout<'_>,
-        cursor: iced::advanced::mouse::Cursor,
-        _renderer: &iced::Renderer,
-        _portapapeles: &mut dyn iced::advanced::Clipboard,
-        shell: &mut iced::advanced::Shell<'_, M>,
-        _visible: &iced::Rectangle,
-    ) -> iced::event::Status {
-        let estado = arbol.state.downcast_mut::<EstadoZoom>();
-        if let (true, iced::Event::Window(iced::window::Event::RedrawRequested(ahora))) =
-            (self.prensa, &evento)
-        {
-            let inicio = *estado.cargada.get_or_insert(*ahora);
-            estado.prensa_ms = ahora.saturating_duration_since(inicio).as_secs_f32() * 1000.0;
-            let fin = if crate::movimiento::preferencia().reducir {
-                crate::tema::duracion::FAST
-            } else {
-                crate::tema::duracion::PRENSA
-            };
-            if estado.prensa_ms < fin as f32 {
-                shell.request_redraw(iced::window::RedrawRequest::NextFrame);
-            }
-        }
-        if !self.zoom {
-            return iced::event::Status::Ignored;
-        }
-        match evento {
-            iced::Event::Mouse(_) => {
-                let encima = cursor.is_over(layout.bounds());
-                if encima != estado.encima {
-                    estado.encima = encima;
-                    estado.ultimo = None;
-                    shell.request_redraw(iced::window::RedrawRequest::NextFrame);
-                }
-            }
-            iced::Event::Window(iced::window::Event::RedrawRequested(ahora)) => {
-                let meta = if estado.encima { ZOOM_MAX } else { 1.0 };
-                if (estado.escala - meta).abs() > 0.0005 {
-                    let dt = estado.ultimo.map_or(0.016, |u| ahora.duration_since(u).as_secs_f32() * 1000.0 / 1000.0);
-                    estado.ultimo = Some(ahora);
-                    let paso = (ZOOM_MAX - 1.0) * dt * 1000.0 / ZOOM_MS;
-                    estado.escala = if estado.escala < meta {
-                        (estado.escala + paso).min(meta)
-                    } else {
-                        (estado.escala - paso * 2.0).max(meta)
-                    };
-                    shell.request_redraw(iced::window::RedrawRequest::NextFrame);
-                }
-            }
-            _ => {}
-        }
-        iced::event::Status::Ignored
-    }
-
     fn draw(
         &self,
-        arbol: &iced::advanced::widget::Tree,
+        _arbol: &iced::advanced::widget::Tree,
         renderer: &mut iced::Renderer,
         _tema: &iced::Theme,
         _estilo: &iced::advanced::renderer::Style,
@@ -560,30 +373,19 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
         if tam.width == 0 || tam.height == 0 || caja.width <= 0.0 || caja.height <= 0.0 {
             return;
         }
-        let estado = arbol.state.downcast_ref::<EstadoZoom>();
-        let escala_zoom = estado.escala.max(1.0);
-        // Prensa: la lámina se imprime de arriba abajo al cargar.
-        let (impreso, opacidad, barra) = if self.prensa {
-            crate::movimiento::prensa_lamina(estado.prensa_ms, crate::movimiento::preferencia())
-        } else {
-            (1.0, 1.0, false)
-        };
-        let recorte = if impreso < 1.0 {
-            let tapa = iced::Rectangle { height: caja.height * impreso, ..caja };
-            match tapa.intersection(&recorte) {
-                Some(r) => r,
-                None => return,
-            }
-        } else {
-            recorte
-        };
         let (iw, ih) = (tam.width as f32, tam.height as f32);
         let escala = if self.entero {
             (caja.width / iw).min(caja.height / ih)
         } else {
-            (caja.width / iw).max(caja.height / ih) * escala_zoom
+            (caja.width / iw).max(caja.height / ih)
         };
-        let (w, h) = (iw * escala, ih * escala);
+        // Cover debe cubrir ambos ejes incluso si la multiplicación pierde
+        // unas fracciones de píxel. De lo contrario clamp recibe min > max.
+        let (w, h) = if self.entero {
+            (iw * escala, ih * escala)
+        } else {
+            ((iw * escala).max(caja.width), (ih * escala).max(caja.height))
+        };
         // El foco de la imagen queda lo más cerca posible del centro de la caja.
         let (x, y) = if self.entero {
             (caja.center_x() - w / 2.0, caja.center_y() - h / 2.0)
@@ -591,8 +393,8 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
             (caja.x + px * (caja.width - w), caja.y + py * (caja.height - h))
         } else {
             (
-                (caja.center_x() - self.foco.0 * w).clamp(caja.x + caja.width - w, caja.x),
-                (caja.center_y() - self.foco.1 * h).clamp(caja.y + caja.height - h, caja.y),
+                posicion_foco(caja.x, caja.width, w, self.foco.0),
+                posicion_foco(caja.y, caja.height, h, self.foco.1),
             )
         };
         let dibujo = iced::Rectangle { x, y, width: w, height: h };
@@ -602,22 +404,44 @@ impl<M> iced::advanced::Widget<M, iced::Theme, iced::Renderer> for Grabado {
                     handle: self.handle.clone(),
                     filter_method: iced::advanced::image::FilterMethod::Linear,
                     rotation: iced::Radians(0.0),
-                    opacity: opacidad,
+                    opacity: 1.0,
                     snap: true,
                 },
                 dibujo,
             );
         });
-        if barra {
-            // Barra de tinta de 3 px que baja con la plancha y se apaga al final.
-            let y = caja.y + (caja.height - 3.0) * impreso;
-            if let Some(b) = (iced::Rectangle { x: caja.x, y, width: caja.width, height: 3.0 })
-                .intersection(visible)
-            {
-                renderer.fill_quad(
-                    iced::advanced::renderer::Quad { bounds: b, ..Default::default() },
-                    iced::Background::Color(iced::Color { a: 1.0 - impreso, ..self.tinta }),
-                );
+    }
+}
+
+fn posicion_foco(origen: f32, caja: f32, imagen: f32, foco: f32) -> f32 {
+    let minimo = origen + (caja - imagen).min(0.0);
+    (origen + caja / 2.0 - foco * imagen).clamp(minimo, origen)
+}
+
+#[cfg(test)]
+mod pruebas_encuadre {
+    use super::posicion_foco;
+
+    #[test]
+    fn redondeo_de_cover_no_cierra_el_launcher() {
+        // La galería del panel daba min=424.66675 y max=424.66672.
+        let origen = 424.66672;
+        let caja = 181.33334;
+        let imagen = caja - 0.00003;
+        assert_eq!(posicion_foco(origen, caja, imagen, 0.5), origen);
+    }
+
+    #[test]
+    fn foco_siempre_permanece_dentro_del_recorte() {
+        for origen in [0.0, 424.66672, 1230.5] {
+            for caja in [0.0, 120.0, 181.33334, 952.0] {
+                for imagen in [caja, caja + 0.00003, caja * 3.0] {
+                    for foco in [0.0, 0.2, 0.5, 1.0] {
+                        let x = posicion_foco(origen, caja, imagen, foco);
+                        assert!(x >= origen + (caja - imagen).min(0.0));
+                        assert!(x <= origen);
+                    }
+                }
             }
         }
     }

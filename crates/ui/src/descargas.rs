@@ -60,7 +60,7 @@ pub struct AccionesCola<M> {
 
 /// Botón de solo icono de 28 px, sin nombre visible.
 pub fn boton_icono<'a, M: Clone + 'a>(p: Paleta, glifo: Icono, m: M) -> Element<'a, M> {
-    button(container(icono(glifo, Tam::Base, p.text)).center(Length::Fill))
+    button(container(crate::iconos::icono_texto(glifo, Tam::Base)).center(Length::Fill))
         .width(medida::CONTROL_SM)
         .height(medida::CONTROL_SM)
         .padding(0)

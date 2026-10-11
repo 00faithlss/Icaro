@@ -8,6 +8,7 @@ use iced::widget::{button, column, container, mouse_area, progress_bar, row, tex
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Theme};
 
 use crate::fuentes;
+use crate::botones::icono_heredado;
 use crate::iconos::{icono, Icono, Tam};
 use crate::tema::{borde, espacio, medida, texto, Paleta};
 
@@ -197,28 +198,17 @@ fn barra_titulo<'a, M: Clone + 'a>(p: Paleta, m: &MensajesShell<'a, M>) -> Eleme
             ..Default::default()
         }
     });
-    let cuadrado =
-        container(Space::new(Length::Fixed(12.0), Length::Fixed(12.0))).style(move |_: &Theme| {
-            container::Style {
-                border: Border {
-                    width: borde::MEDIO,
-                    color: p.text,
-                    radius: 0.0.into(),
-                },
-                ..Default::default()
-            }
-        });
     let controles = row![
         boton_ventana(
             p,
-            icono(Icono::Menos, Tam::Base, p.text).into(),
+            icono_heredado(Icono::Menos, Tam::Base).into(),
             false,
             m.minimizar.clone()
         ),
-        boton_ventana(p, cuadrado.into(), false, m.maximizar.clone()),
+        boton_ventana(p, icono_heredado(Icono::Maximizar, Tam::Base).into(), false, m.maximizar.clone()),
         boton_ventana(
             p,
-            icono(Icono::Cerrar, Tam::Base, p.text).into(),
+            icono_heredado(Icono::Cerrar, Tam::Base).into(),
             true,
             m.cerrar.clone()
         ),
@@ -255,7 +245,7 @@ fn item_nav<'a, M: Clone + 'a>(
     mensaje: M,
 ) -> Element<'a, M> {
     let tinta = if activa { p.on_accent } else { p.text };
-    let mut fila = row![icono(seccion.icono(), Tam::Base, tinta)]
+    let mut fila = row![icono_heredado(seccion.icono(), Tam::Base)]
         .spacing(espacio::S3)
         .align_y(Alignment::Center);
     if !colapsada {
@@ -350,7 +340,7 @@ fn bloque_cuenta<'a, M: Clone + 'a>(p: Paleta, c: &Cuenta<'a>, al_pulsar: M) -> 
 
 fn barra_lateral<'a, M: Clone + 'a>(
     p: Paleta,
-    activa: Seccion,
+    activa: Option<Seccion>,
     colapsada: bool,
     cuenta: &Cuenta<'a>,
     descargas: Option<&DescargasActivas>,
@@ -358,7 +348,7 @@ fn barra_lateral<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let mut items = column![].spacing(espacio::S1);
     for s in Seccion::TODAS {
-        items = items.push(item_nav(p, s, s == activa, colapsada, (m.ir_a)(s)));
+        items = items.push(item_nav(p, s, Some(s) == activa, colapsada, (m.ir_a)(s)));
     }
     let mut pie = column![].spacing(espacio::S3);
     if !colapsada {
@@ -396,7 +386,7 @@ fn barra_lateral<'a, M: Clone + 'a>(
 #[allow(clippy::too_many_arguments)]
 pub fn app_shell<'a, M: Clone + 'a>(
     p: Paleta,
-    activa: Seccion,
+    activa: impl Into<Option<Seccion>>,
     colapsada: bool,
     cuenta: Cuenta<'a>,
     descargas: Option<DescargasActivas>,
@@ -404,7 +394,7 @@ pub fn app_shell<'a, M: Clone + 'a>(
     pie: Option<Element<'a, M>>,
     m: MensajesShell<'a, M>,
 ) -> Element<'a, M> {
-    let lateral = barra_lateral(p, activa, colapsada, &cuenta, descargas.as_ref(), &m);
+    let lateral = barra_lateral(p, activa.into(), colapsada, &cuenta, descargas.as_ref(), &m);
     let mut derecha = column![container(contenido)
         .width(Length::Fill)
         .height(Length::Fill)];

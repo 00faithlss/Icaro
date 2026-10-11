@@ -37,11 +37,13 @@ mod pantallas;
 mod sesion;
 #[path = "launcher_aux/red.rs"]
 mod red;
+#[path = "launcher_aux/busqueda.rs"]
+mod busqueda;
 
 use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
 use icaro_ui::shell::{app_shell, Cuenta, DescargasActivas, MensajesShell, Seccion};
-use icaro_ui::superficies::{con_velo_losa, dialogo, menu_contextual, toast, ElementoMenu};
+use icaro_ui::superficies::{con_velo_losa, dialogo, menu_contextual, posicion_menu, tamano_menu, toast_con_opacidad, ElementoMenu};
 use icaro_ui::tema::{espacio, texto, Modo};
 use iced::widget::{column, container, row, text, Space};
 use iced::{window, Alignment, Element, Length, Padding, Point, Size, Task};
@@ -54,7 +56,7 @@ struct App {
     seleccionada: usize,
     menu: Option<usize>,
     dialogo: bool,
-    aviso: Option<String>,
+    aviso: Option<icaro_ui::avisos::Aviso<Mensaje>>,
     tema: usize,
     reducir: bool,
     simultaneas: i32,
@@ -122,6 +124,7 @@ struct App {
     /// Instancia recién devuelta a la cuadrícula (Colocar).
     colocada: Option<(usize, std::time::Instant)>,
     sesion: sesion::Sesion,
+    busqueda: busqueda::Estado,
 }
 
 /// Eliminación por Picar: se mantiene presionado hasta romper la tarjeta.
@@ -155,8 +158,25 @@ struct EdicionGrupo {
     mover: Option<usize>,
 }
 
+impl App {
+    fn avisar(&mut self, texto: String) {
+        let accion = if self.red.anterior.is_some() {
+            Some(Mensaje::Red(red::Mensaje::Deshacer))
+        } else if self.picar.as_ref().is_some_and(|p| p.rota.is_some()) {
+            Some(Mensaje::DeshacerAviso)
+        } else { None };
+        self.aviso = Some(icaro_ui::avisos::Aviso::nuevo(texto, accion, std::time::Instant::now()));
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Mensaje {
+    AbrirBusqueda,
+    CerrarBusqueda,
+    BuscarGlobal(String),
+    MoverBusqueda(i32),
+    ConfirmarBusqueda,
+    AbrirResultado(busqueda::Destino),
     Editar,
     VolverEditor,
     Pestana(usize),
@@ -230,6 +250,8 @@ enum Mensaje {
     CerrarDialogo,
     Eliminar,
     CerrarAviso,
+    DeshacerAviso,
+    AvisoTic(std::time::Instant),
     Tema(usize),
     Reducir,
     Simultaneas(i32),
@@ -239,6 +261,7 @@ enum Mensaje {
     Maximizar,
     Cerrar,
     Nada,
+    ImagenesActualizadas,
     Cursor(Point),
     Tamano(Size),
     Jugar(usize),
@@ -253,7 +276,6 @@ fn arrancar(app: &mut App) {
     if !app.reducir {
         app.anim = Some(std::time::Instant::now());
         app.ahora = std::time::Instant::now();
-        app.capt.prensa = Some(app.ahora);
     }
 }
 
@@ -302,14 +324,27 @@ fn abrir_instancia(app: &mut App, i: usize) {
 }
 
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
+    let guardar = !matches!(&m, Mensaje::Cuadro(_) | Mensaje::Cursor(_)
+        | Mensaje::Tamano(_) | Mensaje::AvisoTic(_) | Mensaje::Nada | Mensaje::ImagenesActualizadas);
+    let instalaciones = app.instalando.len();
     mods::fijar_recurso(app.editor == Some(3));
+    let deshacer_captura = matches!(&m, Mensaje::Capt(capt::Accion::Deshacer));
     let habia = hay_dialogo(app);
     let tarea = actualizar_estado(app, m);
+    if deshacer_captura { app.aviso = None; }
+    if let Some(aviso) = app.capt.aviso.take() {
+        app.aviso = Some(icaro_ui::avisos::Aviso::nuevo(aviso.texto,
+            aviso.deshacer.then_some(Mensaje::Capt(capt::Accion::Deshacer)), aviso.desde));
+    }
     if !habia && hay_dialogo(app) && !app.reducir {
         app.anim_dialogo = Some(std::time::Instant::now());
         app.ahora = std::time::Instant::now();
     }
-    guardar_si_cambio(app);
+    // Los cuadros normales no cambian datos persistentes. Al terminar una
+    // instalación sí hay que guardar el modpack, aunque no haya otro clic.
+    if guardar || instalaciones != app.instalando.len() {
+        guardar_si_cambio(app);
+    }
     tarea
 }
 
@@ -340,6 +375,65 @@ fn guardar_si_cambio(app: &mut App) {
 
 fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     match m {
+        Mensaje::AbrirBusqueda => {
+            if hay_dialogo(app) || app.capt.visor.is_some() || app.umbral.is_some() {
+                return Task::none();
+            }
+            app.busqueda.abierta = true;
+            app.busqueda.consulta.clear();
+            app.busqueda.seleccion = 0;
+            app.sesion.menu = false;
+            app.menu = None;
+            return iced::widget::text_input::focus(busqueda::CAMPO);
+        }
+        Mensaje::CerrarBusqueda => app.busqueda.abierta = false,
+        Mensaje::BuscarGlobal(consulta) => {
+            app.busqueda.consulta = consulta;
+            app.busqueda.seleccion = 0;
+            return iced::widget::scrollable::snap_to(iced::widget::scrollable::Id::new(busqueda::LISTA),
+                iced::widget::scrollable::RelativeOffset::START);
+        }
+        Mensaje::MoverBusqueda(paso) => {
+            let total = busqueda::resultados(app).len();
+            app.busqueda.seleccion = busqueda::mover(app.busqueda.seleccion, paso, total);
+            let y = app.busqueda.seleccion as f32 / total.saturating_sub(1).max(1) as f32;
+            return iced::widget::scrollable::snap_to(iced::widget::scrollable::Id::new(busqueda::LISTA),
+                iced::widget::scrollable::RelativeOffset { x: 0.0, y });
+        }
+        Mensaje::ConfirmarBusqueda => {
+            if let Some(r) = busqueda::resultados(app).get(app.busqueda.seleccion) {
+                return actualizar_estado(app, Mensaje::AbrirResultado(r.destino.clone()));
+            }
+        }
+        Mensaje::AbrirResultado(destino) => {
+            app.busqueda.abierta = false;
+            app.pantalla = None;
+            app.sesion.menu = false;
+            app.mod_panel = None;
+            app.mod_pagina = None;
+            match destino {
+                busqueda::Destino::Instancia(i) if i < instancias().len() => {
+                    app.seccion = Seccion::Instancias;
+                    abrir_instancia(app, i);
+                }
+                busqueda::Destino::Mod(id) if !instancias().is_empty() => {
+                    let i = if app.editor.is_some() { app.editor_inst } else { app.seleccionada };
+                    app.seccion = Seccion::Instancias;
+                    abrir_instancia(app, i.min(instancias().len() - 1));
+                    app.editor = Some(2);
+                    app.mods_vista = 1;
+                    mods::fijar_recurso(false);
+                    return actualizar_estado(app, Mensaje::AbrirModPagina(id));
+                }
+                busqueda::Destino::Servidor(i) if i < app.red.servidores.len() => {
+                    app.seccion = Seccion::Servidores;
+                    app.editor = None;
+                    app.red.sobre = Some(i);
+                    arrancar(app);
+                }
+                _ => {}
+            }
+        }
         Mensaje::Editar => {
             let i = app.menu.unwrap_or(app.seleccionada);
             abrir_instancia(app, i);
@@ -359,7 +453,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.grupos[i] = g.clone();
             app.menu = None;
             let nombre = instancias()[i].nombre.clone();
-            app.aviso = Some(match g {
+            app.avisar(match g {
                 Some(g) => format!("{nombre} ahora está en el grupo {g}."),
                 None => format!("{nombre} quedó sin grupo."),
             });
@@ -400,10 +494,10 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                 let nuevo = e.texto.trim().to_owned();
                 let repetido = app.lista_grupos.iter().any(|g| g.to_lowercase() == nuevo.to_lowercase() && Some(g) != e.original.as_ref());
                 if nuevo.is_empty() {
-                    app.aviso = Some("El grupo necesita un nombre.".into());
+                    app.avisar("El grupo necesita un nombre.".into());
                     app.edicion_grupo = Some(e);
                 } else if repetido {
-                    app.aviso = Some(format!("Ya existe un grupo llamado {nuevo}."));
+                    app.avisar(format!("Ya existe un grupo llamado {nuevo}."));
                     app.edicion_grupo = Some(e);
                 } else {
                     arrancar(app);
@@ -420,15 +514,15 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                             if app.general.grupo.as_ref() == Some(&viejo) {
                                 app.general.grupo = Some(nuevo.clone());
                             }
-                            app.aviso = Some(format!("Grupo renombrado a {nuevo}."));
+                            app.avisar(format!("Grupo renombrado a {nuevo}."));
                         }
                         None => {
                             app.lista_grupos.push(nuevo.clone());
                             if let Some(i) = e.mover {
                                 app.grupos[i] = Some(nuevo.clone());
-                                app.aviso = Some(format!("{} ahora está en el grupo {nuevo}.", instancias()[i].nombre));
+                                app.avisar(format!("{} ahora está en el grupo {nuevo}.", instancias()[i].nombre));
                             } else {
-                                app.aviso = Some(format!("Grupo {nuevo} creado."));
+                                app.avisar(format!("Grupo {nuevo} creado."));
                             }
                         }
                     }
@@ -449,7 +543,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             if app.general.grupo.as_ref() == Some(&nombre) {
                 app.general.grupo = None;
             }
-            app.aviso = Some(format!("Grupo {nombre} eliminado; {afectadas} instancias quedaron sin grupo."));
+            app.avisar(format!("Grupo {nombre} eliminado; {afectadas} instancias quedaron sin grupo."));
         }
         Mensaje::Ancho(v) => app.general.ancho = v,
         Mensaje::Alto(v) => app.general.alto = v,
@@ -564,7 +658,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             }
             app.tienda_lista.clear();
             app.mods_vista = 0;
-            app.aviso = Some(format!("{hechos} instalado(s) en {inst}."));
+            app.avisar(format!("{hechos} instalado(s) en {inst}."));
             arrancar(app);
         }
         Mensaje::VistaMods(v) => {
@@ -605,7 +699,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             let id = mods::listar(&inst).into_iter().find(|m| m.archivo == archivo).map(|m| m.id);
             if let Some(id) = id {
                 if mods::cambiar_version(&inst, &archivo, &id, &version).is_some() {
-                    app.aviso = Some(format!("{id} cambió a la versión {version}."));
+                    app.avisar(format!("{id} cambió a la versión {version}."));
                 }
             }
         }
@@ -625,16 +719,15 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                 }
             }
             app.mod_opcionales.clear();
-            app.aviso = Some(format!("{id} {version} instalado."));
+            app.avisar(format!("{id} {version} instalado."));
         }
         Mensaje::EliminarMod(archivo) => {
             mods::eliminar(&instancias()[app.editor_inst].nombre, &archivo);
-            app.aviso = Some(format!("{archivo} se movió a la papelera."));
+            app.avisar(format!("{archivo} se movió a la papelera."));
         }
         Mensaje::Cuadro(t) => {
             app.ahora = t;
             app.red.tick(t, app.simultaneas);
-            capt::cuadro(app);
             avanzar_instalaciones(app);
             avanzar_picar(app);
             sesion::avanzar(app);
@@ -657,6 +750,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             let libre = app.umbral.is_none()
                 && app.seccion == Seccion::Instancias
                 && app.editor.is_none()
+                && app.capt.visor.is_none()
                 && app.pantalla.is_none()
                 && app.menu.is_none()
                 && app.mod_panel.is_none()
@@ -719,7 +813,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.configs.push(config_por_defecto());
             app.instalando.push((m.nombre.to_owned(), std::time::Instant::now()));
             app.ahora = std::time::Instant::now();
-            app.aviso = Some(format!("Instalando {} como una instancia nueva.", m.nombre));
+            app.avisar(format!("Instalando {} como una instancia nueva.", m.nombre));
         }
         Mensaje::Cursor(c) => {
             app.cursor = c;
@@ -727,7 +821,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Red(m) => {
             if let Some(a) = app.red.actualizar(m, app.cursor.y, std::time::Instant::now()) {
-                app.aviso = Some(a);
+                app.avisar(a);
             }
             app.ahora = std::time::Instant::now();
         }
@@ -739,9 +833,20 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::CerrarDialogo => app.dialogo = false,
         Mensaje::Eliminar => {
             app.dialogo = false;
-            app.aviso = Some("Se eliminó la instancia Supervivencia.".into());
+            app.avisar("Se eliminó la instancia Supervivencia.".into());
+        }
+        Mensaje::AvisoTic(ahora) => {
+            app.ahora = ahora;
+            if app.aviso.as_ref().is_some_and(|a| a.vencido(ahora)) { app.aviso = None; }
         }
         Mensaje::CerrarAviso => {
+            if app.reducir { app.aviso = None; }
+            else if let Some(aviso) = &mut app.aviso {
+                app.ahora = std::time::Instant::now();
+                aviso.cerrar(app.ahora);
+            }
+        }
+        Mensaje::DeshacerAviso => {
             app.aviso = None;
             // Deshacer una eliminación por Picar: la tarjeta vuelve y se asienta.
             if app.picar.as_ref().is_some_and(|p| p.rota.is_some()) {
@@ -755,6 +860,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Tema(i) => {
             app.tema = i;
             app.modo = if i == 1 { Modo::Piedra } else { Modo::Tinta };
+            Lamina::precargar(app.modo);
         }
         Mensaje::Reducir => {
             app.reducir = !app.reducir;
@@ -777,7 +883,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Maximizar => return window::get_oldest().and_then(window::toggle_maximize),
         Mensaje::Cerrar => return window::get_oldest().and_then(window::close),
-        Mensaje::Nada => {}
+        Mensaje::Nada | Mensaje::ImagenesActualizadas => {}
     }
     Task::none()
 }
@@ -847,7 +953,7 @@ fn avanzar_instalaciones(app: &mut App) {
         }
     }
     if let Some(n) = terminadas.last() {
-        app.aviso = Some(format!("{n} quedó instalado."));
+        app.avisar(format!("{n} quedó instalado."));
     }
     app.instalando.retain(|(n, _)| !terminadas.contains(n));
 }
@@ -871,7 +977,7 @@ fn avanzar_picar(app: &mut App) {
             p.rota = Some(ahora);
         }
         // Deshacer dura mientras el aviso siga abierto.
-        app.aviso = Some(format!("{nombre} eliminada."));
+        app.avisar(format!("{nombre} eliminada."));
     }
 }
 
@@ -1156,10 +1262,8 @@ fn lista_mods(app: &App) -> Element<'_, Mensaje> {
     for (i, n) in nombres.iter().enumerate() {
         chips = chips.push(componentes::chip(p, n, app.mods_filtro == i, Mensaje::FiltroMods(i)));
     }
-    let barra = row![
-        container(componentes::campo(p, "Buscar", &app.busqueda_mods, Mensaje::BuscarMods)).width(200),
-        chips,
-        Space::with_width(Length::Fill),
+    let acciones = row![
+        container(componentes::campo(p, "Buscar", &app.busqueda_mods, Mensaje::BuscarMods)).width(Length::Fill),
         text(format!(
             "{}/{} activos",
             instalados.iter().filter(|m| m.activo).count(),
@@ -1178,6 +1282,7 @@ fn lista_mods(app: &App) -> Element<'_, Mensaje> {
     ]
     .spacing(espacio::S4)
     .align_y(Alignment::Center);
+    let barra = column![acciones, chips].spacing(espacio::S4);
 
     let mut lista = column![].spacing(espacio::S2);
     let mut n = 0;
@@ -1226,7 +1331,7 @@ fn lista_mods(app: &App) -> Element<'_, Mensaje> {
         fila = fila
             .push(text(m.version.clone()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(70))
             .push(
-                iced::widget::button(icono(Icono::Acciones, Tam::Base, p.text))
+                iced::widget::button(icaro_ui::iconos::icono_texto(Icono::Acciones, Tam::Base))
                     .padding(espacio::S2)
                     .on_press(Mensaje::PanelMod(Some(m.id.clone())))
                     .style(icaro_ui::estilo::boton_fantasma(p)),
@@ -1248,10 +1353,10 @@ fn lista_mods(app: &App) -> Element<'_, Mensaje> {
             .color(p.text_muted),
         );
     }
-    column![barra, lista]
+    // Las filas mantienen su altura natural; el sobrante se desplaza y recorta.
+    desplazable(column![barra, lista]
         .spacing(espacio::S6)
-        .padding(Padding::from([espacio::S6, espacio::S12]))
-        .into()
+        .padding(Padding::from([espacio::S6, espacio::S12])))
 }
 
 /// Tienda: filtros a la izquierda, resultados y barra inferior invertida con
@@ -1470,7 +1575,7 @@ fn ficha_mod<'a>(app: &'a App, id: &str) -> Element<'a, Mensaje> {
         ]
         .spacing(espacio::S1)
         .width(Length::Fill),
-        iced::widget::button(icono(Icono::Cerrar, Tam::Base, p.text))
+        iced::widget::button(icaro_ui::iconos::icono_texto(Icono::Cerrar, Tam::Base))
             .padding(espacio::S2)
             .on_press(Mensaje::PanelMod(None))
             .style(icaro_ui::estilo::boton_fantasma(p)),
@@ -2070,7 +2175,7 @@ fn pagina_mod<'a>(app: &'a App, id: &str) -> Element<'a, Mensaje> {
     }
 
     let principal = desplazable(
-        column![barra, contenido]
+        column![barra, con_entrada(app, contenido)]
             .spacing(espacio::S6)
             .padding(Padding { right: espacio::S4, ..Padding::ZERO }),
     );
@@ -2294,7 +2399,7 @@ fn pagina_modpack(app: &App, i: usize) -> Element<'_, Mensaje> {
     }
 
     let cuerpo = row![
-        container(desplazable(column![barra, contenido].spacing(espacio::S6).padding(Padding { right: espacio::S4, ..Padding::ZERO })))
+        container(desplazable(column![barra, con_entrada(app, contenido)].spacing(espacio::S6).padding(Padding { right: espacio::S4, ..Padding::ZERO })))
             .width(Length::Fill)
             .height(Length::Fill),
         container(desplazable(lateral)).width(300).height(Length::Fill),
@@ -2311,7 +2416,7 @@ fn pagina_modpack(app: &App, i: usize) -> Element<'_, Mensaje> {
 fn pantalla_modpacks(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
     if let Some(i) = app.modpack_pagina {
-        return con_entrada(app, pagina_modpack(app, i));
+        return pagina_modpack(app, i);
     }
     let consulta = app.busqueda_modpacks.trim().to_lowercase();
     let categoria = modpacks::CATEGORIAS[app.modpack_filtro.min(modpacks::CATEGORIAS.len() - 1)];
@@ -2432,17 +2537,20 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
     if pestana == 2 || pestana == 3 {
         if let Some(id) = &app.mod_pagina {
-            return con_entrada(app, pagina_mod(app, id));
+            return pagina_mod(app, id);
         }
     }
+    let instancia = instancias()[app.editor_inst].clone();
+    let cantidad_mods = instancia.mods.split_whitespace().next()
+        .and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
     let datos = DatosEditor {
-        nombre: "Supervivencia".into(),
-        version: "1.21.4 · Fabric 0.16.9".into(),
-        jugado: "41 h".into(),
-        mods: "214".into(),
-        tamano: "2,4 GB".into(),
+        nombre: app.general.nombre.clone(),
+        version: instancia.version,
+        jugado: if app.editor_inst == 0 { "41 h" } else { "—" }.into(),
+        mods: cantidad_mods.to_string(),
+        tamano: if app.editor_inst == 0 { "2,4 GB" } else { "—" }.into(),
         memoria: format!("{} MB", app.configs[app.editor_inst].memoria_max),
-        portada: Lamina::CaballeroCastillo,
+        portada: instancia.portada,
     };
     let encabezado = encabezado_editor(
         p,
@@ -2454,7 +2562,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
             jugar: Mensaje::Jugar(app.editor_inst),
         },
     );
-    let barra = container(pestanas_editor(p, pestana, 214, 3, Mensaje::Pestana))
+    let barra = container(pestanas_editor(p, pestana, cantidad_mods, 3, Mensaje::Pestana))
         .padding(Padding::from([0.0, espacio::S12]));
     let cuerpo: Element<Mensaje> = match pestana {
         0 => pestana_general(
@@ -2737,7 +2845,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
     };
     let mut ventana = app_shell(
         p,
-        if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { Seccion::Ajustes } else { app.seccion },
+        if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { None } else { Some(app.seccion) },
         app.colapsada,
         Cuenta { nombre: app.sesion.estado.nombre(), proveedor: "Microsoft", estado: app.sesion.estado },
         Some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 }),
@@ -2746,14 +2854,14 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         MensajesShell {
             ir_a: Box::new(Mensaje::Ir),
             arrastrar: Mensaje::Arrastrar,
-            buscar: Mensaje::Nada,
+            buscar: Mensaje::AbrirBusqueda,
             cuenta: Mensaje::Ses(sesion::Accion::Menu(true)),
             minimizar: Mensaje::Minimizar,
             maximizar: Mensaje::Maximizar,
             cerrar: Mensaje::Cerrar,
         },
     );
-    if app.menu.is_some() {
+    let capa_menu = if app.menu.is_some() {
         let grupo_menu = app.grupos[app.menu.unwrap_or(0)].clone();
         let mut elementos_grupos: Vec<ElementoMenu<Mensaje>> = app
             .lista_grupos
@@ -2770,9 +2878,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         elementos_grupos.push(ElementoMenu::Separador);
         elementos_grupos.push(ElementoMenu::Opcion { icono: Icono::Mas, texto: "Nuevo grupo".into(), atajo: None, peligro: false, mensaje: Mensaje::NuevoGrupoParaInstancia });
         elementos_grupos.push(ElementoMenu::Opcion { icono: Icono::ChevronDerecha, texto: "Volver".into(), atajo: None, peligro: false, mensaje: Mensaje::VerGrupos(false) });
-        let menu = menu_contextual(
-            p,
-            if app.menu_grupos { elementos_grupos } else { vec![
+        let elementos = if app.menu_grupos { elementos_grupos } else { vec![
                 ElementoMenu::Opcion { icono: Icono::Jugar, texto: "Jugar".into(), atajo: Some("Enter"), peligro: false, mensaje: Mensaje::Jugar(app.menu.unwrap_or(0)) },
                 ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Abrir carpeta".into(), atajo: Some("O"), peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::AbrirCarpetaInstancia(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Editar, texto: "Editar".into(), atajo: Some("E"), peligro: false, mensaje: Mensaje::Editar },
@@ -2785,42 +2891,37 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                 ElementoMenu::Opcion { icono: Icono::Externo, texto: "Crear acceso directo".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
                 ElementoMenu::Separador,
                 ElementoMenu::Opcion { icono: Icono::Papelera, texto: "Eliminar".into(), atajo: Some("Supr"), peligro: true, mensaje: Mensaje::PedirEliminar },
-            ] },
-        );
-        let caida = (1.0 - icaro_ui::movimiento::Curva::Pasos(4).aplicar(progreso(app.anim_menu, app.ahora, MS_MENU))) * 12.0;
-        ventana = iced::widget::stack![
-            ventana,
-            iced::widget::mouse_area(
+            ] };
+        let posicion = posicion_menu(app.menu_en, app.ventana, tamano_menu(&elementos),
+            if app.reducir { 1.0 } else { progreso(app.anim_menu, app.ahora, MS_MENU) });
+        let menu = menu_contextual(p, elementos);
+        Some(iced::widget::opaque(iced::widget::mouse_area(
                 container(menu)
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .padding(Padding {
-                    top: caida + app.menu_en.y.clamp(0.0, (app.ventana.height - 420.0).max(0.0)),
-                    left: app.menu_en.x.clamp(0.0, (app.ventana.width - 268.0).max(0.0)),
+                    top: posicion.y,
+                    left: posicion.x,
                     ..Padding::ZERO
                 }),
             )
             .on_press(Mensaje::Menu(None))
-            .on_scroll(|_| Mensaje::Menu(None))
-        ]
-        .into();
-    }
-    if let (Some(id), Some(2 | 3)) = (&app.mod_panel, app.editor) {
+            .on_scroll(|_| Mensaje::Menu(None))).into())
+    } else { None };
+    ventana = icaro_ui::superficies::capa_flotante(ventana, capa_menu);
+    let capa_mod = if let (Some(id), Some(2 | 3)) = (&app.mod_panel, app.editor) {
         let t = icaro_ui::movimiento::Curva::Salida.aplicar(progreso(app.anim_panel, app.ahora, MS_PANEL));
         let desfase = (1.0 - t) * 640.0;
-        ventana = iced::widget::stack![
-            ventana,
-            container(row![
+        Some(container(row![
                 Space::with_width(Length::Fill),
                 container(ficha_mod(app, id)).height(Length::Fill),
                 Space::with_width(desfase),
             ])
             .padding(Padding { top: 38.0, ..Padding::ZERO })
             .width(Length::Fill)
-            .height(Length::Fill),
-        ]
-        .into();
-    }
+            .height(Length::Fill).into())
+    } else { None };
+    ventana = icaro_ui::superficies::capa_flotante(ventana, capa_mod);
     if let Some(s) = &app.asistente {
         ventana = con_velo_losa(p, ventana, pantallas::asistente(app, s), Mensaje::Pant(pantallas::Accion::AsistenteCancelar), desfase_losa(app));
     }
@@ -2858,18 +2959,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             desfase_losa(app),
         );
     }
-    if let Some(a) = &app.aviso {
-        ventana = iced::widget::stack![
-            ventana,
-            container(toast(p, Icono::Check, a, Some(("Deshacer", if app.red.anterior.is_some() { Mensaje::Red(red::Mensaje::Deshacer) } else { Mensaje::CerrarAviso })), Some(Mensaje::CerrarAviso), false))
-                .align_x(iced::alignment::Horizontal::Left)
-                .align_y(iced::alignment::Vertical::Bottom)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(Padding::from([espacio::S6, 256.0]))
-        ]
-        .into();
-    }
+
     if let Some(t) = app.umbral {
         let nombre = instancias().get(app.seleccionada).map(|d| d.nombre.clone()).unwrap_or_default();
         let pref = icaro_ui::movimiento::Preferencia { reducir: app.reducir };
@@ -2880,7 +2970,23 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         .into();
     }
     let ventana = sesion::con_selector(app, ventana);
-    let ventana = capt::capa(app, ventana);
+    let mut ventana = capt::capa(app, ventana);
+    if let Some(a) = &app.aviso {
+        ventana = iced::widget::stack![
+            ventana,
+            container(toast_con_opacidad(p, Icono::Check, &a.texto, a.accion.clone().map(|m| ("Deshacer", m)), Some(Mensaje::CerrarAviso), false, a.opacidad(app.ahora, app.reducir)))
+                .align_x(iced::alignment::Horizontal::Left)
+                .align_y(iced::alignment::Vertical::Bottom)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(Padding::from([espacio::S6, 256.0]))
+        ]
+        .into();
+    }
+    if app.busqueda.abierta {
+        ventana = icaro_ui::superficies::con_velo(p, ventana,
+            busqueda::vista(app), Mensaje::CerrarBusqueda);
+    }
     iced::widget::mouse_area(ventana)
         .on_move(Mensaje::Cursor)
         .into()
@@ -2891,7 +2997,12 @@ fn main() -> iced::Result {
         .theme(|_| iced::Theme::Dark)
         .default_font(fuentes::CUERPO)
         .subscription(|app| {
-            let mut subs = vec![window::resize_events().map(|(_, s)| Mensaje::Tamano(s))];
+            let mut subs = vec![window::resize_events().map(|(_, s)| Mensaje::Tamano(s)),
+                icaro_ui::laminas::suscripcion().map(|()| Mensaje::ImagenesActualizadas)];
+            if let Some(aviso) = &app.aviso {
+                let ms = if !app.reducir && aviso.saliendo(app.ahora) { 16 } else { 60 };
+                subs.push(iced::time::every(std::time::Duration::from_millis(ms)).map(Mensaje::AvisoTic));
+            }
             if !app.instalando.is_empty()
                 || matches!(app.pantalla, Some(pantallas::Pantalla::Codigo | pantallas::Pantalla::Integridad))
                 || app.red.animando(app.seccion == Seccion::Descargas)
@@ -2913,6 +3024,26 @@ fn main() -> iced::Result {
                 .is_some_and(|(_, t)| ms_desde(t, app.ahora) < icaro_ui::tema::duracion::FAST as f32);
             if umbral_activo || picar_activo || colocada_activa {
                 subs.push(window::frames().map(Mensaje::Cuadro));
+            }
+            subs.push(iced::event::listen_with(|evento, _, _| {
+                match evento {
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. })
+                        if modifiers.control() && matches!(key.as_ref(), iced::keyboard::Key::Character("k" | "K")) =>
+                            Some(Mensaje::AbrirBusqueda),
+                    _ => None,
+                }
+            }));
+            if app.busqueda.abierta {
+                subs.push(iced::event::listen_with(|evento, _, _| match evento {
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. }) => match key {
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => Some(Mensaje::CerrarBusqueda),
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowUp) => Some(Mensaje::MoverBusqueda(-1)),
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::ArrowDown) => Some(Mensaje::MoverBusqueda(1)),
+                        _ => None,
+                    },
+                    _ => None,
+                }));
+                return iced::Subscription::batch(subs);
             }
             subs.push(iced::keyboard::on_key_press(|k, _| {
                 (k == iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete)).then_some(Mensaje::PicarEmpezar)
@@ -2975,6 +3106,7 @@ fn main() -> iced::Result {
     let menu = std::env::var_os("ICARO_MENU").is_some().then_some(0);
     let con_dialogo = std::env::var_os("ICARO_DIALOGO").is_some();
     app.run_with(move || {
+        Lamina::precargar(if piedra { Modo::Piedra } else { Modo::Tinta });
         let guardado = estado::Guardado::cargar();
         // Vuelve a crear las instancias que vinieron de modpacks.
         if let Some(g) = &guardado {
@@ -2997,6 +3129,7 @@ fn main() -> iced::Result {
         (
             App {
                 modo: if piedra { Modo::Piedra } else { Modo::Tinta },
+                busqueda: busqueda::Estado::default(),
                 seccion,
                 colapsada: false,
                 filtro: 0,
