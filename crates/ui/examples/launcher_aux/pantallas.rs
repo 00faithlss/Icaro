@@ -227,15 +227,18 @@ fn agregar_instancia(app: &mut App, d: DatosInstancia) {
 pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     if !app.servicios.demo {
         match &a {
-            Accion::Abrir(Pantalla::Codigo) | Accion::PedirOtroCodigo | Accion::SimularConfirmacion | Accion::AbrirPaginaMicrosoft =>
+            Accion::Abrir(Pantalla::Codigo) | Accion::PedirOtroCodigo | Accion::SimularConfirmacion =>
                 return crate::servicios::actualizar(app, crate::servicios::Accion::Login),
+            Accion::AbrirPaginaMicrosoft =>
+                return crate::servicios::actualizar(app, crate::servicios::Accion::AbrirMicrosoft),
             Accion::Cerrar if app.pantalla == Some(Pantalla::Codigo) =>
                 return crate::servicios::actualizar(app, crate::servicios::Accion::CancelarLogin),
             Accion::JugarComoInvitado => {
                 app.pantalla = None;
                 return crate::servicios::actualizar(app, crate::servicios::Accion::Logout);
             }
-            Accion::CopiarCodigo => return Task::none(),
+            Accion::CopiarCodigo =>
+                return crate::servicios::actualizar(app, crate::servicios::Accion::CopiarCodigo),
             _ => {}
         }
     }

@@ -32,6 +32,8 @@ pub struct Estado {
     pub auth_busy: bool,
     auth_error: Option<String>,
     remembered: bool,
+    device: Option<auth::DeviceInfo>,
+    browser_login: bool,
     pub query: String,
     search_id: u64,
     search_cancel: Option<CancellationToken>,
@@ -55,6 +57,8 @@ impl Default for Estado {
             auth_busy: false,
             auth_error: None,
             remembered: false,
+            device: None,
+            browser_login: false,
             query: String::new(),
             search_id: 0,
             search_cancel: None,
@@ -83,6 +87,8 @@ impl Estado {
         }
         self.auth_id = self.vault.invalidate();
         self.auth_busy = false;
+        self.device = None;
+        self.browser_login = false;
     }
     pub fn reset_catalog(&mut self) {
         if let Some(cancel) = self.search_cancel.take() {
@@ -110,6 +116,11 @@ impl Drop for Estado {
 pub enum Accion {
     Inicializar,
     Login,
+    LoginBrowser,
+    CodigoRecibido(u64, Result<Arc<auth::DeviceGrant>, String>),
+    CopiarCodigo,
+    AbrirMicrosoft,
+    PaginaAbierta(u64, Result<(), String>),
     CancelarLogin,
     Logout,
     Renovar,
@@ -155,6 +166,7 @@ fn begin_auth(app: &mut App, interactive: bool, restore: bool) -> Task<Mensaje> 
     app.servicios.auth_cancel = Some(cancel.clone());
     app.servicios.auth_busy = true;
     app.servicios.auth_error = None;
+    app.servicios.browser_login = interactive;
     let vault = app.servicios.vault.clone();
     let previous = app.servicios.session.clone();
     if interactive {
@@ -190,6 +202,44 @@ fn begin_auth(app: &mut App, interactive: bool, restore: bool) -> Task<Mensaje> 
             }
         },
         move |(result, stored)| m(Accion::Autenticada(id, result, stored)),
+    )
+}
+
+fn begin_code(app: &mut App) -> Task<Mensaje> {
+    if app.servicios.auth_busy {
+        return Task::none();
+    }
+    app.servicios.cancel();
+    let id = app.servicios.auth_id;
+    let cancel = CancellationToken::new();
+    app.servicios.auth_cancel = Some(cancel.clone());
+    app.servicios.auth_busy = true;
+    app.servicios.auth_error = None;
+    app.pantalla = Some(pantallas::Pantalla::Codigo);
+    app.sesion.menu = false;
+    Task::perform(
+        async move {
+            auth::begin_device(cancel)
+                .await
+                .map(Arc::new)
+                .map_err(|e| e.to_string())
+        },
+        move |result| m(Accion::CodigoRecibido(id, result)),
+    )
+}
+
+fn open_code_page(app: &App) -> Task<Mensaje> {
+    let (Some(info), Some(cancel)) = (&app.servicios.device, &app.servicios.auth_cancel) else {
+        return Task::none();
+    };
+    let (info, cancel, id) = (info.clone(), cancel.clone(), app.servicios.auth_id);
+    Task::perform(
+        async move {
+            auth::open_device_page(&info, cancel)
+                .await
+                .map_err(|e| e.to_string())
+        },
+        move |result| m(Accion::PaginaAbierta(id, result)),
     )
 }
 
@@ -268,7 +318,55 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             };
             return Task::batch([auth, catalog]);
         }
-        Accion::Login => return begin_auth(app, true, false),
+        Accion::Login => return begin_code(app),
+        Accion::LoginBrowser => {
+            if app.servicios.browser_login && app.servicios.auth_busy {
+                return Task::none();
+            }
+            app.servicios.cancel();
+            return begin_auth(app, true, false);
+        }
+        Accion::CodigoRecibido(id, result)
+            if id == app.servicios.auth_id && app.servicios.auth_busy =>
+        {
+            let grant = match result {
+                Ok(grant) => grant,
+                Err(error) => {
+                    app.servicios.auth_busy = false;
+                    app.servicios.auth_error = Some(error);
+                    app.servicios.auth_cancel = None;
+                    return Task::none();
+                }
+            };
+            let Some(cancel) = app.servicios.auth_cancel.clone() else {
+                return Task::none();
+            };
+            app.servicios.device = Some(grant.info().clone());
+            let vault = app.servicios.vault.clone();
+            let login = Task::perform(
+                async move {
+                    match auth::complete_device(&grant, cancel).await {
+                        Ok(session) => save(vault, id, Arc::new(session)).await,
+                        Err(error) => (Err(error.to_string()), false),
+                    }
+                },
+                move |(result, stored)| m(Accion::Autenticada(id, result, stored)),
+            );
+            return Task::batch([login, open_code_page(app)]);
+        }
+        Accion::CopiarCodigo => {
+            if let Some(info) = &app.servicios.device {
+                if !info.expired() {
+                    return iced::clipboard::write(info.code().to_owned());
+                }
+            }
+        }
+        Accion::AbrirMicrosoft => return open_code_page(app),
+        Accion::PaginaAbierta(id, Err(error))
+            if id == app.servicios.auth_id && app.servicios.auth_busy =>
+        {
+            app.servicios.auth_error = Some(error);
+        }
         Accion::Renovar => {
             if !app.servicios.auth_busy
                 && app
@@ -318,6 +416,8 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
         Accion::Autenticada(id, result, stored) if id == app.servicios.auth_id => {
             app.servicios.auth_busy = false;
             app.servicios.auth_cancel = None;
+            app.servicios.device = None;
+            app.servicios.browser_login = false;
             match result {
                 Ok(session) => {
                     app.servicios.remembered = stored;
@@ -431,32 +531,93 @@ pub fn login_view(app: &App) -> Element<'_, Mensaje> {
             .font(fuentes::DISPLAY)
             .size(texto::DISPLAY.0)
             .color(p.text),
-        text("Confirma tu cuenta en el navegador. Al terminar volverás automáticamente a Ícaro.")
-            .color(p.text_muted),
-        text(if app.servicios.auth_busy {
-            "Esperando la autorización y comprobando tu perfil de Minecraft…"
+        text(if app.servicios.browser_login {
+            "Completa el inicio de sesión en el navegador. Al terminar volverás automáticamente a Ícaro."
         } else {
-            "Inicia sesión para conectar tu cuenta de Minecraft Java."
+            "Vincula tu cuenta en Microsoft con el código de Ícaro. Tu contraseña se introduce en el navegador."
         })
-        .color(p.text),
-        componentes::boton(
-            p,
-            "Abrir Microsoft",
-            Variante::Primario,
-            (!app.servicios.auth_busy).then(|| m(Accion::Login))
-        ),
-        componentes::boton(
-            p,
-            "Cancelar",
-            Variante::Fantasma,
-            Some(m(Accion::CancelarLogin))
-        ),
+            .color(p.text_muted),
     ]
-    .spacing(espacio::S4);
+    .spacing(espacio::S3);
+    if let Some(info) = &app.servicios.device {
+        let expired = info.expired();
+        let seconds = info.seconds_left();
+        content = content
+            .push(
+                text("1  Abre la página de Microsoft")
+                    .font(fuentes::TITULO)
+                    .color(p.text),
+            )
+            .push(text(info.page()).color(p.text_muted))
+            .push(componentes::boton(
+                p,
+                "Abrir página",
+                Variante::Secundario,
+                (!expired).then(|| m(Accion::AbrirMicrosoft)),
+            ))
+            .push(
+                text("2  Escribe este código")
+                    .font(fuentes::TITULO)
+                    .color(p.text),
+            )
+            .push(cuenta::codigo(p, info.code(), expired))
+            .push(
+                row![
+                    componentes::boton(
+                        p,
+                        "Copiar código",
+                        Variante::Secundario,
+                        (!expired).then(|| m(Accion::CopiarCodigo))
+                    ),
+                    text(format!("Vence en {}:{:02}", seconds / 60, seconds % 60))
+                        .font(fuentes::MONO)
+                        .color(p.text_muted)
+                ]
+                .spacing(espacio::S3)
+                .align_y(iced::Alignment::Center),
+            )
+            .push(
+                text("3  Autoriza a Ícaro. La cuenta se confirmará automáticamente.")
+                    .color(p.text_muted),
+            );
+    } else if app.servicios.auth_busy {
+        content = content.push(
+            text(if app.servicios.browser_login {
+                "Esperando la autorización y comprobando tu perfil de Minecraft…"
+            } else {
+                "Solicitando tu código a Microsoft…"
+            })
+            .color(p.text_muted),
+        );
+    } else {
+        content = content.push(componentes::boton(
+            p,
+            "Pedir código",
+            Variante::Primario,
+            Some(m(Accion::Login)),
+        ));
+    }
     if let Some(error) = &app.servicios.auth_error {
         content = content.push(text(error).color(p.warning));
     }
-    crate::pantallas::con_lamina(p, icaro_ui::laminas::Lamina::Hermes, content.into())
+    content = content
+        .push(componentes::boton(
+            p,
+            "Usar inicio automático en el navegador",
+            Variante::Fantasma,
+            (!app.servicios.browser_login).then(|| m(Accion::LoginBrowser)),
+        ))
+        .push(componentes::boton(
+            p,
+            "Cancelar",
+            Variante::Fantasma,
+            Some(m(Accion::CancelarLogin)),
+        ));
+    crate::pantallas::con_lamina(
+        p,
+        icaro_ui::laminas::Lamina::Hermes,
+        iced::widget::scrollable(content).into(),
+    )
 }
 
 pub fn account_view(app: &App) -> Element<'_, Mensaje> {

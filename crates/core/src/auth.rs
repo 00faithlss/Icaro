@@ -16,6 +16,9 @@ use tokio::{
 pub use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
+mod device;
+pub use device::{begin_device, complete_device, open_device_page, DeviceGrant, DeviceInfo};
+
 pub const CLIENT_ID: &str = "dcf91e3f-eb41-4373-917f-3c22ef526059";
 const AUTHORIZE: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const TOKEN: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
@@ -35,6 +38,8 @@ pub enum Error {
     Setup,
     #[error("No se pudo abrir el navegador del sistema.")]
     Browser,
+    #[error("Microsoft rechazó la configuración del cliente público. Revisa «Permitir flujos de cliente público» y el Client ID de Ícaro en Azure.")]
+    PublicClient,
     #[error("Microsoft rechazó la autorización. Vuelve a iniciar sesión.")]
     Denied,
     #[error("La respuesta de autenticación no corresponde a este intento.")]

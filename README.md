@@ -64,6 +64,7 @@ Las casillas marcadas corresponden a funciones implementadas en el alcance indic
 - [x] Grabados de mayor resolución, caché de imágenes, visor y mejoras de contraste y desplazamiento.
 - [x] Búsqueda global sobre los datos de demostración y avisos temporales.
 - [x] Flujo de login con PKCE, retorno local, intercambio con Xbox y Minecraft y almacenamiento de una sesión en el sistema; probado con una cuenta real en Windows.
+- [x] Inicio por código de vinculación de Microsoft en la página del launcher, con copia, vencimiento y cancelación; solicitud de código real probada, vinculación completa pendiente de prueba manual.
 - [x] Catálogo público de Modrinth: búsqueda, paginación, fichas y consulta de versiones compatibles.
 
 ### Primera versión funcional

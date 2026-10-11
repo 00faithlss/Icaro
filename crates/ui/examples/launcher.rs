@@ -3036,12 +3036,16 @@ fn main() -> iced::Result {
             if !app.servicios.demo && app.servicios.session.is_some() {
                 subs.push(iced::time::every(std::time::Duration::from_secs(30)).map(|_| Mensaje::Servicio(servicios::Accion::Renovar)));
             }
+            if !app.servicios.demo && app.pantalla == Some(pantallas::Pantalla::Codigo) {
+                subs.push(iced::time::every(std::time::Duration::from_secs(1)).map(Mensaje::Cuadro));
+            }
             if let Some(aviso) = &app.aviso {
                 let ms = if !app.reducir && aviso.saliendo(app.ahora) { 16 } else { 60 };
                 subs.push(iced::time::every(std::time::Duration::from_millis(ms)).map(Mensaje::AvisoTic));
             }
             if !app.instalando.is_empty()
-                || matches!(app.pantalla, Some(pantallas::Pantalla::Codigo | pantallas::Pantalla::Integridad))
+                || app.pantalla == Some(pantallas::Pantalla::Integridad)
+                || (app.servicios.demo && app.pantalla == Some(pantallas::Pantalla::Codigo))
                 || app.red.animando(app.seccion == Seccion::Descargas)
                 || progreso(app.anim, app.ahora, MS_ENTRADA) < 1.0
                 || progreso(app.anim_menu, app.ahora, MS_MENU) < 1.0

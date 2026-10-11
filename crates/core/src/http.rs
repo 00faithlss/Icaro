@@ -40,7 +40,7 @@ pub(crate) async fn json<T: DeserializeOwned>(
     service: &'static str,
     limit: usize,
 ) -> Result<T, Error> {
-    let mut response = request.send().await.map_err(|_| Error::Network(service))?;
+    let response = request.send().await.map_err(|_| Error::Network(service))?;
     if response.status().as_u16() == 429 {
         let delay = response
             .headers()
@@ -57,6 +57,15 @@ pub(crate) async fn json<T: DeserializeOwned>(
             status: response.status().as_u16(),
         });
     }
+    body_json(response, service, limit).await
+}
+
+/// Decodifica cuerpos acotados; el llamador valida el estado antes de utilizarlos.
+pub(crate) async fn body_json<T: DeserializeOwned>(
+    mut response: reqwest::Response,
+    service: &'static str,
+    limit: usize,
+) -> Result<T, Error> {
     if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(Error::Response(service));
     }
