@@ -11,8 +11,9 @@ use icaro_core::{
 };
 use icaro_ui::{
     componentes::{self, Variante},
-    cuenta::EstadoSesion,
+    cuenta::{self, AccionSelector, CuentaSelector, EstadoSesion},
     fuentes,
+    iconos::Icono,
     shell::Seccion,
     tema::{espacio, texto},
 };
@@ -524,39 +525,58 @@ pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, M
         return window;
     }
     let p = app.modo.paleta();
-    let mut panel = column![
-        text(app.servicios.nombre("Invitado"))
-            .font(fuentes::TITULO)
-            .color(p.text),
-        componentes::boton(
-            p,
-            "Gestionar cuenta",
-            Variante::Fantasma,
-            Some(Mensaje::Ses(crate::sesion::Accion::Gestionar))
-        ),
-    ];
-    panel = if app.servicios.session.is_some() {
-        panel.push(componentes::boton(
-            p,
-            "Cerrar sesión",
-            Variante::Peligro,
-            (!app.servicios.auth_busy).then(|| m(Accion::Logout)),
-        ))
+    let gestionar = Mensaje::Ses(crate::sesion::Accion::Gestionar);
+    let activa = app.servicios.session.is_some();
+    let mut cuentas = Vec::new();
+    if activa {
+        cuentas.push(CuentaSelector {
+            estado: EstadoSesion::Activa,
+            nombre: app.servicios.nombre("Invitado").into(),
+            seleccionada: true,
+            al_pulsar: Some(gestionar.clone()),
+        });
+    }
+    cuentas.push(CuentaSelector {
+        estado: EstadoSesion::Invitado,
+        nombre: "Invitado".into(),
+        seleccionada: !activa,
+        al_pulsar: (!app.servicios.auth_busy).then(|| {
+            if activa {
+                Mensaje::Ses(crate::sesion::Accion::ElegirInvitado)
+            } else {
+                gestionar.clone()
+            }
+        }),
+    });
+    let mut acciones = vec![AccionSelector {
+        icono: Icono::Usuario,
+        etiqueta: "Gestionar cuenta y skin".into(),
+        peligro: false,
+        al_pulsar: Some(gestionar),
+    }];
+    acciones.push(if activa {
+        AccionSelector {
+            icono: Icono::Salir,
+            etiqueta: format!("Cerrar sesión de {}", app.servicios.nombre("Invitado")),
+            peligro: true,
+            al_pulsar: (!app.servicios.auth_busy)
+                .then(|| Mensaje::Ses(crate::sesion::Accion::CerrarSesion)),
+        }
     } else {
-        panel.push(componentes::boton(
-            p,
-            "Iniciar sesión",
-            Variante::Secundario,
-            (!app.servicios.auth_busy).then(|| m(Accion::Login)),
-        ))
-    };
-    let panel = panel.spacing(espacio::S3).padding(espacio::S4);
+        AccionSelector {
+            icono: Icono::Entrar,
+            etiqueta: "Iniciar sesión".into(),
+            peligro: false,
+            al_pulsar: (!app.servicios.auth_busy).then(|| m(Accion::Login)),
+        }
+    });
+    let panel = cuenta::selector_cuentas(p, cuentas, acciones);
     let outside = iced::widget::mouse_area(Space::new(Length::Fill, Length::Fill))
         .on_press(Mensaje::Ses(crate::sesion::Accion::Menu(false)));
     iced::widget::stack![
         window,
         outside,
-        container(container(panel).style(icaro_ui::estilo::marco(p)))
+        container(row![panel])
             .width(Length::Fill)
             .height(Length::Fill)
             .align_y(iced::alignment::Vertical::Bottom)

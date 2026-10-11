@@ -2,6 +2,8 @@
 
 Referencia de las pantallas de cuenta y skin del modo de demostración (`ICARO_DEMO=1`). El login conectado se describe en [inicio de sesión y catálogo](login-y-catalogo.md).
 
+El menú conectado reutiliza el diseño del ejemplo: muestra la cuenta real marcada, el modo invitado y las acciones con iconos. **Gestionar cuenta y skin** abre la pantalla de cuenta; la edición de skins sigue pendiente de integración. **Iniciar sesión** aparece solo sin una cuenta activa y **Cerrar sesión** identifica la cuenta actual. Elegir **Invitado** cierra la sesión activa. Esta primera integración recuerda una sola cuenta por equipo.
+
 ## Pantallas
 
 | Pantalla | Qué muestra |
