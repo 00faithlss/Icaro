@@ -16,6 +16,7 @@ Ejemplos de la interfaz:
 ```
 cargo run -p icaro-ui --example galeria
 cargo run -p icaro-ui --example shell
+cargo run -p icaro-ui --example launcher
 ```
 
 ## Estructura
@@ -25,6 +26,21 @@ cargo run -p icaro-ui --example shell
 | `crates/core` | Núcleo: manifiesto de versiones de Minecraft y verificación de descargas |
 | `crates/cli` | Herramienta de línea de comandos |
 | `crates/ui` | Sistema de diseño en iced: tema, tipografía, iconos y componentes |
+
+## Estados del ejemplo launcher
+
+El ejemplo `launcher` acepta variables de entorno para abrir una pantalla en un estado concreto:
+
+| Variable | Efecto |
+| --- | --- |
+| `ICARO_SECCION` | Sección inicial, de 1 a 7 |
+| `ICARO_PIEDRA` | Tema claro |
+| `ICARO_VACIO` | Todas las pantallas sin datos, para ver los estados vacíos |
+| `ICARO_AJUSTE` | Página de Ajustes (7 es Acerca de, que incluye el Gabinete) |
+| `ICARO_EDITOR` | Pestaña del editor de instancia (5 es Capturas) |
+| `ICARO_BUSCAR` | Texto de búsqueda de la tienda de mods |
+
+Las capturas del ejemplo son recortes de grabados; copiar y abrir carpeta están simulados.
 
 ## Licencia
 

@@ -1,0 +1,373 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 00faithlss
+
+//! Sesión del jugador en la maqueta: cuenta, estudio de skin, menú de cuentas
+//! y los estados que el launcher resuelve sin bloquear (invitado, cuenta
+//! vencida, código vencido y cuenta sin Minecraft).
+
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use iced::widget::{column, container, mouse_area, row, Space};
+use iced::{Element, Length, Padding, Task};
+
+use icaro_ui::cuenta::{
+    self, DatosCuenta, DatosEstudio, EstadoSesion, MensajesCuenta, MensajesEstudio, MensajesSelector,
+};
+use icaro_ui::tema::espacio;
+
+use crate::pantallas;
+use crate::{App, Mensaje};
+
+/// Duración simulada de la subida de una skin.
+const MS_SUBIDA: u128 = 1600;
+
+/// Skins guardadas de la cuenta; cada nombre genera su cabeza.
+const HISTORIAL: [&str; 5] = ["busto", "barba", "skin-a", "skin-b", "skin-c"];
+
+/// Estado de la sesión y del estudio de skin.
+pub struct Sesion {
+    pub estado: EstadoSesion,
+    /// Menú de cuentas abierto desde la barra lateral.
+    pub menu: bool,
+    /// Cuándo se abrió el menú, para la caída (Losa).
+    pub menu_desde: Option<Instant>,
+    /// Banner al intentar jugar en línea con la cuenta vencida.
+    pub banner_jugar: bool,
+    pub en_uso: usize,
+    pub elegida: usize,
+    pub modelo: usize,
+    pub capas: [bool; 4],
+    pub giro: u8,
+    pub subiendo: Option<Instant>,
+    pub textura: Option<String>,
+    pub error: Option<String>,
+    pub soltando: bool,
+}
+
+impl Sesion {
+    pub fn nueva(estado: EstadoSesion) -> Self {
+        Self {
+            estado,
+            menu: false,
+            menu_desde: None,
+            banner_jugar: false,
+            en_uso: 0,
+            elegida: 0,
+            modelo: 0,
+            capas: [true, true, false, true],
+            giro: 0,
+            subiendo: None,
+            textura: None,
+            error: None,
+            soltando: false,
+        }
+    }
+
+    /// Estado pedido con `ICARO_SESION`, para abrir la maqueta en una variante.
+    pub fn desde_entorno() -> Self {
+        let mut s = Self::nueva(match std::env::var("ICARO_SESION").ok().as_deref() {
+            Some("invitado") => EstadoSesion::Invitado,
+            Some("vencida") => EstadoSesion::Vencida,
+            Some("sinjuego") => EstadoSesion::SinJuego,
+            _ => EstadoSesion::Activa,
+        });
+        s.menu = std::env::var_os("ICARO_MENU_CUENTA").is_some();
+        s.banner_jugar = std::env::var_os("ICARO_BANNER_JUGAR").is_some();
+        s.giro = std::env::var("ICARO_GIRO").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        s.modelo = usize::from(std::env::var("ICARO_MODELO").is_ok());
+        if let Ok(c) = std::env::var("ICARO_CAPAS") {
+            for (i, ch) in c.chars().take(4).enumerate() {
+                s.capas[i] = ch == '1';
+            }
+        }
+        s.subiendo = std::env::var_os("ICARO_SUBIENDO").is_some().then(Instant::now);
+        s
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Accion {
+    /// Abre o cierra el menú de cuentas.
+    Menu(bool),
+    ElegirActiva,
+    ElegirVencida,
+    ElegirInvitado,
+    AgregarCuenta,
+    Gestionar,
+    CerrarSesion,
+    IniciarSesion,
+    VolverAEntrar,
+    Comprar,
+    JugarComoInvitado,
+    Jugar,
+    AbrirEstudio,
+    VolverCuenta,
+    ElegirSkin(usize),
+    UsarDeNuevo,
+    Modelo(usize),
+    Capa(usize, bool),
+    Girar(i32),
+    Cargar,
+    Soltando(bool),
+    Soltar(PathBuf),
+    Aplicar,
+}
+
+fn m(a: Accion) -> Mensaje {
+    Mensaje::Ses(a)
+}
+
+/// Comprueba que el archivo sea una .png de 64 × 64 leyendo solo su cabecera.
+fn validar_png(ruta: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let nombre = ruta
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "skin.png".into());
+    if !ruta.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+        return Err("Solo se aceptan archivos .png.".into());
+    }
+    let mut cab = [0u8; 24];
+    std::fs::File::open(ruta)
+        .and_then(|mut f| f.read_exact(&mut cab))
+        .map_err(|_| "No se pudo leer el archivo.".to_owned())?;
+    if cab[..8] != [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a] || &cab[12..16] != b"IHDR" {
+        return Err("El archivo no es una imagen PNG válida.".into());
+    }
+    let ancho = u32::from_be_bytes([cab[16], cab[17], cab[18], cab[19]]);
+    let alto = u32::from_be_bytes([cab[20], cab[21], cab[22], cab[23]]);
+    if (ancho, alto) != (64, 64) {
+        return Err(format!("La skin debe medir 64 × 64 píxeles y esta mide {ancho} × {alto}."));
+    }
+    Ok(nombre)
+}
+
+pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
+    let pant = |app: &mut App, p| {
+        app.pantalla = Some(p);
+        app.sesion.menu = false;
+        crate::arrancar(app);
+    };
+    match a {
+        Accion::Menu(v) => {
+            app.sesion.menu = v;
+            if v && !app.reducir {
+                app.sesion.menu_desde = Some(Instant::now());
+                app.ahora = Instant::now();
+            }
+        }
+        Accion::ElegirActiva => {
+            app.sesion.estado = EstadoSesion::Activa;
+            app.sesion.menu = false;
+            app.sesion.banner_jugar = false;
+        }
+        Accion::ElegirVencida => {
+            // Una cuenta vencida abre el código directamente.
+            app.sesion.estado = EstadoSesion::Vencida;
+            app.codigo_inicio = Instant::now();
+            app.codigo_fase = pantallas::FaseCodigo::Esperando;
+            pant(app, pantallas::Pantalla::Codigo);
+        }
+        Accion::ElegirInvitado | Accion::JugarComoInvitado => {
+            app.sesion.estado = EstadoSesion::Invitado;
+            app.sesion.menu = false;
+            app.sesion.banner_jugar = false;
+            app.pantalla = None;
+            app.avisar("Sigues como invitado. Puedes iniciar sesión luego desde la cuenta.".into());
+            crate::arrancar(app);
+        }
+        Accion::AgregarCuenta | Accion::IniciarSesion | Accion::VolverAEntrar => {
+            app.codigo_inicio = Instant::now();
+            app.codigo_fase = pantallas::FaseCodigo::Esperando;
+            pant(app, pantallas::Pantalla::Codigo);
+        }
+        Accion::Gestionar => pant(app, pantallas::Pantalla::Cuenta),
+        Accion::CerrarSesion => {
+            let nombre = app.sesion.estado.nombre();
+            app.sesion.estado = EstadoSesion::Invitado;
+            app.sesion.menu = false;
+            app.pantalla = Some(pantallas::Pantalla::Cuenta);
+            app.avisar(format!("Cerraste la sesión de {nombre}. Sigues como invitado."));
+        }
+        Accion::Comprar => {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", "", "https://www.minecraft.net/store/minecraft-java-bedrock-edition-pc"])
+                .spawn();
+        }
+        Accion::Jugar => {
+            if matches!(app.sesion.estado, EstadoSesion::Vencida | EstadoSesion::CodigoVencido) {
+                app.sesion.banner_jugar = true;
+            }
+        }
+        Accion::AbrirEstudio => {
+            app.sesion.giro = 0;
+            pant(app, pantallas::Pantalla::Estudio);
+        }
+        Accion::VolverCuenta => pant(app, pantallas::Pantalla::Cuenta),
+        Accion::ElegirSkin(i) => app.sesion.elegida = i,
+        Accion::UsarDeNuevo => {
+            app.sesion.en_uso = app.sesion.elegida;
+            app.avisar("Volviste a usar esa skin en tu cuenta.".into());
+        }
+        Accion::Modelo(i) => app.sesion.modelo = i,
+        Accion::Capa(i, v) => {
+            if let Some(c) = app.sesion.capas.get_mut(i) {
+                *c = v;
+            }
+        }
+        Accion::Girar(n) => app.sesion.giro = (i32::from(app.sesion.giro) + n).rem_euclid(8) as u8,
+        Accion::Cargar => {
+            // La maqueta no abre un selector de archivos: simula una skin válida.
+            app.sesion.textura = Some("mi-skin.png".into());
+            app.sesion.error = None;
+        }
+        Accion::Soltando(v) => app.sesion.soltando = v,
+        Accion::Soltar(ruta) => {
+            app.sesion.soltando = false;
+            match validar_png(&ruta) {
+                Ok(nombre) => {
+                    app.sesion.textura = Some(nombre);
+                    app.sesion.error = None;
+                }
+                Err(e) => app.sesion.error = Some(e),
+            }
+        }
+        Accion::Aplicar => {
+            if app.sesion.subiendo.is_none() {
+                app.sesion.subiendo = Some(Instant::now());
+                app.ahora = Instant::now();
+            }
+        }
+    }
+    Task::none()
+}
+
+/// Termina la subida simulada cuando pasa su tiempo.
+pub fn avanzar(app: &mut App) {
+    if let Some(inicio) = app.sesion.subiendo {
+        if app.ahora.saturating_duration_since(inicio).as_millis() >= MS_SUBIDA {
+            app.sesion.subiendo = None;
+            app.sesion.textura = None;
+            app.avisar(format!("Skin aplicada a {}.", app.sesion.estado.nombre()));
+        }
+    }
+}
+
+/// Hay algo animándose que pide cuadros.
+pub fn animando(app: &App) -> bool {
+    app.sesion.subiendo.is_some() || (app.sesion.menu && progreso_menu(app) < 1.0)
+}
+
+fn progreso_menu(app: &App) -> f32 {
+    app.sesion.menu_desde.map_or(1.0, |i| {
+        (app.ahora.saturating_duration_since(i).as_millis() as f32 / icaro_ui::tema::duracion::LOSA as f32).clamp(0.0, 1.0)
+    })
+}
+
+pub fn vista_cuenta(app: &App) -> Element<'_, Mensaje> {
+    let p = app.modo.paleta();
+    let s = &app.sesion;
+    let nombre = s.estado.nombre();
+    let correo = if s.estado == EstadoSesion::Activa { "mineral7@outlook.com" } else { "forjador@outlook.com" };
+    cuenta::pantalla_cuenta(
+        p,
+        DatosCuenta {
+            estado: s.estado,
+            nombre,
+            correo,
+            proximo_cambio: "22-10-2026",
+            historial: &HISTORIAL,
+            en_uso: s.en_uso,
+            elegida: s.elegida,
+        },
+        MensajesCuenta {
+            abrir_estudio: m(Accion::AbrirEstudio),
+            elegir_skin: Box::new(|i| m(Accion::ElegirSkin(i))),
+            usar_de_nuevo: m(Accion::UsarDeNuevo),
+            cerrar_sesion: m(Accion::CerrarSesion),
+            iniciar_sesion: m(Accion::IniciarSesion),
+            volver_a_entrar: m(Accion::VolverAEntrar),
+            comprar: m(Accion::Comprar),
+            jugar_invitado: m(Accion::JugarComoInvitado),
+        },
+    )
+}
+
+pub fn vista_estudio(app: &App) -> Element<'_, Mensaje> {
+    let p = app.modo.paleta();
+    let s = &app.sesion;
+    let subiendo = s
+        .subiendo
+        .map(|i| app.ahora.saturating_duration_since(i).as_millis() as u64);
+    cuenta::estudio_skin(
+        p,
+        DatosEstudio {
+            modelo: s.modelo,
+            capas: s.capas,
+            giro: s.giro,
+            subiendo,
+            textura: s.textura.as_deref(),
+            error: s.error.as_deref(),
+            soltando: s.soltando,
+        },
+        MensajesEstudio {
+            volver: m(Accion::VolverCuenta),
+            modelo: |i| m(Accion::Modelo(i)),
+            capa: |i, v| m(Accion::Capa(i, v)),
+            girar: |n| m(Accion::Girar(n)),
+            cargar: m(Accion::Cargar),
+            aplicar: m(Accion::Aplicar),
+        },
+    )
+}
+
+/// Menú de cuentas anclado al bloque de la barra lateral, con un fondo
+/// transparente que lo cierra al pulsar fuera.
+pub fn con_selector<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+    if !app.sesion.menu {
+        return ventana;
+    }
+    let p = app.modo.paleta();
+    let menu = cuenta::selector_cuenta(
+        p,
+        app.sesion.estado,
+        MensajesSelector {
+            activa: m(Accion::ElegirActiva),
+            vencida: m(Accion::ElegirVencida),
+            invitado: m(Accion::ElegirInvitado),
+            agregar: m(Accion::AgregarCuenta),
+            gestionar: m(Accion::Gestionar),
+            cerrar_sesion: m(Accion::CerrarSesion),
+        },
+    );
+    let fuera = mouse_area(Space::new(Length::Fill, Length::Fill)).on_press(m(Accion::Menu(false)));
+    iced::widget::stack![
+        ventana,
+        fuera,
+        container(row![menu])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_y(iced::alignment::Vertical::Bottom)
+            .padding(Padding { top: 0.0, right: 0.0, bottom: 72.0 + icaro_ui::movimiento::losa(progreso_menu(app)), left: espacio::S2 }),
+    ]
+    .into()
+}
+
+/// Banner sobre la barra de juego cuando la cuenta venció y se intenta jugar.
+pub fn banner_jugar(app: &App) -> Option<Element<'_, Mensaje>> {
+    if !app.sesion.banner_jugar || !matches!(app.sesion.estado, EstadoSesion::Vencida | EstadoSesion::CodigoVencido) {
+        return None;
+    }
+    let p = app.modo.paleta();
+    Some(
+        column![cuenta::banner_vencida(
+            p,
+            m(Accion::VolverAEntrar),
+            "No se puede jugar en línea",
+            "Tu cuenta venció. Vuelve a entrar para jugar en línea, o juega sin conexión.",
+        )]
+        .padding(Padding::from([espacio::S3, espacio::S12]))
+        .into(),
+    )
+}
