@@ -6,13 +6,42 @@
 use crate::http;
 pub use crate::http::Error;
 use reqwest::{Client, Url};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const API: &str = "https://api.modrinth.com/v2/";
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
 pub const PAGE_SIZE: u32 = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Order {
+    #[default]
+    Relevance,
+    Downloads,
+    Updated,
+    Newest,
+}
+impl Order {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Relevance => "relevance",
+            Self::Downloads => "downloads",
+            Self::Updated => "updated",
+            Self::Newest => "newest",
+        }
+    }
+}
+impl std::fmt::Display for Order {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Relevance => "Relevancia",
+            Self::Downloads => "Más descargados",
+            Self::Updated => "Actualizados recientemente",
+            Self::Newest => "Más recientes",
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -37,15 +66,31 @@ pub struct Search {
     pub minecraft: Option<String>,
     pub loader: Option<String>,
     pub offset: u32,
+    pub order: Order,
 }
 
 fn search_url(search: &Search) -> Url {
+    search_url_filters(search, &[], None)
+}
+
+fn search_url_filters(search: &Search, categories: &[String], environment: Option<&str>) -> Url {
     let mut facets = vec![vec![format!("project_type:{}", search.kind.as_str())]];
     if let Some(version) = &search.minecraft {
         facets.push(vec![format!("versions:{version}")]);
     }
     if let Some(loader) = &search.loader {
         facets.push(vec![format!("categories:{}", loader.to_lowercase())]);
+    }
+    if !categories.is_empty() {
+        facets.push(
+            categories
+                .iter()
+                .map(|c| format!("categories:{c}"))
+                .collect(),
+        );
+    }
+    if let Some(side) = environment {
+        facets.push(vec![format!("environment:{side}")]);
     }
     let mut url = Url::parse(API)
         .expect("URL constante")
@@ -59,7 +104,7 @@ fn search_url(search: &Search) -> Url {
         ),
         ("offset", &search.offset.to_string()),
         ("limit", &PAGE_SIZE.to_string()),
-        ("index", "relevance"),
+        ("index", search.order.as_str()),
     ]);
     url
 }
@@ -79,6 +124,12 @@ pub struct Hit {
     pub description: String,
     pub author: String,
     pub downloads: u64,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub versions: Vec<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Project {
@@ -89,6 +140,113 @@ pub struct Project {
     pub body: String,
     pub license: License,
     pub downloads: u64,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub gallery: Vec<GalleryImage>,
+    #[serde(default)]
+    pub game_versions: Vec<String>,
+    #[serde(default)]
+    pub loaders: Vec<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub published: String,
+    #[serde(default)]
+    pub updated: String,
+    #[serde(default)]
+    pub followers: u64,
+    #[serde(default)]
+    pub client_side: String,
+    #[serde(default)]
+    pub server_side: String,
+    pub issues_url: Option<String>,
+    pub source_url: Option<String>,
+    pub wiki_url: Option<String>,
+    pub discord_url: Option<String>,
+    #[serde(default)]
+    pub donation_urls: Option<Vec<Donation>>,
+    pub organization: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct GalleryImage {
+    pub url: String,
+    #[serde(default)]
+    pub raw_url: Option<String>,
+    pub featured: bool,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub ordering: i64,
+}
+impl GalleryImage {
+    /// El CDN puede publicar `url` como vista previa y `raw_url` como original.
+    pub fn original_url(&self) -> &str {
+        self.raw_url
+            .as_deref()
+            .filter(|url| supported_image(url))
+            .unwrap_or(&self.url)
+    }
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Donation {
+    pub platform: String,
+    pub url: String,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Member {
+    pub user: User,
+    pub role: String,
+    #[serde(default)]
+    pub is_owner: bool,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct User {
+    pub id: String,
+    pub username: String,
+    pub name: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Organization {
+    pub id: String,
+    pub name: String,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct GameVersion {
+    pub version: String,
+    pub version_type: String,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct Loader {
+    pub name: String,
+    pub supported_project_types: Vec<String>,
+}
+#[derive(Debug, Clone)]
+pub struct Tags {
+    pub versions: Vec<GameVersion>,
+    pub loaders: Vec<Loader>,
+}
+
+/// Solo imágenes públicas de Modrinth; sin redirecciones, credenciales ni URLs locales.
+fn image_url(value: &str) -> Result<Url, Error> {
+    let url = Url::parse(value).map_err(|_| Error::Response("la imagen"))?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("cdn.modrinth.com")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !(url.path().starts_with("/data/") || url.path().starts_with("/user/"))
+    {
+        return Err(Error::Response("la imagen"));
+    }
+    Ok(url)
+}
+pub fn supported_image(value: &str) -> bool {
+    image_url(value).is_ok()
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct License {
@@ -106,6 +264,11 @@ pub struct Version {
     pub loaders: Vec<String>,
     pub files: Vec<File>,
     pub dependencies: Vec<Dependency>,
+    pub changelog: Option<String>,
+    #[serde(default)]
+    pub date_published: String,
+    #[serde(default)]
+    pub downloads: u64,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct File {
@@ -119,11 +282,12 @@ pub struct File {
 pub struct Hashes {
     pub sha512: String,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dependency {
     pub project_id: Option<String>,
     pub version_id: Option<String>,
     pub dependency_type: String,
+    pub file_name: Option<String>,
 }
 
 fn project_url(id: &str) -> Result<Url, Error> {
@@ -147,6 +311,28 @@ pub struct Catalog {
     cooldown: Arc<Mutex<Option<Instant>>>,
 }
 impl Catalog {
+    pub async fn download_mod(&self, file: &File) -> Result<Vec<u8>, Error> {
+        let url = image_url(&file.url)?;
+        if !url.path().starts_with("/data/") {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        if file.size == 0 || file.size > 128 * 1024 * 1024 {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| Error::Network("el archivo del mod"))?;
+        if !response.status().is_success() {
+            return Err(Error::Status {
+                service: "el archivo del mod",
+                status: response.status().as_u16(),
+            });
+        }
+        http::body_bytes(response, "el archivo del mod", file.size as usize).await
+    }
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             client: http::client()?,
@@ -182,8 +368,85 @@ impl Catalog {
         }
         self.json(self.client.get(search_url(search))).await
     }
+
+    /// Filtros de TiendaMods; se aplican antes de paginar los resultados.
+    pub async fn search_filtered(
+        &self,
+        search: &Search,
+        categories: &[String],
+        environment: Option<&str>,
+    ) -> Result<Results, Error> {
+        if search.query.len() > 4096 || categories.len() > 32 {
+            return Err(Error::Response("Modrinth"));
+        }
+        self.json(
+            self.client
+                .get(search_url_filters(search, categories, environment)),
+        )
+        .await
+    }
+    pub async fn tags(&self) -> Result<Tags, Error> {
+        let base = Url::parse(API).expect("URL constante");
+        let versions = self
+            .json(self.client.get(base.join("tag/game_version").unwrap()))
+            .await?;
+        let loaders = self
+            .json(self.client.get(base.join("tag/loader").unwrap()))
+            .await?;
+        Ok(Tags { versions, loaders })
+    }
+    pub async fn image(&self, value: &str) -> Result<Vec<u8>, Error> {
+        self.image_with_limit(value, 4 * 1024 * 1024).await
+    }
+    /// Imagen original abierta expresamente en el visor, fuera de la caché de miniaturas.
+    pub async fn gallery_image(&self, value: &str) -> Result<Vec<u8>, Error> {
+        self.image_with_limit(value, 16 * 1024 * 1024).await
+    }
+    async fn image_with_limit(&self, value: &str, limit: usize) -> Result<Vec<u8>, Error> {
+        let response = self
+            .client
+            .get(image_url(value)?)
+            .send()
+            .await
+            .map_err(|_| Error::Network("la imagen"))?;
+        if !response.status().is_success() {
+            return Err(Error::Status {
+                service: "la imagen",
+                status: response.status().as_u16(),
+            });
+        }
+        http::body_bytes(response, "la imagen", limit).await
+    }
     pub async fn project(&self, id: &str) -> Result<Project, Error> {
-        self.json(self.client.get(project_url(id)?)).await
+        let mut project: Project = self.json(self.client.get(project_url(id)?)).await?;
+        project.gallery.sort_by(|a, b| {
+            a.ordering
+                .cmp(&b.ordering)
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        Ok(project)
+    }
+    pub async fn members(&self, id: &str) -> Result<Vec<Member>, Error> {
+        let mut url = project_url(id)?;
+        url.set_path(&format!("{}/members", url.path()));
+        let mut members: Vec<Member> = self.json(self.client.get(url)).await?;
+        // v2 identifica al propietario mediante el rol; otras respuestas incluyen is_owner.
+        for member in &mut members {
+            member.is_owner |= member.role.eq_ignore_ascii_case("owner");
+        }
+        members.sort_by_key(|m| !m.is_owner);
+        Ok(members)
+    }
+    pub async fn version(&self, id: &str) -> Result<Version, Error> {
+        let mut url = project_url(id)?;
+        url.set_path(&format!("/v2/version/{id}"));
+        self.json(self.client.get(url)).await
+    }
+    pub async fn organization(&self, id: &str) -> Result<Organization, Error> {
+        let mut url = project_url(id)?;
+        // Las organizaciones se consultan en v3; la ficha v2 conserva su ID.
+        url.set_path(&format!("/v3/organization/{id}"));
+        self.json(self.client.get(url)).await
     }
     pub async fn versions(
         &self,
@@ -193,6 +456,8 @@ impl Catalog {
     ) -> Result<Vec<Version>, Error> {
         let mut url = project_url(id)?;
         url.set_path(&format!("{}/version", url.path()));
+        url.query_pairs_mut()
+            .append_pair("include_changelog", "false");
         if let Some(mc) = minecraft {
             url.query_pairs_mut()
                 .append_pair("game_versions", &serde_json::json!([mc]).to_string());
@@ -204,7 +469,7 @@ impl Catalog {
             );
         }
         let versions: Vec<Version> = self.json(self.client.get(url)).await?;
-        Ok(versions
+        let mut versions: Vec<_> = versions
             .into_iter()
             .filter(|v| {
                 minecraft.is_none_or(|mc| v.game_versions.iter().any(|x| x == mc))
@@ -212,8 +477,26 @@ impl Catalog {
                         v.loaders.iter().any(|x| x.eq_ignore_ascii_case(loader))
                     })
             })
-            .collect())
+            .collect();
+        versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+        Ok(versions)
     }
+}
+
+pub async fn open_link(value: &str) -> Result<(), Error> {
+    let url = Url::parse(value).map_err(|_| Error::Response("el enlace"))?;
+    if !matches!(url.scheme(), "https" | "http")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(Error::Response("el enlace"));
+    }
+    tokio::task::spawn_blocking(move || {
+        webbrowser::open(url.as_str()).map_err(|_| Error::Network("el navegador"))
+    })
+    .await
+    .map_err(|_| Error::Network("el navegador"))?
 }
 
 pub async fn open_project(id: &str) -> Result<(), Error> {
@@ -229,6 +512,53 @@ pub async fn open_project(id: &str) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gallery_uses_the_raw_image_and_supports_responses_without_it() {
+        let mut image: GalleryImage = serde_json::from_value(serde_json::json!({
+            "url":"https://cdn.modrinth.com/data/pack/images/preview_350.webp",
+            "raw_url":"https://cdn.modrinth.com/data/pack/images/original.png",
+            "featured":false
+        }))
+        .unwrap();
+        assert_eq!(image.original_url(), image.raw_url.as_deref().unwrap());
+        for raw in [
+            None,
+            Some(""),
+            Some("https://localhost/private.png"),
+            Some("https://foreign.example/image.png"),
+            Some("file:///C:/secret.png"),
+        ] {
+            image.raw_url = raw.map(str::to_owned);
+            assert_eq!(image.original_url(), image.url);
+        }
+        let legacy: GalleryImage = serde_json::from_value(serde_json::json!({
+            "url":"https://cdn.modrinth.com/data/pack/images/legacy.png", "featured":false
+        }))
+        .unwrap();
+        assert_eq!(legacy.original_url(), legacy.url);
+    }
+    #[test]
+    fn project_media_cannot_fetch_local_or_foreign_resources() {
+        assert!(supported_image(
+            "https://cdn.modrinth.com/user/creator/avatar.png"
+        ));
+        assert!(supported_image(
+            "https://cdn.modrinth.com/data/abc/icon.png"
+        ));
+        for url in [
+            "http://cdn.modrinth.com/data/icon.png",
+            "https://localhost/data/icon.png",
+            "https://127.0.0.1/data/icon.png",
+            "https://cdn.modrinth.com.attacker.example/data/icon.png",
+            "https://cdn.modrinth.com@attacker.example/data/icon.png",
+            "https://name:secret@cdn.modrinth.com/data/icon.png",
+            "https://cdn.modrinth.com:8443/data/icon.png",
+            "https://cdn.modrinth.com/data/icon.png?token=PRIVATE",
+            "file:///C:/secret.png",
+        ] {
+            assert!(!supported_image(url));
+        }
+    }
     #[tokio::test]
     async fn cooldown_blocks_queries_before_a_network_request() {
         let catalog = Catalog::new().unwrap();
@@ -239,6 +569,7 @@ mod tests {
             minecraft: None,
             loader: None,
             offset: 0,
+            order: Order::Relevance,
         };
         assert!(
             matches!(catalog.clone().search(&search).await, Err(Error::RateLimited(seconds)) if (1..=31).contains(&seconds))
@@ -252,11 +583,13 @@ mod tests {
             minecraft: Some("1.21.4".into()),
             loader: Some("Fabric".into()),
             offset: 20,
+            order: Order::Downloads,
         };
         let url = search_url(&search);
         let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(pairs["query"], "sodium & iris");
         assert_eq!(pairs["offset"], "20");
+        assert_eq!(pairs["index"], "downloads");
         let facets: serde_json::Value = serde_json::from_str(&pairs["facets"]).unwrap();
         assert_eq!(
             facets,
@@ -267,6 +600,24 @@ mod tests {
             ])
         );
         assert!(!url.as_str().contains("token"));
+        let filtered = search_url_filters(
+            &search,
+            &["optimization".into(), "utility".into()],
+            Some("client_only"),
+        );
+        let pairs: std::collections::HashMap<_, _> = filtered.query_pairs().into_owned().collect();
+        let facets: serde_json::Value = serde_json::from_str(&pairs["facets"]).unwrap();
+        assert_eq!(
+            facets,
+            serde_json::json!([
+                ["project_type:mod"],
+                ["versions:1.21.4"],
+                ["categories:fabric"],
+                ["categories:optimization", "categories:utility"],
+                ["environment:client_only"]
+            ])
+        );
+        assert_eq!(pairs["offset"], "20");
     }
     #[test]
     fn rejects_paths_hosts_and_query_injection_in_ids() {

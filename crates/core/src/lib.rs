@@ -6,5 +6,8 @@
 pub mod auth;
 mod http;
 pub mod manifest;
+pub mod instancias;
+pub mod exportar;
 pub mod modrinth;
+pub mod mods;
 pub mod vault;

@@ -22,6 +22,29 @@ pub enum Variante {
     Peligro,
 }
 
+/// Radio rombo del sistema de diseño (SelectorLoader y filtros de TiendaMods).
+pub fn rombo<'a, M: 'a>(p: Paleta, elegido: bool, deshabilitado: bool) -> Element<'a, M> {
+    let interior = if elegido {
+        "<path d='M12 8L16 12L12 16L8 12Z'/>"
+    } else {
+        ""
+    };
+    let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2L22 12L12 22L2 12Z' fill='none' stroke='currentColor' stroke-width='2'/>{interior}</svg>");
+    iced::widget::svg(iced::widget::svg::Handle::from_memory(svg.into_bytes()))
+        .width(24)
+        .height(24)
+        .style(move |_, _| iced::widget::svg::Style {
+            color: Some(if deshabilitado {
+                p.text_disabled
+            } else if elegido {
+                p.text
+            } else {
+                p.text_muted
+            }),
+        })
+        .into()
+}
+
 /// Botón de texto de alto `control`. Sin mensaje queda deshabilitado.
 pub fn boton<'a, M: Clone + 'a>(
     p: Paleta,
@@ -88,12 +111,14 @@ pub fn boton_con_icono<'a, M: Clone + 'a>(
     compacto: bool,
 ) -> Element<'a, M> {
     let deshabilitado = al_pulsar.is_none();
-    let contenido = row![
-        crate::iconos::icono_texto(glifo, Tam::Base),
-        text(etiqueta.to_uppercase())
-            .font(fuentes::ETIQUETA)
-            .size(texto::LABEL.0),
-    ]
+    let rotulo = text(etiqueta.to_uppercase())
+        .font(fuentes::ETIQUETA)
+        .size(texto::LABEL.0);
+    let contenido = if glifo == Icono::Adelante {
+        row![rotulo, crate::iconos::icono_texto(glifo, Tam::Base)]
+    } else {
+        row![crate::iconos::icono_texto(glifo, Tam::Base), rotulo]
+    }
     .spacing(espacio::S1)
     .align_y(iced::alignment::Vertical::Center);
     let b = button(
@@ -101,7 +126,11 @@ pub fn boton_con_icono<'a, M: Clone + 'a>(
             .height(Length::Fill)
             .align_y(iced::alignment::Vertical::Center),
     )
-    .height(if compacto { medida::CONTROL_SM } else { medida::CONTROL })
+    .height(if compacto {
+        medida::CONTROL_SM
+    } else {
+        medida::CONTROL
+    })
     .padding(Padding {
         top: 0.0,
         right: if compacto { espacio::S3 } else { espacio::S4 },
@@ -176,6 +205,75 @@ pub fn campo<'a, M: Clone + 'a>(
         .padding(Padding::from([10.0, espacio::S4]))
         .style(estilo::campo(p))
         .into()
+}
+
+/// Campo con icono Pixelarticons, como en SelectorVersion y TiendaMods.
+pub fn campo_con_icono<'a, M: Clone + 'a>(
+    p: Paleta,
+    glifo: Icono,
+    marcador: &str,
+    valor: &str,
+    al_cambiar: impl Fn(String) -> M + 'a,
+) -> Element<'a, M> {
+    let entrada = text_input(marcador, valor)
+        .on_input(al_cambiar)
+        .font(fuentes::CUERPO)
+        .size(texto::BODY.0)
+        .padding(Padding::from([8., 0.]))
+        .style(move |theme, status| {
+            let mut s = estilo::campo(p)(theme, status);
+            s.border.width = 0.;
+            s
+        });
+    container(
+        row![
+            crate::iconos::icono(glifo, Tam::Base, p.text_muted),
+            entrada
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center),
+    )
+    .padding(Padding::from([2., 12.]))
+    .style(move |_| iced::widget::container::Style {
+        background: Some(iced::Background::Color(p.surface_sunken)),
+        border: iced::Border {
+            color: p.border_strong,
+            width: 2.,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// El selector angosto mantiene las mismas pestañas, con el relleno compacto.
+pub fn segmentado_compacto<'a, M: Clone + 'a>(
+    p: Paleta,
+    opciones: &[&str],
+    activa: usize,
+    al_elegir: impl Fn(usize) -> M,
+) -> Element<'a, M> {
+    container(row(opciones
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            button(
+                container(
+                    text(o.to_uppercase())
+                        .font(fuentes::ETIQUETA)
+                        .size(texto::LABEL.0),
+                )
+                .center_y(Length::Fill),
+            )
+            .height(28)
+            .padding(Padding::from([0., 8.]))
+            .on_press(al_elegir(i))
+            .style(estilo::segmento(p, i == activa))
+            .into()
+        })
+        .collect::<Vec<_>>()))
+    .style(estilo::marco(p))
+    .into()
 }
 
 /// Etiqueta de control en mayúsculas (`label`).
@@ -307,6 +405,7 @@ pub fn casilla<'a, M: 'a>(
     al_cambiar: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M> {
     checkbox(etiqueta, marcada)
+        .icon(icono_casilla())
         .on_toggle(al_cambiar)
         .font(fuentes::CUERPO)
         .size(20.0)
@@ -314,6 +413,16 @@ pub fn casilla<'a, M: 'a>(
         .spacing(espacio::S2)
         .style(estilo::casilla(p))
         .into()
+}
+
+pub fn icono_casilla() -> iced::widget::checkbox::Icon<iced::Font> {
+    iced::widget::checkbox::Icon {
+        font: fuentes::MONO,
+        code_point: '■',
+        size: Some(iced::Pixels(12.)),
+        line_height: iced::widget::text::LineHeight::Relative(1.),
+        shaping: iced::widget::text::Shaping::Advanced,
+    }
 }
 
 /// Interruptor cuadrado: la perilla pasa de un lado al otro de la pista.
@@ -406,12 +515,12 @@ pub fn pestanas<'a, M: Clone + 'a>(
     al_elegir: impl Fn(usize) -> M,
 ) -> Element<'a, M> {
     let regla = |alto: f32, color: iced::Color| {
-        container(Space::new(Length::Fill, Length::Fixed(alto))).style(
-            move |_: &iced::Theme| container::Style {
+        container(Space::new(Length::Fill, Length::Fixed(alto))).style(move |_: &iced::Theme| {
+            container::Style {
                 background: Some(iced::Background::Color(color)),
                 ..Default::default()
-            },
-        )
+            }
+        })
     };
     let mut fila = row![].spacing(espacio::S6);
     for (i, (nombre, conteo)) in pestanas.iter().enumerate() {
@@ -518,9 +627,7 @@ pub fn aviso<'a, M: 'a>(p: Paleta, estado: Estado, mensaje: &str) -> Element<'a,
     container(
         row![
             crate::iconos::icono(glifo, crate::iconos::Tam::Base, tinta),
-            text(mensaje.to_owned())
-                .size(texto::BODY.0)
-                .color(p.text),
+            text(mensaje.to_owned()).size(texto::BODY.0).color(p.text),
         ]
         .spacing(espacio::S3)
         .align_y(iced::Alignment::Center),
@@ -555,8 +662,11 @@ pub fn senal<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
     for i in 0..4 {
         let color = if i < nivel { p.text } else { p.border_strong };
         fila = fila.push(
-            container(Space::new(Length::Fixed(4.0), Length::Fixed(4.0 + 4.0 * i as f32)))
-                .style(estilo::bloque(color)),
+            container(Space::new(
+                Length::Fixed(4.0),
+                Length::Fixed(4.0 + 4.0 * i as f32),
+            ))
+            .style(estilo::bloque(color)),
         );
     }
     fila.into()
@@ -670,11 +780,15 @@ pub fn deslizador_memoria<'a, M: Clone + 'a>(
     .style(estilo::marco(p))
     .padding(2);
     let zona_marcada = row![
-        Space::with_width(Length::FillPortion(zona.0.saturating_sub(1024).max(1) as u16)),
+        Space::with_width(Length::FillPortion(
+            zona.0.saturating_sub(1024).max(1) as u16
+        )),
         container(Space::new(Length::Fill, 4))
             .width(Length::FillPortion((zona.1 - zona.0).max(1) as u16))
             .style(estilo::bloque(p.success)),
-        Space::with_width(Length::FillPortion(maximo.saturating_sub(zona.1).max(1) as u16)),
+        Space::with_width(Length::FillPortion(
+            maximo.saturating_sub(zona.1).max(1) as u16
+        )),
     ];
     let control = slider(1024..=maximo, valor.clamp(1024, maximo), al_cambiar)
         .step(256u32)
@@ -758,11 +872,7 @@ pub struct Parte {
 /// Pantalla provisional de una sección que aún no existe: la rueda de
 /// bloques a medio levantar, el nombre de la sección y el plan de partes.
 /// Solo para la maqueta; se retira cuando el núcleo esté completo.
-pub fn en_construccion<'a, M: 'a>(
-    p: Paleta,
-    seccion: &str,
-    partes: &[Parte],
-) -> Element<'a, M> {
+pub fn en_construccion<'a, M: 'a>(p: Paleta, seccion: &str, partes: &[Parte]) -> Element<'a, M> {
     let mut lista = column![].spacing(espacio::S2);
     for parte in partes {
         let (estado, palabra) = match parte.avance {
@@ -781,9 +891,12 @@ pub fn en_construccion<'a, M: 'a>(
     }
     container(
         row![
-            container(
-                crate::laminas::grabado(p, crate::laminas::Lamina::PiranesiRueda, Length::Fill, Length::Fill),
-            )
+            container(crate::laminas::grabado(
+                p,
+                crate::laminas::Lamina::PiranesiRueda,
+                Length::Fill,
+                Length::Fill
+            ),)
             .width(300)
             .height(400)
             .style(estilo::marco(p)),
@@ -861,7 +974,10 @@ pub fn deslizador_valor<'a, M: Clone + 'a>(
             .width(110)
             .align_x(iced::alignment::Horizontal::Right)
             .style(estilo::campo(p)),
-        text("MB").font(fuentes::MONO).size(texto::MONO.0).color(p.text_muted),
+        text("MB")
+            .font(fuentes::MONO)
+            .size(texto::MONO.0)
+            .color(p.text_muted),
     ]
     .spacing(espacio::S4)
     .align_y(iced::Alignment::Center)

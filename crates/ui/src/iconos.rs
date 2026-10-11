@@ -43,6 +43,8 @@ iconos! {
     Maximizar => "maximize",
     Cerrar => "close",
     Flecha => "chevron-up",
+    Atras => "arrow-left",
+    Adelante => "arrow-right",
     ChevronAbajo => "chevron-down",
     ChevronDerecha => "chevron-right",
     ChevronIzquierda => "chevron-left",

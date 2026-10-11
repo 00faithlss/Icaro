@@ -15,6 +15,8 @@ use zeroize::Zeroizing;
 pub enum Error {
     #[error("No se pudo acceder al almacén de credenciales del sistema.")]
     Unavailable,
+    #[error("La credencial supera el tamaño admitido por el almacén del sistema.")]
+    TooLarge,
     #[error("La sesión cambió durante esta operación.")]
     Stale,
 }
@@ -37,7 +39,11 @@ fn entry() -> Result<keyring::Entry, Error> {
 
 impl Store for SystemStore {
     fn get(&self) -> Result<Option<Zeroizing<String>>, Error> {
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            read_windows(&entry()?)
+        }
+        #[cfg(target_os = "linux")]
         {
             match entry()?.get_password() {
                 Ok(value) => Ok(Some(Zeroizing::new(value))),
@@ -51,7 +57,11 @@ impl Store for SystemStore {
         }
     }
     fn set(&self, value: &str) -> Result<(), Error> {
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(windows)]
+        {
+            write_windows(&entry()?, value)
+        }
+        #[cfg(target_os = "linux")]
         {
             entry()?.set_password(value).map_err(|_| Error::Unavailable)
         }
@@ -74,6 +84,41 @@ impl Store for SystemStore {
             Err(Error::Unavailable)
         }
     }
+}
+
+#[cfg(windows)]
+fn read_windows(entry: &keyring::Entry) -> Result<Option<Zeroizing<String>>, Error> {
+    let bytes = match entry.get_secret() {
+        Ok(bytes) => Zeroizing::new(bytes),
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(_) => return Err(Error::Unavailable),
+    };
+    // Las versiones anteriores guardaban el JSON como una contraseña UTF-16.
+    let value = if bytes.starts_with(b"{\0") && bytes.len() % 2 == 0 {
+        let units = Zeroizing::new(
+            bytes
+                .chunks_exact(2)
+                .map(|p| u16::from_le_bytes([p[0], p[1]]))
+                .collect::<Vec<_>>(),
+        );
+        String::from_utf16(&units).map_err(|_| Error::Unavailable)?
+    } else {
+        std::str::from_utf8(&bytes)
+            .map_err(|_| Error::Unavailable)?
+            .to_owned()
+    };
+    Ok(Some(Zeroizing::new(value)))
+}
+
+#[cfg(windows)]
+fn write_windows(entry: &keyring::Entry, value: &str) -> Result<(), Error> {
+    // Credential Manager admite bytes: UTF-8 evita duplicar el tamaño del token.
+    entry
+        .set_secret(value.as_bytes())
+        .map_err(|error| match error {
+            keyring::Error::TooLong(_, _) => Error::TooLarge,
+            _ => Error::Unavailable,
+        })
 }
 
 #[derive(Deserialize)]
@@ -165,6 +210,40 @@ impl Vault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Usa y elimina una credencial de prueba aislada en Windows"]
+    fn windows_reads_legacy_sessions_and_persists_long_utf8_credentials() {
+        let mut nonce = [0; 16];
+        getrandom::fill(&mut nonce).unwrap();
+        let name: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+        struct Cleanup(keyring::Entry);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.delete_credential();
+            }
+        }
+        let entry = Cleanup(keyring::Entry::new("org.icaro.launcher.tests", &name).unwrap());
+        let legacy = r#"{"refresh":"CANARY_LEGACY"}"#;
+        entry.0.set_password(legacy).unwrap();
+        assert_eq!(read_windows(&entry.0).unwrap().unwrap().as_str(), legacy);
+        let long = Zeroizing::new(format!(r#"{{"refresh":"{}"}}"#, "X".repeat(2000)));
+        assert!(matches!(
+            entry.0.set_password(&long),
+            Err(keyring::Error::TooLong(_, _))
+        ));
+        write_windows(&entry.0, &long).unwrap();
+        assert_eq!(
+            read_windows(&entry.0).unwrap().unwrap().as_str(),
+            long.as_str()
+        );
+        assert_eq!(
+            write_windows(&entry.0, &"X".repeat(6000)),
+            Err(Error::TooLarge)
+        );
+        entry.0.delete_credential().unwrap();
+        assert!(read_windows(&entry.0).unwrap().is_none());
+    }
     struct MemoryStore(Mutex<Option<Zeroizing<String>>>);
     impl Store for MemoryStore {
         fn get(&self) -> Result<Option<Zeroizing<String>>, Error> {

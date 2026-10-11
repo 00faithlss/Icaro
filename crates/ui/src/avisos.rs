@@ -12,6 +12,7 @@ pub struct Aviso<M> {
     pub accion: Option<M>,
     pub desde: Instant,
     retirada: Option<Instant>,
+    duracion: Duration,
 }
 
 impl<M> Aviso<M> {
@@ -21,11 +22,17 @@ impl<M> Aviso<M> {
             accion,
             desde,
             retirada: None,
+            duracion: DURACION,
         }
     }
 
+    pub fn con_duracion(mut self, duracion: Duration) -> Self {
+        self.duracion = duracion;
+        self
+    }
+
     pub fn vencido(&self, ahora: Instant) -> bool {
-        ahora.saturating_duration_since(self.desde) >= DURACION
+        ahora.saturating_duration_since(self.desde) >= self.duracion
             || self
                 .retirada
                 .is_some_and(|inicio| ahora.saturating_duration_since(inicio) >= SALIDA)
@@ -40,14 +47,15 @@ impl<M> Aviso<M> {
         if reducir {
             return 1.0;
         }
-        let inicio = self.retirada.unwrap_or(self.desde + DURACION - SALIDA);
+        let inicio = self.retirada.unwrap_or(self.desde + self.duracion - SALIDA);
         let t = (ahora.saturating_duration_since(inicio).as_secs_f32() / SALIDA.as_secs_f32())
             .clamp(0.0, 1.0);
         1.0 - t * t * (3.0 - 2.0 * t)
     }
 
     pub fn saliendo(&self, ahora: Instant) -> bool {
-        self.retirada.is_some() || ahora.saturating_duration_since(self.desde) >= DURACION - SALIDA
+        self.retirada.is_some()
+            || ahora.saturating_duration_since(self.desde) >= self.duracion - SALIDA
     }
 }
 
@@ -81,5 +89,15 @@ mod tests {
         assert!(aviso.vencido(inicio + SALIDA));
         let siguiente = Aviso::<()>::nuevo("Siguiente".into(), None, inicio + SALIDA);
         assert_eq!(siguiente.opacidad(inicio + SALIDA, false), 1.0);
+    }
+    #[test]
+    fn deshacer_tiene_diez_segundos_y_conserva_el_fundido() {
+        let inicio = Instant::now();
+        let a = Aviso::nuevo("Retirados".into(), Some(()), inicio)
+            .con_duracion(Duration::from_secs(10));
+        assert!(!a.vencido(inicio + Duration::from_secs(9)));
+        assert_eq!(a.opacidad(inicio + Duration::from_secs(9), false), 1.);
+        assert!(a.opacidad(inicio + Duration::from_secs(10) - SALIDA / 2, false) < 1.);
+        assert!(a.vencido(inicio + Duration::from_secs(10)));
     }
 }

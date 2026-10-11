@@ -22,6 +22,8 @@ cargo run -p icaro-ui --example launcher
 
 ## Estructura
 
+El diseño de referencia es `icaro-design-system.rar`. Las funcionalidades nuevas se conectan a sus componentes y a las vistas existentes. Las diferencias de pantallas que ya tienen diseño se registran en la [comparación con el system design](revision-system-design.md) para evaluar cambios antes de sustituirlas.
+
 | Carpeta | Contenido |
 | --- | --- |
 | `crates/core` | Núcleo: manifiesto de versiones de Minecraft y verificación de descargas |
@@ -44,6 +46,21 @@ El ejemplo `launcher` acepta variables de entorno para abrir una pantalla en un 
 
 Las capturas del ejemplo son recortes de grabados; copiar y abrir carpeta están simulados.
 El login y el catálogo se prueban según la guía de [inicio de sesión y catálogo](login-y-catalogo.md). Las variables de estados ficticios de cuenta requieren el modo de demostración.
+
+## Capturas aisladas del diseño
+
+El ejemplo puede capturar los widgets reales con datos de prueba y cerrar esa ventana, sin consultar Microsoft o Modrinth ni guardar cambios en las cuentas e instancias del usuario. `ICARO_VISTA_DISENO` admite `asistente`, `exportar`, `mods`, `seleccion`, `tienda`, `ficha`, `pagina`, `archivos` y `archivos-renombrar`. El explorador usa una carpeta de muestra dentro del directorio temporal.
+
+```powershell
+cargo build -j 1 -p icaro-ui --example launcher
+$env:ICARO_CAPTURA_DISENO = Join-Path $env:TEMP 'icaro-tienda.png'
+$env:ICARO_VISTA_DISENO = 'tienda'
+# $env:ICARO_PIEDRA = '1' para el tema claro.
+.\target\debug\examples\launcher.exe
+Remove-Item Env:ICARO_CAPTURA_DISENO, Env:ICARO_VISTA_DISENO
+```
+
+Si la compilación de pruebas agota la memoria, ejecuta los objetivos por separado con `-j 1`: núcleo, biblioteca de interfaz y ejemplo launcher.
 
 ## Licencia
 

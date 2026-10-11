@@ -115,6 +115,13 @@ fn tiempo_restante(segundos: f32) -> String {
 }
 
 impl Estado {
+    pub fn vacio() -> Self {
+        Self {
+            servidores: Vec::new(), arrastre: None, sobre: None, colocando: None,
+            historial: Vec::new(), historial_abierto: false, cola: Vec::new(),
+            toma: (0.0, 0), anterior: None, ultimo: Instant::now(), nuevos: 0,
+        }
+    }
     pub fn nuevo() -> Self {
         let servidores = vec![
             Servidor {

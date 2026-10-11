@@ -97,6 +97,13 @@ fn captura(archivo: &str, instancia: &str, fecha: &str, mb: f32, imagen: Lamina)
 }
 
 impl Estado {
+    pub fn vacio() -> Self {
+        Self {
+            capturas: Vec::new(), filtro: 0, seleccion: Vec::new(), encima: None,
+            visor: None, gabinete_encima: None, papelera: Vec::new(), aviso: None,
+            vacio: false, prensa: None,
+        }
+    }
     pub fn nuevo() -> Self {
         let capturas = vec![
             captura("2026-10-09_01.12.04.png", "Supervivencia", "09-10-2026 01:12", 3.4, Lamina::ParejaAldea),
@@ -561,6 +568,11 @@ pub fn vacio_instancias(app: &App) -> Element<'_, Mensaje> {
 }
 
 pub fn vacio_servidores(app: &App) -> Element<'_, Mensaje> {
+    if !app.servicios.demo {
+        return con_banda(app, Lamina::TivoliCiudad, "Servidores", vacios::estado_vacio(
+            contexto(app), Lamina::Alas, "Ningún servidor\nguardado",
+            "Aquí aparecerán los servidores que guardes. La gestión de servidores todavía está en preparación.", Vec::new()));
+    }
     con_banda(app, Lamina::TivoliCiudad, "Servidores", vacios::servidores(contexto(app), Mensaje::Nada))
 }
 

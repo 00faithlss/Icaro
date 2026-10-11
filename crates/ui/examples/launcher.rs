@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Launcher con autenticación y catálogo conectados; instancias de demostración.
+//! Launcher con autenticación y catálogo conectados. ICARO_DEMO=1 carga ejemplos.
 //! Ejecutar con
 //! `cargo run -p icaro-ui --example launcher`.
 
@@ -9,8 +9,8 @@ use icaro_ui::ajustes::indice_ajustes;
 use icaro_ui::componentes::{self, Variante};
 use icaro_ui::consola::{consola, Linea, MensajesConsola, Nivel};
 use icaro_ui::editor::{
-    encabezado_editor, pestana_archivos, pestana_general, pestana_java, pestana_mundos,
-    pestanas_editor, Copia, DatosEditor, EstadoGeneral,
+    pestana_archivos, pestana_general, pestana_java, pestana_mundos,
+    Copia, DatosEditor, EstadoGeneral,
     InstalacionJava, MensajesEncabezado, MensajesGeneral, Mundo, AccionArchivo, ConfigJava,
     MensajesArchivos, MensajesJava, VistaArchivos,
 };
@@ -40,8 +40,24 @@ mod sesion;
 mod red;
 #[path = "launcher_aux/busqueda.rs"]
 mod busqueda;
+#[path = "launcher_aux/atajos.rs"]
+mod atajos;
+#[path = "launcher_aux/instancias_reales.rs"]
+mod instancias_reales;
+#[path = "launcher_aux/mods_reales.rs"]
+mod mods_reales;
+#[path = "launcher_aux/diseno_mods.rs"]
+mod diseno_mods;
+#[path = "launcher_aux/pruebas_diseno.rs"]
+mod pruebas_diseno;
 #[path = "launcher_aux/servicios.rs"]
 mod servicios;
+#[path = "launcher_aux/catalogo.rs"]
+mod catalogo;
+#[path = "launcher_aux/ficha.rs"]
+mod ficha;
+#[path = "launcher_aux/ventana.rs"]
+mod ventana;
 
 use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
@@ -121,6 +137,7 @@ struct App {
     red: red::Estado,
     menu_en: Point,
     ventana: Size,
+    maximizada: bool,
     /// Instante en que se pulsó Jugar; mientras exista, el Umbral cubre la ventana.
     umbral: Option<std::time::Instant>,
     /// Eliminación en curso manteniendo Supr sobre la instancia seleccionada.
@@ -164,7 +181,9 @@ struct EdicionGrupo {
 
 impl App {
     fn avisar(&mut self, texto: String) {
-        let accion = if self.red.anterior.is_some() {
+        let accion = if !self.servicios.demo && self.servicios.instancias.deshacer.is_some() {
+            Some(Mensaje::DeshacerAviso)
+        } else if self.red.anterior.is_some() {
             Some(Mensaje::Red(red::Mensaje::Deshacer))
         } else if self.picar.as_ref().is_some_and(|p| p.rota.is_some()) {
             Some(Mensaje::DeshacerAviso)
@@ -175,6 +194,12 @@ impl App {
 
 #[derive(Debug, Clone)]
 enum Mensaje {
+    CapturarDiseno,
+    DisenoCapturado(window::Screenshot),
+    DisenoMods(diseno_mods::Accion),
+    ModsReales(mods_reales::Accion),
+    Instancias(instancias_reales::Accion),
+    AtajoSeccion(Seccion),
     Servicio(servicios::Accion),
     AbrirBusqueda,
     CerrarBusqueda,
@@ -263,6 +288,8 @@ enum Mensaje {
     Ajuste(usize),
     Arrastrar,
     Minimizar,
+    Redimensionar(ventana::Borde),
+    Maximizada(bool),
     Maximizar,
     Cerrar,
     Nada,
@@ -316,12 +343,27 @@ fn con_entrada<'a>(app: &App, contenido: Element<'a, Mensaje>) -> Element<'a, Me
 }
 
 fn abrir_instancia(app: &mut App, i: usize) {
+    if i >= instancias().len() { return; }
+    if !app.servicios.demo && app.editor.is_some() {
+        let nombre = app.general.nombre.clone();
+        if let Err(error) = instancias_reales::renombrar(app, &nombre) {
+            app.avisar(error); return;
+        }
+    }
+    let datos = instancias()[i].clone();
+    let exp = if app.servicios.demo { Explorador::abrir(&datos.nombre) } else {
+        let Some(record) = app.servicios.instancias.registros.get(i) else { return; };
+        match app.servicios.instancias.almacen.juego(&record.id) {
+            Ok(path) => Explorador::desde_ruta(path),
+            Err(error) => { app.avisar(error.to_string()); return; }
+        }
+    };
     app.servicios.reset_catalog();
     app.mods_vista = 0;
-    let datos = &instancias()[i];
     app.seleccionada = Some(i);
     app.editor_inst = i;
-    app.exp = Explorador::abrir(&datos.nombre);
+    mods_reales::cargar_local(app);
+    app.exp = exp;
     app.general.nombre = datos.nombre.clone();
     app.general.grupo = app.grupos[i].clone();
     app.mod_pagina = None;
@@ -332,7 +374,7 @@ fn abrir_instancia(app: &mut App, i: usize) {
 
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     let guardar = !matches!(&m, Mensaje::Cuadro(_) | Mensaje::Cursor(_)
-        | Mensaje::Tamano(_) | Mensaje::AvisoTic(_) | Mensaje::Nada | Mensaje::ImagenesActualizadas);
+        | Mensaje::Tamano(_) | Mensaje::Maximizada(_) | Mensaje::AvisoTic(_) | Mensaje::Nada | Mensaje::ImagenesActualizadas);
     let instalaciones = app.instalando.len();
     mods::fijar_recurso(app.editor == Some(3));
     let deshacer_captura = matches!(&m, Mensaje::Capt(capt::Accion::Deshacer));
@@ -349,13 +391,14 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     }
     // Los cuadros normales no cambian datos persistentes. Al terminar una
     // instalación sí hay que guardar el modpack, aunque no haya otro clic.
-    if guardar || instalaciones != app.instalando.len() {
+    if (guardar || instalaciones != app.instalando.len()) && std::env::var_os("ICARO_CAPTURA_DISENO").is_none() {
         guardar_si_cambio(app);
     }
     tarea
 }
 
 fn hay_dialogo(app: &App) -> bool {
+    if app.servicios.mods.confirmacion.is_some() { return true; }
     app.dialogo || app.asistente.is_some() || app.importar.is_some() || app.exportar.is_some() || app.cambiar.is_some()
 }
 
@@ -373,23 +416,50 @@ fn guardar_si_cambio(app: &mut App) {
         .filter(|d| d.estado == EstadoInstancia::Lista)
         .map(|d| d.nombre)
         .collect();
-    let texto = estado::Guardado::nuevo(&app.lista_grupos, &app.grupos, &app.cerrados, &app.configs, &instalados).texto();
+    let mut guardado = estado::Guardado::nuevo(&app.lista_grupos, &app.grupos, &app.cerrados, &app.configs, &instalados);
+    if !app.servicios.demo {
+        guardado.asociar(app.servicios.instancias.registros.iter().map(|i| i.id.clone()).collect());
+    }
+    let texto = guardado.texto();
     if texto != app.ultimo_guardado {
-        estado::Guardado::escribir(&texto);
+        estado::Guardado::escribir(&texto, app.servicios.demo);
         app.ultimo_guardado = texto;
     }
 }
 
 fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
+    if !app.servicios.demo && matches!(&m, Mensaje::Red(red::Mensaje::Agregar | red::Mensaje::Jugar(_))) {
+        app.avisar("La gestión de servidores todavía está en preparación.".into());
+        return Task::none();
+    }
     if !app.servicios.demo && matches!(&m, Mensaje::TiendaInstalar | Mensaje::InstalarMod(_, _) | Mensaje::VersionMod(_, _)
         | Mensaje::InstalarModpack(_) | Mensaje::AlternarMod(_) | Mensaje::EliminarMod(_)) {
         app.avisar("La instalación y gestión de archivos de mods todavía están en desarrollo.".into());
         return Task::none();
     }
     match m {
+        Mensaje::CapturarDiseno => return window::get_latest().then(|id| id.map_or(Task::none(),|id| window::screenshot(id).map(Mensaje::DisenoCapturado))),
+        Mensaje::DisenoCapturado(s) => {
+            if let Some(path)=std::env::var_os("ICARO_CAPTURA_DISENO") { let _=image::save_buffer(path,&s.bytes,s.size.width,s.size.height,image::ColorType::Rgba8); }
+            return window::get_latest().then(|id| id.map_or(Task::none(),window::close));
+        }
+        Mensaje::DisenoMods(a) => return diseno_mods::actualizar(app,a),
+        Mensaje::Instancias(action) => return instancias_reales::actualizar(app, action),
+        Mensaje::AtajoSeccion(seccion) => {
+            if hay_dialogo(app) || app.capt.visor.is_some() || app.servicios.ficha.visor.is_some()
+                || app.umbral.is_some() || matches!(app.pantalla, Some(pantallas::Pantalla::Primera | pantallas::Pantalla::Codigo)) {
+                return Task::none();
+            }
+            app.busqueda.abierta = false;
+            app.menu = None;
+            app.menu_grupos = false;
+            app.pantalla = None;
+            return actualizar_estado(app, Mensaje::Ir(seccion));
+        }
         Mensaje::Servicio(action) => return servicios::actualizar(app, action),
+        Mensaje::ModsReales(action) => return mods_reales::actualizar(app, action),
         Mensaje::AbrirBusqueda => {
-            if hay_dialogo(app) || app.capt.visor.is_some() || app.umbral.is_some() {
+            if hay_dialogo(app) || app.capt.visor.is_some() || app.servicios.ficha.visor.is_some() || app.umbral.is_some() {
                 return Task::none();
             }
             app.busqueda.abierta = true;
@@ -473,12 +543,26 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             });
         }
         Mensaje::VolverEditor => {
+            if !app.servicios.demo && app.mods_vista == 1 {
+                app.mods_vista = 0;
+                app.servicios.reset_catalog();
+                return Task::none();
+            }
+            if !app.servicios.demo && app.editor.is_some() {
+                let nombre = app.general.nombre.clone();
+                if let Err(error) = instancias_reales::renombrar(app, &nombre) {
+                    app.avisar(error); return Task::none();
+                }
+            }
             app.editor = None;
             arrancar(app);
         }
         Mensaje::Pestana(i) => {
+            if i == 2 && !mods_reales::permite_mods(app) { return Task::none(); }
+            app.mods_vista = 0;
             app.editor = Some(i);
             arrancar(app);
+            if i == 2 && !app.servicios.demo { return mods_reales::actualizar(app, mods_reales::Accion::Cargar); }
             if matches!(i, 2 | 3) && app.mods_vista == 1 && !app.servicios.demo { return servicios::buscar(app, 0, false); }
         }
         Mensaje::Nombre(v) => app.general.nombre = v,
@@ -583,7 +667,11 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::NombreArchivo(n) => app.exp.escribir_nombre(n),
         Mensaje::AccionArchivo(a) => match a {
             AccionArchivo::Abrir => app.exp.abrir_en_sistema(),
-            AccionArchivo::Renombrar => app.exp.iniciar_renombrar(),
+            AccionArchivo::AbrirCarpeta => app.exp.abrir_carpeta(),
+            AccionArchivo::Renombrar => {
+                app.exp.iniciar_renombrar();
+                if app.exp.renombrando.is_some() { return iced::widget::text_input::focus("archivo-nombre"); }
+            },
             AccionArchivo::ConfirmarNombre => app.exp.confirmar_nombre(),
             AccionArchivo::CancelarNombre => app.exp.cancelar_nombre(),
             AccionArchivo::Duplicar => app.exp.duplicar(),
@@ -600,6 +688,12 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::BuscarConsola(v) => app.busqueda_consola = v,
         Mensaje::Capt(a) => return capt::actualizar(app, a),
         Mensaje::Ir(s) => {
+            if !app.servicios.demo && app.editor.is_some() {
+                let nombre = app.general.nombre.clone();
+                if let Err(error) = instancias_reales::renombrar(app, &nombre) {
+                    app.avisar(error); return Task::none();
+                }
+            }
             app.servicios.reset_catalog();
             app.seccion = s;
             if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) {
@@ -633,6 +727,16 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             arrancar(app);
         }
         Mensaje::PanelMod(id) => {
+            if !app.servicios.demo {
+                if let Some(project) = id {
+                    let task = servicios::actualizar(app, servicios::Accion::Proyecto(project.clone()));
+                    app.mod_panel = Some(project.clone());
+                    app.anim_panel = Some(std::time::Instant::now());
+                    return task;
+                }
+                app.mod_panel = None;
+                return servicios::actualizar(app, servicios::Accion::Volver);
+            }
             if id.is_some() && !app.reducir {
                 app.anim_panel = Some(std::time::Instant::now());
                 app.ahora = std::time::Instant::now();
@@ -681,10 +785,14 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::VistaMods(v) => {
             app.mods_vista = v;
             arrancar(app);
-            if v == 1 && !app.servicios.demo { return servicios::buscar(app, 0, false); }
+            if !app.servicios.demo {
+                if v == 1 { app.servicios.reset_catalog(); app.servicios.order=icaro_core::modrinth::Order::Downloads; return servicios::buscar(app, 0, false); }
+                app.servicios.reset_catalog();
+            }
         }
         Mensaje::AbrirModPagina(id) => {
             if !app.servicios.demo {
+                if app.mods_vista == 0 { app.servicios.reset_catalog(); }
                 app.mods_vista = 1;
                 app.mod_pagina = None;
                 return servicios::actualizar(app, servicios::Accion::Proyecto(id));
@@ -754,6 +862,16 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             avanzar_instalaciones(app);
             avanzar_picar(app);
             sesion::avanzar(app);
+            if !app.servicios.demo && !app.servicios.instancias.operando {
+                if let Some(p) = &app.picar {
+                    if p.rota.is_some_and(|t| ms_desde(t, app.ahora) >= icaro_ui::movimiento::PICAR_ROTURA_MS) {
+                        if let Some(record) = app.servicios.instancias.registros.get(p.instancia) {
+                            app.servicios.instancias.eliminar = Some(record.id.clone());
+                            return instancias_reales::eliminar(app);
+                        }
+                    }
+                }
+            }
         }
         Mensaje::Jugar(i) => {
             if !app.servicios.demo {
@@ -774,10 +892,12 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::UmbralVolver => app.umbral = None,
         Mensaje::PicarEmpezar => {
+            if app.servicios.instancias.operando { return Task::none(); }
             let libre = app.umbral.is_none()
                 && app.seccion == Seccion::Instancias
                 && app.editor.is_none()
                 && app.capt.visor.is_none()
+                && app.servicios.ficha.visor.is_none()
                 && app.pantalla.is_none()
                 && app.menu.is_none()
                 && app.mod_panel.is_none()
@@ -853,13 +973,29 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             }
             app.ahora = std::time::Instant::now();
         }
-        Mensaje::Tamano(s) => app.ventana = s,
+        Mensaje::Tamano(s) => {
+            app.ventana = s;
+            return window::get_oldest().and_then(window::get_maximized).map(Mensaje::Maximizada);
+        }
+        Mensaje::Maximizada(maximizada) => app.maximizada = maximizada,
+        Mensaje::Redimensionar(borde) => return ventana::redimensionar(borde),
         Mensaje::PedirEliminar => {
+            if !app.servicios.demo {
+                if app.servicios.instancias.operando { return Task::none(); }
+                let Some(i) = app.menu.or(app.seleccionada) else { return Task::none(); };
+                let Some(record) = app.servicios.instancias.registros.get(i) else { return Task::none(); };
+                app.servicios.instancias.eliminar = Some(record.id.clone());
+            }
             app.menu = None;
             app.dialogo = true;
         }
-        Mensaje::CerrarDialogo => app.dialogo = false,
+        Mensaje::CerrarDialogo => {
+            if app.servicios.instancias.operando { return Task::none(); }
+            app.dialogo = false;
+            app.servicios.instancias.eliminar = None;
+        }
         Mensaje::Eliminar => {
+            if !app.servicios.demo { return instancias_reales::eliminar(app); }
             app.dialogo = false;
             app.avisar("Se eliminó la instancia Supervivencia.".into());
         }
@@ -875,6 +1011,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             }
         }
         Mensaje::DeshacerAviso => {
+            if !app.servicios.demo { return instancias_reales::deshacer(app); }
             app.aviso = None;
             // Deshacer una eliminación por Picar: la tarjeta vuelve y se asienta.
             if app.picar.as_ref().is_some_and(|p| p.rota.is_some()) {
@@ -911,6 +1048,12 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Maximizar => return window::get_oldest().and_then(window::toggle_maximize),
         Mensaje::Cerrar => {
+            if !app.servicios.demo && app.editor.is_some() {
+                let nombre = app.general.nombre.clone();
+                if let Err(error) = instancias_reales::renombrar(app, &nombre) {
+                    app.avisar(error); return Task::none();
+                }
+            }
             app.servicios.cancel();
             return window::get_oldest().and_then(window::close);
         }
@@ -941,10 +1084,10 @@ fn instancias_base() -> Vec<DatosInstancia> {
     ]
 }
 
-/// Lista viva de instancias: arranca con las de ejemplo y crece al instalar modpacks.
+/// Lista viva de instancias. Los ejemplos se cargan solo en el modo de demostración.
 fn lista_instancias() -> &'static std::sync::Mutex<Vec<DatosInstancia>> {
     static LISTA: std::sync::OnceLock<std::sync::Mutex<Vec<DatosInstancia>>> = std::sync::OnceLock::new();
-    LISTA.get_or_init(|| std::sync::Mutex::new(instancias_base()))
+    LISTA.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
 fn instancias() -> Vec<DatosInstancia> {
@@ -1008,7 +1151,7 @@ fn avanzar_picar(app: &mut App) {
             p.rota = Some(ahora);
         }
         // Deshacer dura mientras el aviso siga abierto.
-        app.avisar(format!("{nombre} eliminada."));
+        if app.servicios.demo { app.avisar(format!("{nombre} eliminada.")); }
     }
 }
 
@@ -1051,7 +1194,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
     if let Some(pestana) = app.editor {
         return pantalla_editor(app, pestana);
     }
-    if app.capt.vacio {
+    if app.capt.vacio || instancias().is_empty() {
         return capt::vacio_instancias(app);
     }
     let mut chips = row![].spacing(espacio::S2);
@@ -1110,7 +1253,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
                 &d,
                 AccionesTarjeta {
                     seleccionar: Mensaje::AbrirInstancia(i),
-                    principal: if matches!(d.estado, EstadoInstancia::Error) { Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Fallo)) } else if matches!(d.estado, EstadoInstancia::Lista) { Mensaje::Jugar(i) } else { Mensaje::Nada },
+                    principal: if matches!(d.estado, EstadoInstancia::Error) { Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Fallo)) } else if matches!(d.estado, EstadoInstancia::Lista | EstadoInstancia::Pendiente) { Mensaje::Jugar(i) } else { Mensaje::Nada },
                     mas: Mensaje::Menu(Some(i)),
                 },
             );
@@ -1136,9 +1279,6 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
     }
     cuadricula = cuadricula.push(tarjeta_nueva(p, Mensaje::Pant(pantallas::Accion::NuevaInstancia)));
     let mut cuerpo_col = column![herramientas].spacing(espacio::S6);
-    if !app.servicios.demo {
-        cuerpo_col = cuerpo_col.push(text("Instancias de demostración · La instalación de Minecraft todavía está en desarrollo.").size(texto::BODY_SM.0).color(p.text_muted));
-    }
     if let Some(e) = &app.edicion_grupo {
         cuerpo_col = cuerpo_col.push(
             row![
@@ -1161,7 +1301,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
         .spacing(espacio::S6)
         .padding(Padding::from([espacio::S6, espacio::S12]));
     column![
-        banda(p, Lamina::CaidaCielo, "Instancias", Some(5)),
+        banda(p, Lamina::CaidaCielo, "Instancias", Some(todas.len())),
         suave(app, cuerpo)
     ]
     .into()
@@ -1273,10 +1413,11 @@ fn lista_mods(app: &App) -> Element<'_, Mensaje> {
     if app.mods_vista == 1 {
         return tienda_mods(app);
     }
+    if !app.servicios.demo && app.editor == Some(2) { return mods_reales::vista(app); }
     let p = app.modo.paleta();
     let instancia = instancias()[app.editor_inst].nombre.clone();
     let (mc_inst, cargador_inst) = juego_de_instancia(app);
-    let instalados = mods::listar(&instancia);
+    let instalados = if app.servicios.demo { mods::listar(&instancia) } else { Vec::new() };
     let consulta = app.busqueda_mods.trim().to_lowercase();
     let coincide = |texto: &str| consulta.is_empty() || texto.to_lowercase().contains(&consulta);
 
@@ -1585,6 +1726,7 @@ fn tienda_mods(app: &App) -> Element<'_, Mensaje> {
 
 /// Panel lateral de 640 px con la ficha rápida de un mod.
 fn ficha_mod<'a>(app: &'a App, id: &str) -> Element<'a, Mensaje> {
+    if !app.servicios.demo { return diseno_mods::ficha(app); }
     use icaro_ui::componentes::{etiqueta, insignia, Estado};
     let p = app.modo.paleta();
     let instancia = instancias()[app.editor_inst].nombre.clone();
@@ -2570,6 +2712,7 @@ fn pantalla_modpacks(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
+    if !app.servicios.demo && matches!(pestana, 2 | 3) && app.mods_vista == 1 { return servicios::store_view(app); }
     let p = app.modo.paleta();
     if pestana == 2 || pestana == 3 {
         if let Some(id) = &app.mod_pagina {
@@ -2582,23 +2725,24 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
     let datos = DatosEditor {
         nombre: app.general.nombre.clone(),
         version: instancia.version,
-        jugado: if app.editor_inst == 0 { "41 h" } else { "—" }.into(),
+        jugado: if app.servicios.demo && app.editor_inst == 0 { "41 h" } else { "—" }.into(),
         mods: cantidad_mods.to_string(),
-        tamano: if app.editor_inst == 0 { "2,4 GB" } else { "—" }.into(),
+        tamano: if app.servicios.demo && app.editor_inst == 0 { "2,4 GB" } else { "—" }.into(),
         memoria: format!("{} MB", app.configs[app.editor_inst].memoria_max),
         portada: instancia.portada,
     };
-    let encabezado = encabezado_editor(
+    let encabezado = icaro_ui::editor::encabezado_editor_con_mods(
         p,
         &datos,
         MensajesEncabezado {
             volver: Mensaje::VolverEditor,
-            abrir_carpeta: Mensaje::Nada,
+            abrir_carpeta: Mensaje::Pant(pantallas::Accion::AbrirCarpetaInstancia(app.editor_inst)),
             mas: Mensaje::Nada,
             jugar: Mensaje::Jugar(app.editor_inst),
         },
+        mods_reales::permite_mods(app),
     );
-    let barra = container(pestanas_editor(p, pestana, cantidad_mods, 3, Mensaje::Pestana))
+    let barra = container(icaro_ui::editor::pestanas_editor_con_mods(p, pestana, cantidad_mods, if app.servicios.demo { 3 } else { 0 }, mods_reales::permite_mods(app), Mensaje::Pestana))
         .padding(Padding::from([0.0, espacio::S12]));
     let cuerpo: Element<Mensaje> = match pestana {
         0 => pestana_general(
@@ -2627,36 +2771,37 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
                 argumentos: Mensaje::ArgsJvm,
             },
             16384,
-            &[
+            &if app.servicios.demo { vec![
                 InstalacionJava { version: "21.0.5".into(), proveedor: "Temurin".into(), gestionada: true, ruta: "…/icaro/java/21".into(), usado_por: "1.20.5 en adelante".into(), existe: true },
                 InstalacionJava { version: "17.0.13".into(), proveedor: "Temurin".into(), gestionada: true, ruta: "…/icaro/java/17".into(), usado_por: "1.18 a 1.20.4".into(), existe: true },
                 InstalacionJava { version: "19".into(), proveedor: "No encontrado".into(), gestionada: false, ruta: "D:/jdk-19/bin/javaw.exe".into(), usado_por: "Ninguna".into(), existe: false },
-            ],
+            ] } else { Vec::new() },
         ),
         2 => pestana_mods(app),
         3 => pestana_mods(app),
         4 => pestana_mundos(
             p,
-            &[
+            &if app.servicios.demo { vec![
                 Mundo { nombre: "Isla del Faro".into(), modo: "Supervivencia".into(), hardcore: false, ultima_vez: "Hace 2 h".into(), tamano: "1,2 GB".into(), copias: 4 },
                 Mundo { nombre: "Prueba Hardcore".into(), modo: "Hardcore".into(), hardcore: true, ultima_vez: "Hace 3 días".into(), tamano: "310 MB".into(), copias: 0 },
                 Mundo { nombre: "Creativo".into(), modo: "Creativo".into(), hardcore: false, ultima_vez: "Hace 1 mes".into(), tamano: "880 MB".into(), copias: 2 },
-            ],
+            ] } else { Vec::new() },
             app.mundo,
             Mensaje::Mundo,
-            &[
+            &if app.servicios.demo { vec![
                 Copia { fecha: "2026-10-09 01:12".into(), tamano: "1,1 GB".into(), motivo: "Automática al jugar".into() },
                 Copia { fecha: "2026-10-04 22:40".into(), tamano: "1,0 GB".into(), motivo: "Antes de cambiar versión".into() },
-            ],
+            ] } else { Vec::new() },
         ),
         5 => capt::pestana(app),
-        6 => container(consola(p, &lineas_consola(), app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
+        6 => container(consola(p, &if app.servicios.demo { lineas_consola() } else { Vec::new() }, app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
             .padding(Padding::from([espacio::S6, espacio::S12]))
             .into(),
         7 => {
             pestana_archivos(
                 p,
                 &VistaArchivos {
+                    ruta: app.exp.ruta_relativa(),
                     arbol: &app.exp.nodos,
                     elegido: app.exp.elegido,
                     contenido: app.exp.contenido.as_ref(),
@@ -2690,7 +2835,7 @@ fn lineas_consola() -> Vec<Linea> {
 }
 
 fn pantalla_consola(app: &App) -> Element<'_, Mensaje> {
-    if app.capt.vacio {
+    if app.capt.vacio || !app.servicios.demo {
         return capt::vacio_consola(app);
     }
     let p = app.modo.paleta();
@@ -2719,7 +2864,7 @@ fn pantalla_capturas(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
-    if app.capt.vacio {
+    if app.capt.vacio || app.red.servidores.is_empty() {
         return capt::vacio_servidores(app);
     }
     let p = app.modo.paleta();
@@ -2768,7 +2913,7 @@ fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_descargas(app: &App) -> Element<'_, Mensaje> {
-    if app.capt.vacio {
+    if app.capt.vacio || (!app.red.hay_cola() && app.red.historial.is_empty()) {
         return capt::vacio_descargas(app);
     }
     let p = app.modo.paleta();
@@ -2938,7 +3083,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                 ElementoMenu::Separador,
                 ElementoMenu::Opcion { icono: Icono::Copiar, texto: "Duplicar".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::Duplicar(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Actualizar, texto: "Cambiar versión".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::CambiarVersion(app.menu.unwrap_or(0))) },
-                ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar modpack".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::Exportar(app.menu.unwrap_or(0))) },
+                ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar instancia".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::Exportar(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Externo, texto: "Crear acceso directo".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
                 ElementoMenu::Separador,
                 ElementoMenu::Opcion { icono: Icono::Papelera, texto: "Eliminar".into(), atajo: Some("Supr"), peligro: true, mensaje: Mensaje::PedirEliminar },
@@ -2986,7 +3131,15 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ventana = con_velo_losa(p, ventana, pantallas::exportar(app, s), Mensaje::Pant(pantallas::Accion::ExportarCancelar), desfase_losa(app));
     }
     if app.dialogo {
-        let cuerpo = text("Se borrarán la instancia, sus 214 mods y 3 mundos (2,4 GB). Esta acción no se puede deshacer.")
+        let nombre = if app.servicios.demo { "Supervivencia".to_owned() } else {
+            app.servicios.instancias.registros.iter()
+                .find(|i| Some(&i.id) == app.servicios.instancias.eliminar.as_ref())
+                .map(|i| i.nombre.clone()).unwrap_or_default()
+        };
+        let ocupado = app.servicios.instancias.operando;
+        let cuerpo = text(if app.servicios.demo { "Se borrarán la instancia, sus 214 mods y 3 mundos (2,4 GB). Esta acción no se puede deshacer." } else {
+            "La instancia se moverá a la papelera local de Ícaro. Sus archivos se conservarán y podrás recuperarla con Deshacer."
+        })
             .size(texto::BODY.0)
             .color(p.text_muted)
             .into();
@@ -2995,11 +3148,11 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             ventana,
             dialogo(
                 p,
-                "¿Eliminar Supervivencia?",
+                &format!("¿Eliminar {nombre}?"),
                 cuerpo,
                 vec![
-                    componentes::boton(p, "Cancelar", Variante::Secundario, Some(Mensaje::CerrarDialogo)),
-                    componentes::boton(p, "Eliminar Supervivencia", Variante::Peligro, Some(Mensaje::Eliminar)),
+                    componentes::boton(p, "Cancelar", Variante::Secundario, (!ocupado).then_some(Mensaje::CerrarDialogo)),
+                    componentes::boton(p, &if ocupado { "Eliminando…".to_owned() } else { format!("Eliminar {nombre}") }, Variante::Peligro, (!ocupado).then_some(Mensaje::Eliminar)),
                 ],
                 Some(Lamina::FaetonMano),
                 620.0,
@@ -3021,7 +3174,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         .into();
     }
     let ventana = sesion::con_selector(app, ventana);
-    let mut ventana = capt::capa(app, ventana);
+    let mut ventana = mods_reales::capa(app, servicios::capa(app, capt::capa(app, ventana)));
     if let Some(a) = &app.aviso {
         ventana = iced::widget::stack![
             ventana,
@@ -3038,12 +3191,21 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         ventana = icaro_ui::superficies::con_velo(p, ventana,
             busqueda::vista(app), Mensaje::CerrarBusqueda);
     }
-    iced::widget::mouse_area(ventana)
+    ventana::con_bordes(iced::widget::mouse_area(ventana)
         .on_move(Mensaje::Cursor)
-        .into()
+        .into(), app.maximizada)
 }
 
 fn main() -> iced::Result {
+    let mut arguments = std::env::args();
+    let _ = arguments.next();
+    if arguments.next().as_deref() == Some("--oauth-return") {
+        if let Some(url) = arguments.next() {
+            // El proceso de retorno solo entrega la respuesta; nunca abre otra cuenta/ventana.
+            let _ = icaro_core::auth::forward_app_return(&url);
+        }
+        return Ok(());
+    }
     let mut app = iced::application("Ícaro", actualizar, vista)
         .theme(|_| iced::Theme::Dark)
         .default_font(fuentes::CUERPO)
@@ -3085,9 +3247,8 @@ fn main() -> iced::Result {
             }
             subs.push(iced::event::listen_with(|evento, _, _| {
                 match evento {
-                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. })
-                        if modifiers.control() && matches!(key.as_ref(), iced::keyboard::Key::Character("k" | "K")) =>
-                            Some(Mensaje::AbrirBusqueda),
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) =>
+                        atajos::global(&key, modifiers),
                     _ => None,
                 }
             }));
@@ -3137,10 +3298,19 @@ fn main() -> iced::Result {
                 }));
             }
             subs.push(capt::suscripcion(app));
+            if app.editor == Some(7) && app.exp.renombrando.is_some() {
+                subs.push(iced::event::listen_with(|e, _, _| match e {
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape), .. }) => Some(Mensaje::AccionArchivo(AccionArchivo::CancelarNombre)),
+                    _ => None,
+                }));
+            }
+            subs.push(servicios::suscripcion(app));
+            subs.push(mods_reales::suscripcion(app));
             iced::Subscription::batch(subs)
         })
         .window(window::Settings {
             decorations: false,
+            resizable: true,
             size: Size::new(1280.0, 800.0),
             min_size: Some(Size::new(940.0, 600.0)),
             icon: window::icon::from_file_data(
@@ -3164,10 +3334,41 @@ fn main() -> iced::Result {
     let menu = std::env::var_os("ICARO_MENU").is_some().then_some(0);
     let con_dialogo = std::env::var_os("ICARO_DIALOGO").is_some();
     app.run_with(move || {
+        if std::env::var_os("ICARO_CAPTURA_DISENO").is_some() { return pruebas_diseno::iniciar(piedra); }
+        iniciar_app(seccion, piedra, menu, con_dialogo, servicios::Estado::default())
+    })
+}
+
+fn iniciar_app(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo: bool, mut servicios: servicios::Estado) -> (App, Task<Mensaje>) {
+    if !servicios.demo { servicios.instancias.cargar(); }
+    let guardado = estado::Guardado::cargar(servicios.demo);
+    iniciar_con_guardado(seccion, piedra, menu, con_dialogo, servicios, guardado)
+}
+
+fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo: bool, mut servicios: servicios::Estado, mut guardado: Option<estado::Guardado>) -> (App, Task<Mensaje>) {
+        let demo = servicios.demo;
+        if !demo {
+            if let Some(g) = &mut guardado {
+                g.restaurar_instancias(servicios.instancias.registros.iter().map(|i| i.id.clone()).collect());
+            }
+        }
+        *lista_instancias().lock().unwrap() = if demo { instancias_base() } else {
+            servicios.instancias.registros.iter().map(instancias_reales::Estado::datos).collect()
+        };
+        if !demo {
+            for (n, record) in servicios.instancias.registros.iter().enumerate().filter(|(_, i)| i.loader != "vanilla") {
+                match icaro_core::mods::inventario(&servicios.instancias.almacen, &record.id) {
+                    Ok(list) => {
+                        lista_instancias().lock().unwrap()[n].mods = format!("{} mods", list.len());
+                        servicios.mods.listas.insert(record.id.clone(), list);
+                    }
+                    Err(e) => { servicios.mods.errores.insert(record.id.clone(), e.to_string()); }
+                }
+            }
+        }
         Lamina::precargar(if piedra { Modo::Piedra } else { Modo::Tinta });
-        let guardado = estado::Guardado::cargar();
         // Vuelve a crear las instancias que vinieron de modpacks.
-        if let Some(g) = &guardado {
+        if let Some(g) = guardado.as_ref().filter(|_| demo) {
             for nombre in &g.modpacks {
                 if let Some(m) = modpacks::CATALOGO.iter().find(|m| m.nombre == nombre) {
                     lista_instancias().lock().unwrap().push(DatosInstancia {
@@ -3186,33 +3387,33 @@ fn main() -> iced::Result {
         let total = instancias().len();
         (
             App {
-                servicios: servicios::Estado::default(),
+                servicios,
                 modo: if piedra { Modo::Piedra } else { Modo::Tinta },
                 busqueda: busqueda::Estado::default(),
                 seccion,
                 colapsada: false,
                 filtro: 0,
                 seleccionada: std::env::var("ICARO_EDITOR").ok().and_then(|_| (total > 0).then_some(0)),
-                menu,
-                dialogo: con_dialogo,
+                menu: if demo { menu } else { None },
+                dialogo: demo && con_dialogo,
                 aviso: None,
                 tema: usize::from(piedra),
                 reducir: false,
                 simultaneas: 4,
                 ajuste: std::env::var("ICARO_AJUSTE").ok().and_then(|v| v.parse().ok()).unwrap_or(1),
-                editor: std::env::var("ICARO_EDITOR").ok().and_then(|v| v.parse().ok()),
+                editor: demo.then(|| std::env::var("ICARO_EDITOR").ok().and_then(|v| v.parse().ok())).flatten().filter(|_| total > 0),
                 general: EstadoGeneral {
-                    nombre: "Supervivencia".into(),
-                    grupo: Some("Con amigos".to_owned()),
-                    grupos: vec!["Con amigos".into(), "Técnicos".into(), "Sin grupo".into()],
+                    nombre: if demo { "Supervivencia".into() } else { String::new() },
+                    grupo: demo.then(|| "Con amigos".to_owned()),
+                    grupos: if demo { vec!["Con amigos".into(), "Técnicos".into(), "Sin grupo".into()] } else { vec!["Sin grupo".into()] },
                     ancho: "1920".into(),
                     alto: "1080".into(),
                     pantalla_completa: false,
-                    servidor: Some("Amigos · 10.147.17.1"),
+                    servidor: demo.then_some("Amigos · 10.147.17.1"),
                 },
                 cerrados: guardado.as_ref().map_or_else(Vec::new, |g| g.cerrados.clone()),
                 busqueda_mods: std::env::var("ICARO_BUSCAR").unwrap_or_default(),
-                mods_vista: usize::from(std::env::var("ICARO_TIENDA").is_ok()),
+                mods_vista: usize::from(demo && std::env::var("ICARO_TIENDA").is_ok()),
                 mods_filtro: 0,
                 mod_panel: std::env::var("ICARO_PANEL").ok(),
                 anim_panel: None,
@@ -3222,7 +3423,7 @@ fn main() -> iced::Result {
                 tienda_lado: 0,
                 tienda_orden: 0,
                 modpack_filtro: 0,
-                pantalla: match std::env::var("ICARO_PANTALLA").ok().as_deref() {
+                pantalla: if !demo { Some(pantallas::Pantalla::Primera) } else { match std::env::var("ICARO_PANTALLA").ok().as_deref() {
                     Some("primera") => Some(pantallas::Pantalla::Primera),
                     Some("codigo") => Some(pantallas::Pantalla::Codigo),
                     Some("fallo") => Some(pantallas::Pantalla::Fallo),
@@ -3234,9 +3435,9 @@ fn main() -> iced::Result {
                     Some("cuenta") => Some(pantallas::Pantalla::Cuenta),
                     Some("estudio") => Some(pantallas::Pantalla::Estudio),
                     _ => guardado.is_none().then_some(pantallas::Pantalla::Primera),
-                },
+                } },
                 aj: pantallas::Ajustes::default(),
-                asistente: (std::env::var("ICARO_DIALOGO_NUEVO").is_ok()).then(|| pantallas::Asistente {
+                asistente: (demo && std::env::var("ICARO_DIALOGO_NUEVO").is_ok()).then(|| pantallas::Asistente {
                     paso: std::env::var("ICARO_PASO").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
                     tipo_version: 0,
                     busqueda: String::new(),
@@ -3245,9 +3446,9 @@ fn main() -> iced::Result {
                     nombre: "Fabric 1.21.4".into(),
                     portada: 0,
                 }),
-                cambiar: std::env::var("ICARO_CAMBIAR").is_ok().then_some(0),
-                importar: std::env::var("ICARO_IMPORTAR").is_ok().then(|| pantallas::Importar { origen: 0, archivo: None, launchers: [true, false, false], clon_origen: 0, con_mundos: false }),
-                exportar: std::env::var("ICARO_EXPORTAR").is_ok().then(|| pantallas::Exportar { instancia: 0, nombre: "Supervivencia".into(), version: "1.0.0".into(), autor: "Mineral_7".into(), carpetas: [true, true, false, false] }),
+                cambiar: (demo && std::env::var("ICARO_CAMBIAR").is_ok()).then_some(0),
+                importar: (demo && std::env::var("ICARO_IMPORTAR").is_ok()).then(|| pantallas::Importar { origen: 0, archivo: None, launchers: [true, false, false], clon_origen: 0, con_mundos: false }),
+                exportar: (demo && std::env::var("ICARO_EXPORTAR").is_ok()).then(|| pantallas::Exportar { instancia: 0, nombre: "Supervivencia".into(), carpetas: [true, true, false, false], formato:0, destino:std::env::temp_dir().to_string_lossy().into_owned(), medidas:None, error:None, guardando:false }),
                 codigo_inicio: std::time::Instant::now(),
                 codigo_fase: if std::env::var("ICARO_CODIGO").as_deref() == Ok("vencido") { pantallas::FaseCodigo::Vencido } else { pantallas::FaseCodigo::Esperando },
                 intentos: 0,
@@ -3267,15 +3468,15 @@ fn main() -> iced::Result {
                 ultimo_guardado: String::new(),
                 anim: None,
                 anim_menu: None,
-                red: red::Estado::nuevo(),
+                red: if demo { red::Estado::nuevo() } else { red::Estado::vacio() },
                 ahora: std::time::Instant::now(),
                 ultimo_clic: None,
                 menu_grupos: false,
-                lista_grupos: guardado.as_ref().map_or_else(|| vec!["Con amigos".into(), "Técnicos".into()], |g| g.lista_grupos.clone()),
+                lista_grupos: guardado.as_ref().map_or_else(|| if demo { vec!["Con amigos".into(), "Técnicos".into()] } else { Vec::new() }, |g| g.lista_grupos.clone()),
                 edicion_grupo: None,
                 grupos: guardado.as_ref().filter(|g| g.grupos.len() == total).map_or_else(
                     || {
-                        let mut v: Vec<Option<String>> = vec![Some("Con amigos".into()), Some("Técnicos".into()), Some("Con amigos".into()), None, None];
+                        let mut v: Vec<Option<String>> = if demo { vec![Some("Con amigos".into()), Some("Técnicos".into()), Some("Con amigos".into()), None, None] } else { Vec::new() };
                         v.resize(total, None);
                         v
                     },
@@ -3293,14 +3494,15 @@ fn main() -> iced::Result {
                         .collect()
                 }),
                 editor_inst: 0,
-                exp: Explorador::abrir("Supervivencia"),
+                exp: if demo { Explorador::abrir("Supervivencia") } else { Explorador::desde_ruta(estado::directorio(false).join("instances")) },
                 mundo: 0,
                 filtro_consola: 0,
                 busqueda_consola: String::new(),
-                capt: capt::Estado::nuevo(),
+                capt: if demo { capt::Estado::nuevo() } else { capt::Estado::vacio() },
                 cursor: Point::ORIGIN,
                 menu_en: Point::new(420.0, 140.0),
                 ventana: Size::new(1280.0, 800.0),
+                maximizada: false,
                 umbral: std::env::var_os("ICARO_UMBRAL").is_some().then(std::time::Instant::now),
                 // ICARO_PICAR=<etapa>[:<instancia>]: abre con la eliminación detenida en esa etapa.
                 picar: std::env::var("ICARO_PICAR").ok().and_then(|v| {
@@ -3316,5 +3518,4 @@ fn main() -> iced::Result {
             },
             Task::perform(async {}, |_| Mensaje::Servicio(servicios::Accion::Inicializar)),
         )
-    })
 }

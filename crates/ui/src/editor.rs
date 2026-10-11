@@ -46,6 +46,38 @@ pub fn pestanas_editor<'a, M: Clone + 'a>(
     mundos: usize,
     al_elegir: impl Fn(usize) -> M,
 ) -> Element<'a, M> {
+    pestanas_editor_con_mods(p, activa, mods, mundos, true, al_elegir)
+}
+
+/// Vanilla conserva el orden de navegación, sin la pestaña de mods.
+pub fn pestanas_editor_con_mods<'a, M: Clone + 'a>(
+    p: Paleta,
+    activa: usize,
+    mods: usize,
+    mundos: usize,
+    mostrar_mods: bool,
+    al_elegir: impl Fn(usize) -> M,
+) -> Element<'a, M> {
+    if !mostrar_mods {
+        return pestanas(
+            p,
+            &[
+                ("General", None),
+                ("Java", None),
+                ("Recursos", None),
+                ("Mundos", Some(mundos)),
+                ("Capturas", None),
+                ("Registros", None),
+                ("Archivos", None),
+            ],
+            if activa > 2 {
+                activa - 1
+            } else {
+                activa.min(1)
+            },
+            move |i| al_elegir(if i >= 2 { i + 1 } else { i }),
+        );
+    }
     pestanas(
         p,
         &[
@@ -81,6 +113,14 @@ pub fn encabezado_editor<'a, M: Clone + 'a>(
     d: &DatosEditor,
     m: MensajesEncabezado<M>,
 ) -> Element<'a, M> {
+    encabezado_editor_con_mods(p, d, m, true)
+}
+pub fn encabezado_editor_con_mods<'a, M: Clone + 'a>(
+    p: Paleta,
+    d: &DatosEditor,
+    m: MensajesEncabezado<M>,
+    mostrar_mods: bool,
+) -> Element<'a, M> {
     let acciones = row![
         crate::descargas::boton_icono(p, Icono::Carpeta, m.abrir_carpeta),
         crate::descargas::boton_icono(p, Icono::Acciones, m.mas),
@@ -88,13 +128,12 @@ pub fn encabezado_editor<'a, M: Clone + 'a>(
     ]
     .spacing(espacio::S2)
     .align_y(Alignment::Center);
-    let datos = row![
-        dato(p, "Versión", &d.version),
-        dato(p, "Jugado", &d.jugado),
-        dato(p, "Mods", &d.mods),
-        dato(p, "Tamaño", &d.tamano),
-    ]
-    .spacing(espacio::S8);
+    let mut datos =
+        row![dato(p, "Versión", &d.version), dato(p, "Jugado", &d.jugado),].spacing(espacio::S8);
+    if mostrar_mods {
+        datos = datos.push(dato(p, "Mods", &d.mods));
+    }
+    datos = datos.push(dato(p, "Tamaño", &d.tamano));
     column![
         banda_con(p, d.portada, &d.nombre, None, 150.0, texto::DISPLAY),
         container(
@@ -119,7 +158,9 @@ pub fn encabezado_editor<'a, M: Clone + 'a>(
 }
 
 fn pagina<'a, M: 'a>(contenido: Element<'a, M>) -> Element<'a, M> {
-    crate::scroll::desplazable(container(contenido).padding(Padding::from([espacio::S6, espacio::S12])))
+    crate::scroll::desplazable(
+        container(contenido).padding(Padding::from([espacio::S6, espacio::S12])),
+    )
 }
 
 fn campo_rotulado<'a, M: 'a>(p: Paleta, nombre: &str, control: Element<'a, M>) -> Element<'a, M> {
@@ -162,7 +203,12 @@ pub fn pestana_general<'a, M: Clone + 'a>(
         container(campo(p, "Ancho", &e.ancho, m.ancho)).width(100),
         text("×").color(p.text_muted),
         container(campo(p, "Alto", &e.alto, m.alto)).width(100),
-        casilla(p, "Pantalla completa", e.pantalla_completa, m.pantalla_completa),
+        casilla(
+            p,
+            "Pantalla completa",
+            e.pantalla_completa,
+            m.pantalla_completa
+        ),
     ]
     .spacing(espacio::S3)
     .align_y(Alignment::Center);
@@ -216,15 +262,13 @@ fn tabla_instalaciones<'a, M: Clone + 'a>(
     p: Paleta,
     instalaciones: &[InstalacionJava],
 ) -> Element<'a, M> {
-    let mut tabla = column![container(
-        row![
-            columna_titulo(p, "Java", 1),
-            columna_titulo(p, "Proveedor", 2),
-            columna_titulo(p, "Ruta", 3),
-            columna_titulo(p, "Usado por", 2),
-            Space::with_width(90),
-        ]
-    )
+    let mut tabla = column![container(row![
+        columna_titulo(p, "Java", 1),
+        columna_titulo(p, "Proveedor", 2),
+        columna_titulo(p, "Ruta", 3),
+        columna_titulo(p, "Usado por", 2),
+        Space::with_width(90),
+    ])
     .padding(Padding::from([espacio::S2, 0.0]))];
     for i in instalaciones {
         let tono = if i.existe { p.text } else { p.error };
@@ -270,10 +314,10 @@ fn tabla_instalaciones<'a, M: Clone + 'a>(
     column![
         tabla,
         row![
-                boton(p, "Descargar Java", Variante::Secundario, None::<M>),
-                boton(p, "Detectar instalaciones", Variante::Secundario, None::<M>),
-                boton(p, "Agregar ruta", Variante::Fantasma, None::<M>),
-            ]
+            boton(p, "Descargar Java", Variante::Secundario, None::<M>),
+            boton(p, "Detectar instalaciones", Variante::Secundario, None::<M>),
+            boton(p, "Agregar ruta", Variante::Fantasma, None::<M>),
+        ]
         .spacing(espacio::S2),
     ]
     .spacing(espacio::S4)
@@ -454,12 +498,10 @@ pub fn pestana_mundos<'a, M: Clone + 'a>(
             .style(estilo::sin_estilo(p.text)),
         );
     }
-    let mut panel = column![
-        text("COPIAS DE SEGURIDAD")
-            .font(fuentes::TITULO)
-            .size(texto::HEADING.0)
-            .color(p.text),
-    ]
+    let mut panel = column![text("COPIAS DE SEGURIDAD")
+        .font(fuentes::TITULO)
+        .size(texto::HEADING.0)
+        .color(p.text),]
     .spacing(espacio::S3);
     for c in copias {
         panel = panel
@@ -563,7 +605,10 @@ pub fn pestana_java<'a, M: Clone + 'a>(
             .filter(|i| i.existe)
             .map(|i| format!("Java {} · {}", i.version, i.proveedor)),
     );
-    let elegida = cfg.java.clone().unwrap_or_else(|| JAVA_AUTOMATICO.to_owned());
+    let elegida = cfg
+        .java
+        .clone()
+        .unwrap_or_else(|| JAVA_AUTOMATICO.to_owned());
     let al_elegir = m.java;
     let version = selector(p, opciones, Some(elegida), move |o| {
         al_elegir((o != JAVA_AUTOMATICO).then_some(o))
@@ -632,12 +677,14 @@ pub struct Nodo {
     pub abierta: bool,
     /// Gestionado por Ícaro: se muestra con candado y no se modifica aquí.
     pub bloqueado: bool,
+    pub tamano: String,
 }
 
 /// Acciones de la pestaña Archivos.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AccionArchivo {
     Abrir,
+    AbrirCarpeta,
     Renombrar,
     ConfirmarNombre,
     CancelarNombre,
@@ -650,6 +697,7 @@ pub enum AccionArchivo {
 
 /// Estado que la pestaña Archivos necesita para dibujarse.
 pub struct VistaArchivos<'a> {
+    pub ruta: Option<String>,
     pub arbol: &'a [Nodo],
     pub elegido: Option<usize>,
     /// Contenido del archivo de texto abierto; `None` si no hay o no es texto.
@@ -670,7 +718,7 @@ pub struct MensajesArchivos<M> {
 }
 
 /// Pestaña Archivos: árbol de carpetas que se abren y cierran, acciones sobre
-/// el elemento elegido y editor de texto para los archivos de texto.
+/// el elemento elegido y vista previa de solo lectura.
 pub fn pestana_archivos<'a, M: Clone + 'a>(
     p: Paleta,
     v: &VistaArchivos<'a>,
@@ -679,136 +727,193 @@ pub fn pestana_archivos<'a, M: Clone + 'a>(
     let nodo = v.elegido.and_then(|i| v.arbol.get(i));
     let hay = nodo.is_some();
     let libre = nodo.is_some_and(|n| !n.bloqueado);
-    let accion = |texto: &str, variante: Variante, activo: bool, a: AccionArchivo| {
-        boton(p, texto, variante, activo.then(|| (m.accion)(a)))
-    };
-
-    let barra: Element<'a, M> = if let Some(nombre) = v.renombrando {
-        row![
-            container(campo(p, "Nuevo nombre", nombre, m.nombre)).width(320),
-            accion("Guardar nombre", Variante::Primario, true, AccionArchivo::ConfirmarNombre),
-            accion("Cancelar", Variante::Fantasma, true, AccionArchivo::CancelarNombre),
-        ]
-        .spacing(espacio::S2)
-        .align_y(Alignment::Center)
-        .into()
-    } else {
-        row![
-            accion("Abrir", Variante::Secundario, hay, AccionArchivo::Abrir),
-            accion("Renombrar", Variante::Secundario, libre, AccionArchivo::Renombrar),
-            accion("Duplicar", Variante::Secundario, libre, AccionArchivo::Duplicar),
-            accion("Eliminar", Variante::Secundario, libre, AccionArchivo::Papelera),
-            accion("Copiar ruta", Variante::Fantasma, hay, AccionArchivo::CopiarRuta),
-        ]
-        .spacing(espacio::S2)
-        .into()
-    };
+    let barra: Element<'a, M> = row![
+        text(v.ruta.clone().unwrap_or("Selecciona un archivo".into()))
+            .font(fuentes::MONO)
+            .size(texto::MONO_SM.0)
+            .color(p.text_muted),
+        crate::componentes::boton_con_icono(
+            p,
+            Icono::Externo,
+            "Abrir",
+            Variante::Secundario,
+            hay.then(|| (m.accion)(AccionArchivo::Abrir)),
+            true
+        ),
+        crate::componentes::boton_con_icono(
+            p,
+            Icono::Editar,
+            "Renombrar",
+            Variante::Secundario,
+            libre.then(|| (m.accion)(AccionArchivo::Renombrar)),
+            true
+        ),
+        crate::componentes::boton_con_icono(
+            p,
+            Icono::Copiar,
+            "Copiar ruta",
+            Variante::Secundario,
+            hay.then(|| (m.accion)(AccionArchivo::CopiarRuta)),
+            true
+        ),
+        crate::componentes::boton_con_icono(
+            p,
+            Icono::Carpeta,
+            "",
+            Variante::Fantasma,
+            hay.then(|| (m.accion)(AccionArchivo::AbrirCarpeta)),
+            true
+        ),
+        Space::with_width(Length::Fill),
+        crate::componentes::boton_con_icono(
+            p,
+            Icono::Papelera,
+            "Eliminar",
+            Variante::Peligro,
+            libre.then(|| (m.accion)(AccionArchivo::Papelera)),
+            true
+        ),
+    ]
+    .spacing(espacio::S2)
+    .align_y(Alignment::Center)
+    .into();
 
     let mut nodos = column![];
     for (i, n) in v.arbol.iter().enumerate() {
         let actual = v.elegido == Some(i);
         let tinta = if actual { p.bg } else { p.text };
         let expansor: Element<'a, M> = if n.carpeta {
-            icono(if n.abierta { Icono::ChevronAbajo } else { Icono::ChevronDerecha }, Tam::Base, tinta).into()
+            icono(
+                if n.abierta {
+                    Icono::ChevronAbajo
+                } else {
+                    Icono::ChevronDerecha
+                },
+                Tam::Base,
+                tinta,
+            )
+            .into()
         } else {
             Space::with_width(Tam::Base.px()).into()
         };
-        let glifo = if n.carpeta { Icono::Carpeta } else { Icono::Copiar };
+        let glifo = if n.carpeta {
+            Icono::Carpeta
+        } else {
+            Icono::Copiar
+        };
+        let nombre: Element<'a, M> = if actual && v.renombrando.is_some() {
+            iced::widget::text_input("Nuevo nombre", v.renombrando.unwrap())
+                .id("archivo-nombre")
+                .on_input(m.nombre)
+                .on_submit((m.accion)(AccionArchivo::ConfirmarNombre))
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .padding(4)
+                .style(estilo::campo(p))
+                .into()
+        } else {
+            text(n.nombre.clone())
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .color(tinta)
+                .width(Length::Fill)
+                .into()
+        };
         let mut fila = row![
             Space::with_width(n.profundidad as f32 * espacio::S5),
             expansor,
             icono(glifo, Tam::Base, tinta),
-            text(n.nombre.clone())
-                .font(if actual { fuentes::CUERPO_NEGRITA } else { fuentes::CUERPO })
-                .size(texto::BODY.0)
-                .color(tinta)
-                .width(Length::Fill),
+            nombre,
         ]
         .spacing(espacio::S3)
         .align_y(Alignment::Center);
+        fila = fila.push(
+            text(&n.tamano)
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .color(if actual { p.bg } else { p.text_muted }),
+        );
         if n.bloqueado {
             fila = fila.push(icono(Icono::Candado, Tam::Base, tinta));
+        }
+        if actual && v.renombrando.is_some() {
+            nodos = nodos.push(
+                container(fila)
+                    .height(32)
+                    .width(Length::Fill)
+                    .padding(Padding::from([0., espacio::S4])),
+            );
+            continue;
         }
         nodos = nodos.push(
             iced::widget::button(container(fila).center_y(Length::Fill))
                 .width(Length::Fill)
-                .height(40)
+                .height(32)
                 .padding(Padding::from([0.0, espacio::S4]))
                 .on_press((m.elegir)(i))
                 .style(move |_, estado| iced::widget::button::Style {
-                    background: (actual
-                        || matches!(estado, iced::widget::button::Status::Hovered))
-                    .then_some(iced::Background::Color(if actual {
-                        p.text
-                    } else {
-                        p.surface_hover
-                    })),
+                    background: (actual || matches!(estado, iced::widget::button::Status::Hovered))
+                        .then_some(iced::Background::Color(if actual {
+                            p.text
+                        } else {
+                            p.surface_hover
+                        })),
                     text_color: tinta,
                     ..Default::default()
                 }),
         );
     }
 
-    let derecha: Element<'a, M> = match v.contenido {
-        Some(contenido) => {
-            let editor = iced::widget::text_editor(contenido)
-                .on_action(m.editar)
-                .font(fuentes::MONO)
-                .size(texto::MONO_SM.0)
-                .height(Length::Fill)
-                .padding(espacio::S3)
-                .style(move |_: &iced::Theme, _| iced::widget::text_editor::Style {
-                    background: iced::Background::Color(p.surface_sunken),
-                    border: iced::Border {
-                        color: p.border_strong,
-                        width: borde::MEDIO,
-                        radius: 0.0.into(),
-                    },
-                    icon: p.text_muted,
-                    placeholder: p.text_muted,
-                    value: p.text,
-                    selection: p.accent_soft,
-                });
-            let mut pie = row![].spacing(espacio::S2).align_y(Alignment::Center);
-            pie = pie.push(accion("Guardar", Variante::Primario, v.modificado, AccionArchivo::Guardar));
-            pie = pie.push(accion("Descartar", Variante::Secundario, v.modificado, AccionArchivo::Descartar));
-            if v.modificado {
-                pie = pie.push(insignia(p, Estado::Aviso, "Sin guardar"));
-            }
-            if let Some((estado, nota)) = &v.nota {
-                pie = pie.push(insignia(p, estado.clone(), nota));
-            }
-            column![editor, pie].spacing(espacio::S2).into()
-        }
+    let preview: Element<'a, M> = match v.contenido {
+        Some(c) => crate::scroll::desplazable(
+            container(
+                text(c.text())
+                    .font(fuentes::MONO)
+                    .size(texto::MONO_SM.0)
+                    .color(p.text),
+            )
+            .padding(16),
+        )
+        .into(),
         None => container(
-            text(match &v.nota {
-                Some((_, nota)) => nota.clone(),
-                None => "Elige un archivo de texto para verlo y editarlo.".to_owned(),
-            })
-            .size(texto::BODY.0)
+            text(v.nota.as_ref().map_or(
+                "Elige un archivo de texto para verlo.".to_owned(),
+                |(_, n)| n.clone(),
+            ))
+            .size(texto::BODY_SM.0)
             .color(p.text_muted),
         )
-        .padding(espacio::S4)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(estilo::marco(p))
+        .padding(16)
         .into(),
     };
+    let derecha = column![
+        container(
+            text("Vista previa · solo lectura")
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .color(p.text_muted)
+        )
+        .padding(12),
+        container(Space::new(Length::Fill, 1)).style(estilo::bloque(p.border)),
+        preview
+    ]
+    .height(Length::Fill);
 
     pagina(
         column![
             barra,
-            row![
-                container(crate::scroll::desplazable(nodos))
-                    .padding(borde::MEDIO)
-                    .width(Length::FillPortion(2))
-                    .height(420)
-                    .style(estilo::marco(p)),
-                container(derecha)
-                    .width(Length::FillPortion(3))
-                    .height(420),
-            ]
-            .spacing(espacio::S4),
+            container(
+                row![
+                    container(crate::scroll::desplazable(nodos))
+                        .padding(borde::MEDIO)
+                        .width(Length::FillPortion(2))
+                        .height(420),
+                    container(Space::new(1, Length::Fill)).style(estilo::bloque(p.border)),
+                    container(derecha).width(Length::FillPortion(3)).height(420),
+                ]
+                .height(420)
+            )
+            .style(estilo::marco(p)),
         ]
         .spacing(espacio::S4)
         .into(),

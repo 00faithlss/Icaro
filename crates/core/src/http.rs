@@ -62,10 +62,19 @@ pub(crate) async fn json<T: DeserializeOwned>(
 
 /// Decodifica cuerpos acotados; el llamador valida el estado antes de utilizarlos.
 pub(crate) async fn body_json<T: DeserializeOwned>(
-    mut response: reqwest::Response,
+    response: reqwest::Response,
     service: &'static str,
     limit: usize,
 ) -> Result<T, Error> {
+    let bytes = Zeroizing::new(body_bytes(response, service, limit).await?);
+    serde_json::from_slice(&bytes).map_err(|_| Error::Response(service))
+}
+
+pub(crate) async fn body_bytes(
+    mut response: reqwest::Response,
+    service: &'static str,
+    limit: usize,
+) -> Result<Vec<u8>, Error> {
     if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(Error::Response(service));
     }
@@ -80,7 +89,7 @@ pub(crate) async fn body_json<T: DeserializeOwned>(
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|_| Error::Response(service))
+    Ok(std::mem::take(&mut *bytes))
 }
 
 #[cfg(test)]

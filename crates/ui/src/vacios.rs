@@ -144,13 +144,13 @@ pub fn servidores<'a, M: Clone + 'a>(c: Contexto, agregar: M) -> Element<'a, M> 
 }
 
 /// Descargas: nada en curso.
-pub fn descargas<'a, M: Clone + 'a>(c: Contexto, buscar_mods: M) -> Element<'a, M> {
+pub fn descargas<'a, M: Clone + 'a>(c: Contexto, buscar_modpacks: M) -> Element<'a, M> {
     estado_vacio(
         c,
         Lamina::Forja,
         "No hay descargas\nen curso",
         "Cuando instales un mod, una versión de Minecraft o Java, el avance aparece aquí.",
-        vec![boton(c.p, Some(Icono::Buscar), "Buscar mods", Variante::Primario, TamBoton::Lg, Some(buscar_mods))],
+        vec![boton(c.p, Some(Icono::Buscar), "Buscar modpacks", Variante::Primario, TamBoton::Lg, Some(buscar_modpacks))],
     )
 }
 

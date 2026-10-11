@@ -78,11 +78,13 @@ pub fn resultados(app: &App) -> Vec<Resultado> {
             destino: Destino::Instancia(i),
         })
         .collect();
+    if app.servicios.demo {
     entradas.extend(mods::CATALOGO.iter().map(|m| Resultado {
         titulo: m.titulo.into(),
         detalle: format!("Mod · {} · {}", m.id, m.descripcion),
         destino: Destino::Mod(m.id.into()),
     }));
+    }
     entradas.extend(
         app.red
             .servidores

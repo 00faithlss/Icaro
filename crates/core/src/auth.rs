@@ -17,7 +17,23 @@ pub use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
 mod device;
+mod app_return;
 pub use device::{begin_device, complete_device, open_device_page, DeviceGrant, DeviceInfo};
+pub use app_return::{forward_app_return, register_app_return, APP_REDIRECT};
+
+#[derive(Clone, Copy)]
+pub enum ReturnMethod { Loopback, App }
+
+/// Etapas públicas del acceso; nunca contienen códigos ni credenciales.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    WaitingForBrowser,
+    Microsoft,
+    Xbox,
+    Minecraft,
+    Ownership,
+    Profile,
+}
 
 pub const CLIENT_ID: &str = "dcf91e3f-eb41-4373-917f-3c22ef526059";
 const AUTHORIZE: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
@@ -118,8 +134,19 @@ fn authorize_url(proof: &Proof, redirect: &str) -> Url {
     url
 }
 
-/// Respuesta mínima y sin recursos externos, códigos, tokens o contenido remoto.
-const REPLY: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\nConnection: close\r\n\r\nIcaro recibio la respuesta. Puedes cerrar esta ventana y volver al launcher.";
+/// Página local sin recursos externos ni contenido recibido de Microsoft.
+fn return_reply(denied: bool) -> String {
+    const SCRIPT: &str = "history.replaceState(null, '', '/');";
+    let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(SCRIPT.as_bytes()));
+    let (title, message) = if denied {
+        ("Acceso cancelado", "Vuelve a Ícaro para intentarlo de nuevo.")
+    } else {
+        ("Autorización recibida", "Ícaro está comprobando tu cuenta. Puedes volver al launcher y cerrar esta pestaña.")
+    };
+    let body = include_str!("auth/return.html").replace("__TITLE__", title)
+        .replace("__MESSAGE__", message).replace("__SCRIPT__", SCRIPT);
+    format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'; script-src 'sha256-{hash}'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+}
 const REJECT: &str = "HTTP/1.1 400 Bad Request\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
 
 fn parse_callback(request: &str, state: &str, port: u16) -> Result<Zeroizing<String>, Error> {
@@ -198,9 +225,9 @@ async fn receive(
         .await;
         let result = parsed.unwrap_or(Err(Error::Callback));
         let reply = if matches!(result, Ok(_) | Err(Error::Denied)) {
-            REPLY
+            return_reply(matches!(result, Err(Error::Denied)))
         } else {
-            REJECT
+            REJECT.to_owned()
         };
         let _ =
             tokio::time::timeout(Duration::from_secs(1), stream.write_all(reply.as_bytes())).await;
@@ -258,11 +285,22 @@ async fn minecraft_session(
     previous_refresh: Option<Zeroizing<String>>,
     endpoints: &Endpoints<'_>,
 ) -> Result<Session, Error> {
+    minecraft_session_with_progress(client, msa, previous_refresh, endpoints, &|_| {}).await
+}
+
+async fn minecraft_session_with_progress(
+    client: &Client,
+    msa: MicrosoftToken,
+    previous_refresh: Option<Zeroizing<String>>,
+    endpoints: &Endpoints<'_>,
+    progress: &(impl Fn(Stage) + Send + Sync),
+) -> Result<Session, Error> {
     let refresh = msa
         .refresh_token
         .or(previous_refresh)
         .filter(|s| !s.is_empty())
         .ok_or(Error::Denied)?;
+    progress(Stage::Xbox);
     let user: XboxToken = http::json(client.post(endpoints.user)
         .header("x-xbl-contract-version", "1")
         .json(&serde_json::json!({"Properties":{"AuthMethod":"RPS","SiteName":"user.auth.xboxlive.com","RpsTicket":format!("d={}", &*msa.access_token)},"RelyingParty":"http://auth.xboxlive.com","TokenType":"JWT"})), "Xbox", MAX_AUTH_BODY).await?;
@@ -274,6 +312,7 @@ async fn minecraft_session(
         ([a], [b]) if !a.uhs.is_empty() && a.uhs == b.uhs => &b.uhs,
         _ => return Err(Error::Callback),
     };
+    progress(Stage::Minecraft);
     let token: MinecraftToken = http::json(
         client.post(endpoints.login).json(
             &serde_json::json!({"identityToken":format!("XBL3.0 x={};{}", uhs, &*xsts.token)}),
@@ -293,6 +332,7 @@ async fn minecraft_session(
     struct Entitlement {
         name: String,
     }
+    progress(Stage::Ownership);
     let ownership: Entitlements = http::json(
         client
             .get(endpoints.ownership)
@@ -308,6 +348,7 @@ async fn minecraft_session(
     {
         return Err(Error::NoMinecraft);
     }
+    progress(Stage::Profile);
     let profile: Profile = http::json(
         client
             .get(endpoints.profile)
@@ -339,21 +380,43 @@ async fn minecraft_session(
 }
 
 pub async fn login(cancel: CancellationToken) -> Result<Session, Error> {
+    login_with_return(cancel, ReturnMethod::Loopback).await
+}
+
+pub async fn login_with_return(cancel: CancellationToken, method: ReturnMethod) -> Result<Session, Error> {
+    login_with_progress(cancel, method, |_| {}).await
+}
+
+pub async fn login_with_progress(
+    cancel: CancellationToken,
+    method: ReturnMethod,
+    progress: impl Fn(Stage) + Send + Sync,
+) -> Result<Session, Error> {
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(Error::Cancelled),
         result = tokio::time::timeout(LOGIN_TIMEOUT, async {
             let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.map_err(|_| Error::Setup)?;
             let port = listener.local_addr().map_err(|_| Error::Setup)?.port();
-            let redirect = format!("http://localhost:{port}");
-            let proof = Proof { verifier: random_string()?, state: random_string()? };
+            let redirect = match method {
+                ReturnMethod::Loopback => format!("http://localhost:{port}"),
+                ReturnMethod::App => APP_REDIRECT.to_owned(),
+            };
+            let random_state = random_string()?;
+            let state = match method {
+                ReturnMethod::Loopback => random_state,
+                ReturnMethod::App => Zeroizing::new(format!("{port}.{}", random_state.as_str())),
+            };
+            let proof = Proof { verifier: random_string()?, state };
             let url = authorize_url(&proof, &redirect);
+            progress(Stage::WaitingForBrowser);
             tokio::task::spawn_blocking(move || webbrowser::open(url.as_str()).map_err(|_| Error::Browser)).await.map_err(|_| Error::Browser)??;
             let code = receive(&listener, &proof, port).await?;
             drop(listener);
+            progress(Stage::Microsoft);
             let client = http::client()?;
             let msa = http::json(client.post(TOKEN).form(&[("client_id", CLIENT_ID), ("grant_type", "authorization_code"), ("code", &*code), ("redirect_uri", &redirect), ("code_verifier", &*proof.verifier), ("scope", SCOPES)]), "Microsoft", MAX_AUTH_BODY).await?;
-            minecraft_session(&client, msa, None, &SERVICES).await
+            minecraft_session_with_progress(&client, msa, None, &SERVICES, &progress).await
         }) => result.unwrap_or(Err(Error::Expired)),
     }
 }
@@ -362,13 +425,22 @@ pub async fn refresh(
     refresh_token: Zeroizing<String>,
     cancel: CancellationToken,
 ) -> Result<Session, Error> {
+    refresh_with_progress(refresh_token, cancel, |_| {}).await
+}
+
+pub async fn refresh_with_progress(
+    refresh_token: Zeroizing<String>,
+    cancel: CancellationToken,
+    progress: impl Fn(Stage) + Send + Sync,
+) -> Result<Session, Error> {
     tokio::select! {
         biased;
         _ = cancel.cancelled() => Err(Error::Cancelled),
         result = async {
             let client = http::client()?;
+            progress(Stage::Microsoft);
             let msa = http::json(client.post(TOKEN).form(&[("client_id", CLIENT_ID), ("grant_type", "refresh_token"), ("refresh_token", &*refresh_token), ("scope", SCOPES)]), "Microsoft", MAX_AUTH_BODY).await?;
-            minecraft_session(&client, msa, Some(refresh_token), &SERVICES).await
+            minecraft_session_with_progress(&client, msa, Some(refresh_token), &SERVICES, &progress).await
         } => result,
     }
 }
@@ -377,9 +449,34 @@ pub async fn renew(session: &Session, cancel: CancellationToken) -> Result<Sessi
     refresh(session.refresh.clone(), cancel).await
 }
 
+pub async fn renew_with_progress(
+    session: &Session,
+    cancel: CancellationToken,
+    progress: impl Fn(Stage) + Send + Sync,
+) -> Result<Session, Error> {
+    refresh_with_progress(session.refresh.clone(), cancel, progress).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn return_page_is_private_and_scrubs_the_callback_address() {
+        for denied in [false, true] {
+            let reply = return_reply(denied);
+            let (headers, body) = reply.split_once("\r\n\r\n").unwrap();
+            assert!(headers.contains("Cache-Control: no-store"));
+            assert!(headers.contains("Referrer-Policy: no-referrer"));
+            assert!(headers.contains("default-src 'none'"));
+            assert!(headers.contains(&format!("Content-Length: {}", body.len())));
+            let script = body.split_once("<script>").unwrap().1.split_once("</script>").unwrap().0;
+            assert_eq!(script, "history.replaceState(null, '', '/');");
+            let hash = base64::engine::general_purpose::STANDARD.encode(Sha256::digest(script.as_bytes()));
+            assert!(headers.contains(&format!("script-src 'sha256-{hash}'")));
+            assert!(!body.contains("__") && !body.contains("http") && !body.contains("code="));
+            assert!(body.contains(if denied { "Acceso cancelado" } else { "Autorización recibida" }));
+        }
+    }
     async fn exchange_case(case: u8) -> Result<Session, Error> {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -459,14 +556,22 @@ mod tests {
             access_token: Zeroizing::new("CANARY_MSA".into()),
             refresh_token: None,
         };
-        let result = minecraft_session(
+        let stages = std::sync::Mutex::new(Vec::new());
+        let result = minecraft_session_with_progress(
             &Client::new(),
             msa,
             Some(Zeroizing::new("CANARY_REFRESH".into())),
             &endpoints,
+            &|stage| stages.lock().unwrap().push(stage),
         )
         .await;
         server.await.unwrap();
+        let expected = match case {
+            1 => vec![Stage::Xbox],
+            2 => vec![Stage::Xbox, Stage::Minecraft, Stage::Ownership],
+            _ => vec![Stage::Xbox, Stage::Minecraft, Stage::Ownership, Stage::Profile],
+        };
+        assert_eq!(*stages.lock().unwrap(), expected);
         result
     }
     #[tokio::test]

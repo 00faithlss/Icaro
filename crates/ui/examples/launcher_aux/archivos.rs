@@ -45,6 +45,11 @@ impl Explorador {
     pub fn abrir(instancia: &str) -> Self {
         let raiz = std::env::temp_dir().join("icaro-demo").join(instancia);
         crear_demo(&raiz);
+        Self::desde_ruta(raiz)
+    }
+
+    /// Abre la carpeta de juego existente sin crear archivos de demostración.
+    pub fn desde_ruta(raiz: PathBuf) -> Self {
         let mut e = Self {
             abiertas: HashSet::from([raiz.join("mods"), raiz.join("config")]),
             raiz,
@@ -70,6 +75,7 @@ impl Explorador {
                 carpeta: e.carpeta,
                 abierta: self.abiertas.contains(&e.ruta),
                 bloqueado: e.bloqueado,
+                tamano: fs::metadata(&e.ruta).ok().map_or(String::new(),|m| if m.is_dir() { fs::read_dir(&e.ruta).ok().map_or(String::new(),|d| d.count().to_string()) } else { format!("{} KB",m.len().div_ceil(1024)) }),
             })
             .collect();
     }
@@ -182,6 +188,10 @@ impl Explorador {
 
     pub fn ruta_texto(&self) -> Option<String> {
         self.ruta_elegida().map(|r| r.display().to_string())
+    }
+    pub fn ruta_relativa(&self) -> Option<String> { self.ruta_elegida().and_then(|r| r.strip_prefix(&self.raiz).ok().map(|p| p.to_string_lossy().replace('\\',"/"))) }
+    pub fn abrir_carpeta(&self) {
+        if let Some(r)=self.ruta_elegida() { crate::pantallas::abrir_en_sistema(if r.is_dir() { &r } else { r.parent().unwrap_or(&self.raiz) }); }
     }
 
     /// Abre la carpeta o el archivo con el sistema.

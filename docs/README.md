@@ -4,6 +4,9 @@
 | --- | --- |
 | [Acerca de Ícaro](acerca-de.md) | Qué es y qué permite hacer |
 | [Desarrollo](desarrollo.md) | Compilación, estructura, criterios de interfaz y licencia |
+| [Roadmap general](../README.md#roadmap) | Funciones implementadas y próximas entregas del launcher |
+| [Roadmap del System Design](roadmap-system-design.md) | Avance por componente: implementado, parcial, maqueta y pendiente |
+| [Comparación con el system design](revision-system-design.md) | Diferencias entre las pantallas reales y los componentes originales, para evaluación |
 | [Integración real](integracion-real.md) | Estado del núcleo, autenticación, seguridad y tiendas de mods |
 | [Inicio de sesión y catálogo](login-y-catalogo.md) | Probar Microsoft, almacenamiento de sesión y catálogo público de Modrinth |
 | [Cuenta y estudio de skin](cuenta.md) | Pantallas de cuenta, estados de sesión y cómo abrirlos en la maqueta |

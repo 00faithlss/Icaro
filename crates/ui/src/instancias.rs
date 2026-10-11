@@ -24,6 +24,7 @@ pub const ANCHO_TARJETA: f32 = 300.0;
 /// Estado visible de una instancia.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EstadoInstancia {
+    Pendiente,
     Lista,
     Desactualizada,
     /// Avance de 0 a 1.
@@ -156,6 +157,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
 
     cuerpo = cuerpo.push(Space::with_height(espacio::S1));
     cuerpo = match datos.estado {
+        EstadoInstancia::Pendiente => cuerpo.push(insignia(p, Estado::Aviso, "Por instalar")),
         EstadoInstancia::Lista => cuerpo.push(insignia(p, Estado::Exito, "Lista")),
         EstadoInstancia::Desactualizada => {
             cuerpo.push(insignia(p, Estado::Aviso, "Desactualizada"))
@@ -194,6 +196,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     let invertido = datos.estado == EstadoInstancia::Jugando;
     let tinta = if invertido { p.bg } else { p.text };
     let (glifo, etiqueta, color, activo) = match datos.estado {
+        EstadoInstancia::Pendiente => (Icono::Descargas, "Instalar".to_owned(), tinta, true),
         EstadoInstancia::Lista => (Icono::Jugar, "Jugar".to_owned(), tinta, true),
         EstadoInstancia::Desactualizada => {
             (Icono::Actualizar, "Actualizar".to_owned(), tinta, true)
