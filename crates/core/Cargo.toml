@@ -13,9 +13,11 @@ thiserror.workspace = true
 base64 = "0.22"
 getrandom = "0.3"
 sha2 = "0.10"
+regex = "1"
+roxmltree = "0.20"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 zeroize = { version = "1", features = ["serde"] }
-tokio = { workspace = true, features = ["net", "io-util", "time", "sync"] }
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "process", "fs"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 webbrowser = "1"
 

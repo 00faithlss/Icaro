@@ -42,6 +42,8 @@ mod red;
 mod busqueda;
 #[path = "launcher_aux/atajos.rs"]
 mod atajos;
+#[path = "launcher_aux/juego_real.rs"]
+mod juego_real;
 #[path = "launcher_aux/instancias_reales.rs"]
 mod instancias_reales;
 #[path = "launcher_aux/mods_reales.rs"]
@@ -132,6 +134,9 @@ struct App {
     mundo: usize,
     filtro_consola: usize,
     busqueda_consola: String,
+    niveles_consola: [bool; 3],
+    autoscroll_consola: bool,
+    desplazamiento_consola: icaro_ui::consola::DesplazamientoConsola,
     capt: capt::Estado,
     cursor: Point,
     red: red::Estado,
@@ -194,6 +199,7 @@ impl App {
 
 #[derive(Debug, Clone)]
 enum Mensaje {
+    Juego(juego_real::Accion),
     CapturarDiseno,
     DisenoCapturado(window::Screenshot),
     DisenoMods(diseno_mods::Accion),
@@ -272,6 +278,10 @@ enum Mensaje {
     NombreArchivo(String),
     FiltroConsola(usize),
     BuscarConsola(String),
+    NivelConsola(usize),
+    AutoscrollConsola(bool),
+    DesplazadoConsola(icaro_ui::consola::DesplazamientoConsola),
+    FinalConsola,
     Capt(capt::Accion),
     Ir(Seccion),
     Filtro(usize),
@@ -343,6 +353,7 @@ fn con_entrada<'a>(app: &App, contenido: Element<'a, Mensaje>) -> Element<'a, Me
 }
 
 fn abrir_instancia(app: &mut App, i: usize) {
+    if app.pantalla == Some(pantallas::Pantalla::Fallo) { app.pantalla = None; }
     if i >= instancias().len() { return; }
     if !app.servicios.demo && app.editor.is_some() {
         let nombre = app.general.nombre.clone();
@@ -374,7 +385,8 @@ fn abrir_instancia(app: &mut App, i: usize) {
 
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     let guardar = !matches!(&m, Mensaje::Cuadro(_) | Mensaje::Cursor(_)
-        | Mensaje::Tamano(_) | Mensaje::Maximizada(_) | Mensaje::AvisoTic(_) | Mensaje::Nada | Mensaje::ImagenesActualizadas);
+        | Mensaje::Tamano(_) | Mensaje::Maximizada(_) | Mensaje::AvisoTic(_) | Mensaje::Nada | Mensaje::ImagenesActualizadas
+        | Mensaje::Juego(juego_real::Accion::Progreso(..) | juego_real::Accion::Evento(..)));
     let instalaciones = app.instalando.len();
     mods::fijar_recurso(app.editor == Some(3));
     let deshacer_captura = matches!(&m, Mensaje::Capt(capt::Accion::Deshacer));
@@ -438,6 +450,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         return Task::none();
     }
     match m {
+        Mensaje::Juego(a) => return juego_real::actualizar(app, a),
         Mensaje::CapturarDiseno => return window::get_latest().then(|id| id.map_or(Task::none(),|id| window::screenshot(id).map(Mensaje::DisenoCapturado))),
         Mensaje::DisenoCapturado(s) => {
             if let Some(path)=std::env::var_os("ICARO_CAPTURA_DISENO") { let _=image::save_buffer(path,&s.bytes,s.size.width,s.size.height,image::ColorType::Rgba8); }
@@ -563,6 +576,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.editor = Some(i);
             arrancar(app);
             if i == 2 && !app.servicios.demo { return mods_reales::actualizar(app, mods_reales::Accion::Cargar); }
+            if i == 5 { return capt::refrescar(app); }
+            if i == 6 && !app.servicios.demo { return juego_real::cargar_consola(app); }
             if matches!(i, 2 | 3) && app.mods_vista == 1 && !app.servicios.demo { return servicios::buscar(app, 0, false); }
         }
         Mensaje::Nombre(v) => app.general.nombre = v,
@@ -665,7 +680,13 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::ElegirArchivo(i) => app.exp.elegir(i),
         Mensaje::EditarArchivo(a) => app.exp.editar(a),
         Mensaje::NombreArchivo(n) => app.exp.escribir_nombre(n),
-        Mensaje::AccionArchivo(a) => match a {
+        Mensaje::AccionArchivo(a) => {
+            if !app.servicios.demo && matches!(a,AccionArchivo::ConfirmarNombre | AccionArchivo::Duplicar | AccionArchivo::Papelera | AccionArchivo::Guardar)
+                && app.servicios.instancias.registros.get(app.editor_inst).is_some_and(|i| app.servicios.juego.ocupada(&i.id)) {
+                app.avisar("Espera a que termine la instalación o cierra el juego antes de cambiar sus archivos.".into());
+                return Task::none();
+            }
+            match a {
             AccionArchivo::Abrir => app.exp.abrir_en_sistema(),
             AccionArchivo::AbrirCarpeta => app.exp.abrir_carpeta(),
             AccionArchivo::Renombrar => {
@@ -683,9 +704,30 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                     return iced::clipboard::write(ruta);
                 }
             }
+            }
         },
         Mensaje::FiltroConsola(i) => app.filtro_consola = i,
         Mensaje::BuscarConsola(v) => app.busqueda_consola = v,
+        Mensaje::NivelConsola(i) => {
+            if let Some(nivel) = app.niveles_consola.get_mut(i) { *nivel = !*nivel; }
+            app.desplazamiento_consola = Default::default();
+            if app.autoscroll_consola { return juego_real::seguir_consola(app); }
+        }
+        Mensaje::AutoscrollConsola(activo) => {
+            app.autoscroll_consola = activo;
+            if activo { return juego_real::seguir_consola(app); }
+        }
+        Mensaje::DesplazadoConsola(d) => {
+            let subio = d.offset + 2. < app.desplazamiento_consola.offset;
+            app.desplazamiento_consola = d;
+            if d.esta_al_final { app.autoscroll_consola = true; }
+            else if subio { app.autoscroll_consola = false; }
+            else if app.autoscroll_consola { return juego_real::seguir_consola(app); }
+        }
+        Mensaje::FinalConsola => {
+            app.autoscroll_consola = true;
+            return juego_real::seguir_consola(app);
+        }
         Mensaje::Capt(a) => return capt::actualizar(app, a),
         Mensaje::Ir(s) => {
             if !app.servicios.demo && app.editor.is_some() {
@@ -696,13 +738,15 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             }
             app.servicios.reset_catalog();
             app.seccion = s;
-            if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) {
+            if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio | pantallas::Pantalla::Fallo)) {
                 app.pantalla = None;
             }
             app.sesion.menu = false;
             arrancar(app);
             app.editor = None;
             if s == Seccion::Modpacks && !app.servicios.demo { return servicios::buscar(app, 0, false); }
+            if s == Seccion::Capturas { return capt::refrescar(app); }
+            if s == Seccion::Consola && !app.servicios.demo { return juego_real::cargar_consola(app); }
         }
         Mensaje::Filtro(i) => {
             app.filtro = i;
@@ -857,6 +901,12 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.avisar(format!("{archivo} se movió a la papelera."));
         }
         Mensaje::Cuadro(t) => {
+            // Las capturas de las fases del Umbral usan un reloj fijo.
+            if std::env::var_os("ICARO_CAPTURA_DISENO").is_some()
+                && std::env::var("ICARO_VISTA_DISENO").is_ok_and(|v| v.starts_with("juego-umbral"))
+            {
+                return Task::none();
+            }
             app.ahora = t;
             app.red.tick(t, app.simultaneas);
             avanzar_instalaciones(app);
@@ -875,8 +925,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Jugar(i) => {
             if !app.servicios.demo {
-                app.avisar("La instalación y el lanzamiento de Minecraft todavía están en desarrollo.".into());
-                return Task::none();
+                return juego_real::iniciar(app,i,true);
             }
             // Una sesión vencida muestra el aviso en lugar de abrir el Umbral.
             let _ = sesion::actualizar(app, sesion::Accion::Jugar);
@@ -890,7 +939,13 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.umbral = Some(ahora);
             app.ahora = ahora;
         }
-        Mensaje::UmbralVolver => app.umbral = None,
+        Mensaje::UmbralVolver => {
+            if app.servicios.demo {
+                app.umbral = None;
+            } else {
+                return juego_real::volver_umbral(app);
+            }
+        }
         Mensaje::PicarEmpezar => {
             if app.servicios.instancias.operando { return Task::none(); }
             let libre = app.umbral.is_none()
@@ -1055,7 +1110,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                 }
             }
             app.servicios.cancel();
-            return window::get_oldest().and_then(window::close);
+            return if app.servicios.demo {window::get_oldest().and_then(window::close)}else{juego_real::cerrar(app)};
         }
         Mensaje::Nada | Mensaje::ImagenesActualizadas => {}
     }
@@ -1253,7 +1308,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
                 &d,
                 AccionesTarjeta {
                     seleccionar: Mensaje::AbrirInstancia(i),
-                    principal: if matches!(d.estado, EstadoInstancia::Error) { Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Fallo)) } else if matches!(d.estado, EstadoInstancia::Lista | EstadoInstancia::Pendiente) { Mensaje::Jugar(i) } else { Mensaje::Nada },
+                    principal: if app.servicios.demo && matches!(d.estado, EstadoInstancia::Error) { Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Fallo)) } else if matches!(d.estado, EstadoInstancia::Lista | EstadoInstancia::Pendiente | EstadoInstancia::Error) { Mensaje::Jugar(i) } else { Mensaje::Nada },
                     mas: Mensaje::Menu(Some(i)),
                 },
             );
@@ -2731,7 +2786,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         memoria: format!("{} MB", app.configs[app.editor_inst].memoria_max),
         portada: instancia.portada,
     };
-    let encabezado = icaro_ui::editor::encabezado_editor_con_mods(
+    let encabezado = icaro_ui::editor::encabezado_editor_accion(
         p,
         &datos,
         MensajesEncabezado {
@@ -2741,6 +2796,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
             jugar: Mensaje::Jugar(app.editor_inst),
         },
         mods_reales::permite_mods(app),
+        if app.servicios.demo {componentes::boton_jugar(p,"Jugar",Some(&datos.memoria),Mensaje::Jugar(app.editor_inst))}else{juego_real::boton(app,app.editor_inst)},
     );
     let barra = container(icaro_ui::editor::pestanas_editor_con_mods(p, pestana, cantidad_mods, if app.servicios.demo { 3 } else { 0 }, mods_reales::permite_mods(app), Mensaje::Pestana))
         .padding(Padding::from([0.0, espacio::S12]));
@@ -2770,12 +2826,12 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
                 metaspace: Mensaje::Metaspace,
                 argumentos: Mensaje::ArgsJvm,
             },
-            16384,
+            if app.servicios.demo {16384} else {juego_real::memoria_total_mb()},
             &if app.servicios.demo { vec![
                 InstalacionJava { version: "21.0.5".into(), proveedor: "Temurin".into(), gestionada: true, ruta: "…/icaro/java/21".into(), usado_por: "1.20.5 en adelante".into(), existe: true },
                 InstalacionJava { version: "17.0.13".into(), proveedor: "Temurin".into(), gestionada: true, ruta: "…/icaro/java/17".into(), usado_por: "1.18 a 1.20.4".into(), existe: true },
                 InstalacionJava { version: "19".into(), proveedor: "No encontrado".into(), gestionada: false, ruta: "D:/jdk-19/bin/javaw.exe".into(), usado_por: "Ninguna".into(), existe: false },
-            ] } else { Vec::new() },
+            ] } else { juego_real::instalaciones_java(app) },
         ),
         2 => pestana_mods(app),
         3 => pestana_mods(app),
@@ -2794,9 +2850,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
             ] } else { Vec::new() },
         ),
         5 => capt::pestana(app),
-        6 => container(consola(p, &if app.servicios.demo { lineas_consola() } else { Vec::new() }, app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada }))
-            .padding(Padding::from([espacio::S6, espacio::S12]))
-            .into(),
+        6 => if app.servicios.demo {container(consola(p, &lineas_consola(), app.filtro_consola, &app.busqueda_consola, MensajesConsola { filtro: Mensaje::FiltroConsola, buscar: Mensaje::BuscarConsola, copiar: Mensaje::Nada, limpiar: Mensaje::Nada })).padding(Padding::from([espacio::S6, espacio::S12])).into()}else{juego_real::consola(app)},
         7 => {
             pestana_archivos(
                 p,
@@ -2835,6 +2889,7 @@ fn lineas_consola() -> Vec<Linea> {
 }
 
 fn pantalla_consola(app: &App) -> Element<'_, Mensaje> {
+    if !app.servicios.demo && (!juego_real::lineas(app).is_empty() || !app.servicios.juego.procesos.is_empty()) {return juego_real::consola(app);}
     if app.capt.vacio || !app.servicios.demo {
         return capt::vacio_consola(app);
     }
@@ -2913,6 +2968,7 @@ fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_descargas(app: &App) -> Element<'_, Mensaje> {
+    if !app.servicios.demo && !app.servicios.juego.orden.is_empty() {return juego_real::descargas(app);}
     if app.capt.vacio || (!app.red.hay_cola() && app.red.historial.is_empty()) {
         return capt::vacio_descargas(app);
     }
@@ -3029,7 +3085,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                     .color(p.text_muted),
             ],
             Space::with_width(Length::Fill),
-            componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Jugar(i))),
+            if app.servicios.demo {componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Jugar(i)))}else{juego_real::boton(app,i)},
         ]
         .align_y(Alignment::Center)
         .padding(Padding::from([espacio::S2, espacio::S12]));
@@ -3044,7 +3100,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { None } else { Some(app.seccion) },
         app.colapsada,
         Cuenta { nombre: app.servicios.nombre(app.sesion.estado.nombre()), proveedor: "Microsoft", estado: app.sesion.estado },
-        app.servicios.demo.then_some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 }),
+        if app.servicios.demo {Some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 })}else{juego_real::indicador(app)},
         contenido,
         pie,
         MensajesShell {
@@ -3164,29 +3220,39 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         );
     }
 
-    if let Some(t) = app.umbral {
+    // Mantener el árbol de la vista debajo del Umbral evita remontar la
+    // instancia, sus imágenes y sus controles cuando se retira la animación.
+    let umbral: Element<'_, Mensaje> = if let Some(t) = app.umbral {
         let nombre = app.seleccionada.and_then(|i| instancias().get(i).map(|d| d.nombre.clone())).unwrap_or_default();
         let pref = icaro_ui::movimiento::Preferencia { reducir: app.reducir };
-        ventana = iced::widget::stack![
-            ventana,
-            icaro_ui::efectos::umbral(p, ms_desde(t, app.ahora), pref, &nombre, Mensaje::UmbralVolver),
-        ]
-        .into();
-    }
+        if app.servicios.demo {
+            icaro_ui::efectos::umbral(p, ms_desde(t, app.ahora), pref, &nombre, Mensaje::UmbralVolver)
+        } else {
+            icaro_ui::efectos::umbral_registro_transicion(
+                p, ms_desde(t,app.ahora), pref,
+                &juego_real::lineas(app).iter().rev().take(8).collect::<Vec<_>>().into_iter().rev()
+                    .map(|l|format!("[{}] {}",l.hora,l.mensaje)).collect::<Vec<_>>(),
+                juego_real::retirada_umbral(app), Mensaje::UmbralVolver,
+            )
+        }
+    } else {
+        Space::new(Length::Fill, Length::Fill).into()
+    };
+    ventana = iced::widget::stack![ventana, umbral].into();
     let ventana = sesion::con_selector(app, ventana);
     let mut ventana = mods_reales::capa(app, servicios::capa(app, capt::capa(app, ventana)));
-    if let Some(a) = &app.aviso {
-        ventana = iced::widget::stack![
-            ventana,
+    let aviso: Element<'_, Mensaje> = if let Some(a) = &app.aviso {
             container(toast_con_opacidad(p, Icono::Check, &a.texto, a.accion.clone().map(|m| ("Deshacer", m)), Some(Mensaje::CerrarAviso), false, a.opacidad(app.ahora, app.reducir)))
                 .align_x(iced::alignment::Horizontal::Left)
                 .align_y(iced::alignment::Vertical::Bottom)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .padding(Padding::from([espacio::S6, 256.0]))
-        ]
-        .into();
-    }
+        .into()
+    } else {
+        Space::new(Length::Fill, Length::Fill).into()
+    };
+    ventana = iced::widget::stack![ventana, aviso].into();
     if app.busqueda.abierta {
         ventana = icaro_ui::superficies::con_velo(p, ventana,
             busqueda::vista(app), Mensaje::CerrarBusqueda);
@@ -3218,6 +3284,12 @@ fn main() -> iced::Result {
             if !app.servicios.demo && app.pantalla == Some(pantallas::Pantalla::Codigo) {
                 subs.push(iced::time::every(std::time::Duration::from_secs(1)).map(Mensaje::Cuadro));
             }
+            if !app.servicios.juego.procesos.is_empty() {
+                subs.push(iced::time::every(std::time::Duration::from_millis(600)).map(Mensaje::Cuadro));
+            }
+            if !app.reducir && app.servicios.juego.trabajos.values().any(|t| matches!(t.estado,icaro_ui::descargas::EstadoDescarga::Activa(_))) {
+                subs.push(window::frames().map(Mensaje::Cuadro));
+            }
             if let Some(aviso) = &app.aviso {
                 let ms = if !app.reducir && aviso.saliendo(app.ahora) { 16 } else { 60 };
                 subs.push(iced::time::every(std::time::Duration::from_millis(ms)).map(Mensaje::AvisoTic));
@@ -3235,7 +3307,11 @@ fn main() -> iced::Result {
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
             }
-            let umbral_activo = app.umbral.is_some_and(|t| ms_desde(t, app.ahora) < 1700.0);
+            let umbral_activo = if app.servicios.demo {
+                app.umbral.is_some_and(|t| ms_desde(t, app.ahora) < 1700.0)
+            } else {
+                juego_real::animando_umbral(app)
+            };
             let picar_activo = app.picar.as_ref().is_some_and(|p| {
                 p.rota.map_or(true, |t| ms_desde(t, app.ahora) < icaro_ui::movimiento::PICAR_ROTURA_MS + 80.0)
             });
@@ -3247,6 +3323,7 @@ fn main() -> iced::Result {
             }
             subs.push(iced::event::listen_with(|evento, _, _| {
                 match evento {
+                    iced::Event::Window(window::Event::CloseRequested) => Some(Mensaje::Cerrar),
                     iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) =>
                         atajos::global(&key, modifiers),
                     _ => None,
@@ -3311,6 +3388,7 @@ fn main() -> iced::Result {
         .window(window::Settings {
             decorations: false,
             resizable: true,
+            exit_on_close_request: false,
             size: Size::new(1280.0, 800.0),
             min_size: Some(Size::new(940.0, 600.0)),
             icon: window::icon::from_file_data(
@@ -3353,7 +3431,7 @@ fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con
             }
         }
         *lista_instancias().lock().unwrap() = if demo { instancias_base() } else {
-            servicios.instancias.registros.iter().map(instancias_reales::Estado::datos).collect()
+            servicios.instancias.registros.iter().map(|i|instancias_reales::Estado::datos(&servicios.instancias.almacen,i)).collect()
         };
         if !demo {
             for (n, record) in servicios.instancias.registros.iter().enumerate().filter(|(_, i)| i.loader != "vanilla") {
@@ -3498,6 +3576,9 @@ fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con
                 mundo: 0,
                 filtro_consola: 0,
                 busqueda_consola: String::new(),
+                niveles_consola: [true; 3],
+                autoscroll_consola: true,
+                desplazamiento_consola: Default::default(),
                 capt: if demo { capt::Estado::nuevo() } else { capt::Estado::vacio() },
                 cursor: Point::ORIGIN,
                 menu_en: Point::new(420.0, 140.0),

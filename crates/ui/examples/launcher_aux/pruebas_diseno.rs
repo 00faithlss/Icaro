@@ -16,6 +16,7 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
     a.umbral = None;
     let scene = std::env::var("ICARO_VISTA_DISENO").unwrap_or_else(|_| "asistente".into());
     match scene.as_str() {
+        s if s.starts_with("juego-") => crate::juego_real::preparar_diseno(&mut a, &scene),
         "asistente" => {
             a.asistente = Some(pantallas::Asistente {
                 paso: 1,

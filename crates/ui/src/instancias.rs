@@ -29,6 +29,7 @@ pub enum EstadoInstancia {
     Desactualizada,
     /// Avance de 0 a 1.
     Instalando(f32),
+    Preparando,
     Jugando,
     Error,
 }
@@ -169,6 +170,9 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
                     .size(texto::BODY_SM.0)
                     .color(p.text_muted),
             ),
+        EstadoInstancia::Preparando => cuerpo
+            .push(progreso_bloques(p, 10, 0))
+            .push(text(datos.detalle.clone()).size(texto::BODY_SM.0).color(p.text_muted)),
         EstadoInstancia::Jugando => cuerpo.push(
             row![
                 container(Space::new(8, 8)).style(estilo::bloque(p.success)),
@@ -207,6 +211,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
             p.text_muted,
             false,
         ),
+        EstadoInstancia::Preparando => (Icono::Espera, "Preparando".to_owned(), p.text_muted, false),
         EstadoInstancia::Jugando => (Icono::Detener, "Detener".to_owned(), tinta, true),
         EstadoInstancia::Error => (Icono::Instancias, "Reparar".to_owned(), p.error, true),
     };

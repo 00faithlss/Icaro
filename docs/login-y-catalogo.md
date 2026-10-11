@@ -1,6 +1,6 @@
 # Inicio de sesión y catálogo
 
-El ejemplo `launcher` conecta la cuenta con Microsoft, guarda configuraciones de instancia, consulta Modrinth, instala y actualiza mods compatibles y exporta ZIP. La instalación de Minecraft, sus loaders y los modpacks todavía está pendiente. En el modo real, las instancias, servidores, descargas, consola y capturas empiezan sin datos de muestra; estos se conservan únicamente con `ICARO_DEMO=1`.
+El ejemplo `launcher` conecta Microsoft, guarda instancias, instala Minecraft Vanilla y Java, ejecuta el juego, consulta Modrinth, instala y actualiza mods compatibles y exporta ZIP. La instalación de loaders y modpacks todavía está pendiente. Las secciones usan datos reales; los ejemplos se conservan únicamente con `ICARO_DEMO=1`. El recorrido del juego se describe en [Vanilla y Java](vanilla-y-java.md).
 
 ## Iniciar sesión
 
@@ -61,7 +61,7 @@ La autorización se renueva antes de vencer, con una sola operación de autentic
 
 **Crear instancia** utiliza los cuatro pasos del asistente existente: versión de Minecraft, loader, nombre y portada, y revisión. Las versiones proceden del manifiesto de Mojang, con lanzamientos, snapshots y versiones antiguas. La consulta se realiza al abrir el asistente; su caché se reutiliza durante 24 horas. Si falla una actualización, se conserva una copia válida anterior. Si todavía no existe una copia y no hay conexión, cierra y vuelve a abrir el asistente para reintentar.
 
-Esta etapa guarda instancias Vanilla, Fabric, NeoForge o Forge con su versión y familia de loader. La nueva instancia queda **Por instalar**: crearla no descarga el juego ni instala el loader ni permite lanzarlo todavía. Las instancias con loader permiten descargar mods compatibles a su carpeta. Exportar ZIP guarda el contenido elegido; importar, duplicar, exportar MRPACK y cambiar de versión siguen pendientes en el modo real.
+El asistente guarda la versión y familia de loader. Una instancia Vanilla nueva descarga y verifica Minecraft y prepara su Java; con una cuenta activa, Jugar ejecuta el proceso. Las instancias con loader quedan **Por instalar** y permiten descargar mods compatibles, mientras su instalación y lanzamiento siguen pendientes. Exportar ZIP guarda el contenido elegido; importar, duplicar, exportar MRPACK y cambiar de versión siguen pendientes en el modo real.
 
 Cada instancia tiene un identificador propio y guarda sus metadatos en `%APPDATA%/Icaro/instances/<id>/instance.json` en Windows; sus archivos de juego pertenecen a la subcarpeta `minecraft`. Cambiar el nombre desde el editor no cambia esa carpeta. El nombre se guarda al salir del editor o cerrar desde el botón del launcher. Los grupos y ajustes de Java se guardan en `estado.json`, asociados al identificador de la instancia. Las instancias cuyo archivo de metadatos no se pueda leer se omiten de la lista y se notifica el problema, conservando sus archivos en disco.
 

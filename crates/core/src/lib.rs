@@ -11,3 +11,6 @@ pub mod exportar;
 pub mod modrinth;
 pub mod mods;
 pub mod vault;
+pub mod java;
+pub mod minecraft;
+pub mod lanzamiento;

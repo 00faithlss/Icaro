@@ -121,10 +121,21 @@ pub fn encabezado_editor_con_mods<'a, M: Clone + 'a>(
     m: MensajesEncabezado<M>,
     mostrar_mods: bool,
 ) -> Element<'a, M> {
+    let jugar = boton_jugar(p, "Jugar", Some(&d.memoria), m.jugar.clone());
+    encabezado_editor_accion(p, d, m, mostrar_mods, jugar)
+}
+
+pub fn encabezado_editor_accion<'a, M: Clone + 'a>(
+    p: Paleta,
+    d: &DatosEditor,
+    m: MensajesEncabezado<M>,
+    mostrar_mods: bool,
+    jugar: Element<'a, M>,
+) -> Element<'a, M> {
     let acciones = row![
         crate::descargas::boton_icono(p, Icono::Carpeta, m.abrir_carpeta),
         crate::descargas::boton_icono(p, Icono::Acciones, m.mas),
-        boton_jugar(p, "Jugar", Some(&d.memoria), m.jugar),
+        jugar,
     ]
     .spacing(espacio::S2)
     .align_y(Alignment::Center);
@@ -607,11 +618,35 @@ pub fn pestana_java<'a, M: Clone + 'a>(
     );
     let elegida = cfg
         .java
-        .clone()
+        .as_ref()
+        .map(|path| {
+            instalaciones
+                .iter()
+                .find(|i| &i.ruta == path)
+                .map(|i| format!("Java {} · {}", i.version, i.proveedor))
+                .unwrap_or_else(|| path.clone())
+        })
         .unwrap_or_else(|| JAVA_AUTOMATICO.to_owned());
+    let rutas: Vec<_> = instalaciones
+        .iter()
+        .filter(|i| i.existe)
+        .map(|i| {
+            (
+                format!("Java {} · {}", i.version, i.proveedor),
+                i.ruta.clone(),
+            )
+        })
+        .collect();
     let al_elegir = m.java;
     let version = selector(p, opciones, Some(elegida), move |o| {
-        al_elegir((o != JAVA_AUTOMATICO).then_some(o))
+        al_elegir(if o == JAVA_AUTOMATICO {
+            None
+        } else {
+            rutas
+                .iter()
+                .find(|(label, _)| label == &o)
+                .map(|(_, path)| path.clone())
+        })
     });
 
     let tope = ram_total.saturating_sub(1024).max(1024);
@@ -638,7 +673,7 @@ pub fn pestana_java<'a, M: Clone + 'a>(
     pagina(
         column![
             campo_rotulado(p, "Versión de Java de esta instancia", version),
-            text("Con Automático, Ícaro usa Java 21 desde la 1.20.5, Java 17 de la 1.18 a la 1.20.4 y Java 8 antes.")
+            text("Con Automático, Ícaro obtiene la versión de Java que pide Minecraft y reutiliza las instalaciones guardadas.")
                 .size(texto::BODY_SM.0)
                 .color(p.text_muted),
             memoria,

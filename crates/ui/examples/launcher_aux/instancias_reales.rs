@@ -60,16 +60,17 @@ impl Estado {
             Err(e) => self.error = Some(e.to_string()),
         }
     }
-    pub fn datos(i: &Instancia) -> DatosInstancia {
+    pub fn datos(store:&Almacen,i: &Instancia) -> DatosInstancia {
+        let ready=icaro_core::minecraft::listo(store,i);
         DatosInstancia {
             nombre: i.nombre.clone(),
             version: format!("{} · {}", i.minecraft, crate::ficha::loader(&i.loader)),
             ultima_vez: "Sin jugar".into(),
             mods: "Sin mods".into(),
             portada: pantallas::PORTADAS[i.portada as usize].1,
-            estado: EstadoInstancia::Pendiente,
+            estado: if ready {EstadoInstancia::Lista}else{EstadoInstancia::Pendiente},
             seleccionada: false,
-            detalle: "Minecraft pendiente de instalación".into(),
+            detalle: if ready {"Lista para jugar"}else{"Minecraft pendiente de instalación"}.into(),
         }
     }
 }
@@ -91,6 +92,7 @@ pub fn eliminar(app: &mut App) -> Task<Mensaje> {
     let Some(id) = s.eliminar.clone() else {
         return Task::none();
     };
+    if app.servicios.juego.ocupada(&id){app.avisar("Detén el juego o su instalación antes de eliminar esta instancia.".into());return Task::none();}
     if !s.registros.iter().any(|i| i.id == id) {
         return Task::none();
     }
@@ -287,7 +289,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     crate::lista_instancias()
                         .lock()
                         .unwrap()
-                        .insert(index, Estado::datos(&record));
+                        .insert(index, Estado::datos(&app.servicios.instancias.almacen,&record));
                     let name = record.nombre.clone();
                     app.servicios.instancias.registros.insert(index, record);
                     app.grupos.insert(index, previous.grupo);
@@ -322,7 +324,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     crate::lista_instancias()
                         .lock()
                         .unwrap()
-                        .push(Estado::datos(&i));
+                        .push(Estado::datos(&app.servicios.instancias.almacen,&i));
                     app.servicios.instancias.registros.push(i);
                     app.grupos.push(None);
                     app.configs.push(crate::config_por_defecto());
@@ -331,6 +333,8 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     app.seccion = icaro_ui::shell::Seccion::Instancias;
                     app.avisar(format!("Instancia {name} creada y guardada."));
                     crate::arrancar(app);
+                    let index=app.servicios.instancias.registros.len()-1;
+                    if app.servicios.instancias.registros[index].loader=="vanilla"{return crate::juego_real::iniciar(app,index,false);}
                 }
                 Err(e) => app.avisar(e),
             }

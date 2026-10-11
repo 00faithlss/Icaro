@@ -748,6 +748,188 @@ pub fn boton_jugar<'a, M: Clone + 'a>(
         .into()
 }
 
+/// Estados del BotonJugar definidos en la referencia original.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EstadoJugar {
+    Listo,
+    Instalando(f32),
+    Preparando,
+    Ejecutando,
+    Cerrar,
+}
+
+pub fn boton_jugar_estado<'a, M: Clone + 'a>(
+    p: Paleta,
+    estado: EstadoJugar,
+    meta: Option<&str>,
+    accion: Option<M>,
+) -> Element<'a, M> {
+    boton_jugar_estado_animado(p, estado, meta, accion, 0.)
+}
+
+/// Barrido, relleno en bloques y pulso de dos pasos del BotonJugar original.
+struct FondoJugar {
+    p: Paleta,
+    estado: EstadoJugar,
+    ms: f32,
+}
+impl<M> iced::widget::canvas::Program<M> for FondoJugar {
+    type State = ();
+    fn draw(
+        &self,
+        _: &(),
+        renderer: &iced::Renderer,
+        _: &iced::Theme,
+        bounds: iced::Rectangle,
+        _: iced::mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        let mut frame = iced::widget::canvas::Frame::new(renderer, bounds.size());
+        match self.estado {
+            EstadoJugar::Instalando(ratio) => {
+                let end = bounds.width * ratio.clamp(0., 1.);
+                let mut x = 0.;
+                while x < end {
+                    frame.fill_rectangle(
+                        iced::Point::new(x, 0.),
+                        iced::Size::new((end - x).min(10.), bounds.height),
+                        iced::Color {
+                            a: 0.22,
+                            ..self.p.text
+                        },
+                    );
+                    x += 12.;
+                }
+            }
+            EstadoJugar::Preparando => {
+                let mut y = (self.ms / 16.).floor() % 3.;
+                while y < bounds.height {
+                    frame.fill_rectangle(
+                        iced::Point::new(0., y),
+                        iced::Size::new(bounds.width, 1.),
+                        iced::Color {
+                            a: 0.12,
+                            ..self.p.text
+                        },
+                    );
+                    y += 3.;
+                }
+            }
+            _ => {}
+        }
+        vec![frame.into_geometry()]
+    }
+}
+pub fn boton_jugar_estado_animado<'a, M: Clone + 'a>(
+    p: Paleta,
+    estado: EstadoJugar,
+    meta: Option<&str>,
+    accion: Option<M>,
+    ms: f32,
+) -> Element<'a, M> {
+    let (label, icono) = match estado {
+        EstadoJugar::Listo => ("Jugar", crate::iconos::Icono::Jugar),
+        EstadoJugar::Instalando(_) => ("Instalando", crate::iconos::Icono::Descargas),
+        EstadoJugar::Preparando => ("Preparando", crate::iconos::Icono::Espera),
+        EstadoJugar::Ejecutando => ("En ejecución", crate::iconos::Icono::Check),
+        EstadoJugar::Cerrar => ("Cerrar juego", crate::iconos::Icono::Detener),
+    };
+    let glifo: Element<'a, M> = if estado == EstadoJugar::Ejecutando {
+        container(Space::new(10, 10))
+            .style(estilo::bloque(iced::Color {
+                a: if (ms / 600.).floor() as u64 % 2 == 0 {
+                    1.
+                } else {
+                    0.4
+                },
+                ..p.success
+            }))
+            .into()
+    } else {
+        crate::iconos::icono_texto(icono, crate::iconos::Tam::Base).into()
+    };
+    let mut fila = row![
+        glifo,
+        text(label.to_uppercase())
+            .font(fuentes::TITULO)
+            .size(18)
+            .wrapping(iced::widget::text::Wrapping::None)
+    ]
+    .spacing(espacio::S3)
+    .align_y(iced::Alignment::Center);
+    if let Some(meta) = meta.filter(|m| !m.trim().is_empty()) {
+        fila = fila.push(Space::with_width(Length::Fill)).push(
+            text(meta.to_owned())
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .width((meta.chars().count() as f32 * 8.0).max(16.0))
+                .align_x(iced::alignment::Horizontal::Right)
+                .wrapping(iced::widget::text::Wrapping::None),
+        );
+    }
+    let contenido = container(fila)
+        .padding(Padding::from([0., espacio::S5]))
+        .height(Length::Fill)
+        .center_y(Length::Fill);
+    let contenido: Element<'a, M> =
+        if matches!(estado, EstadoJugar::Instalando(_) | EstadoJugar::Preparando) {
+            iced::widget::stack![
+                iced::widget::canvas(FondoJugar { p, estado, ms })
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                contenido
+            ]
+            .into()
+        } else if estado == EstadoJugar::Ejecutando {
+            container(contenido
+                .style(move |_: &iced::Theme| container::Style {
+                    border: iced::Border {
+                        width: 1.,
+                        color: p.text,
+                        radius: 0.into(),
+                    },
+                    ..Default::default()
+                }))
+                .padding(3)
+                .height(Length::Fill)
+                .into()
+        } else {
+            contenido.into()
+        };
+    let b = button(contenido)
+        // La referencia define un ancho mínimo: los estados con textos más
+        // largos necesitan crecer para conservar etiqueta y metadato en línea.
+        .width(match estado {
+            EstadoJugar::Listo => 260,
+            EstadoJugar::Instalando(_) | EstadoJugar::Preparando => 300,
+            EstadoJugar::Ejecutando | EstadoJugar::Cerrar => 340,
+        })
+        .height(medida::CONTROL_JUGAR)
+        .padding(0)
+        .on_press_maybe(accion);
+    match estado {
+        EstadoJugar::Listo => b.style(estilo::boton_primario(p)).into(),
+        EstadoJugar::Cerrar => b.style(estilo::boton_peligro(p)).into(),
+        _ => b
+            .style(move |_: &iced::Theme, _| iced::widget::button::Style {
+                background: Some(iced::Background::Color(
+                    if estado == EstadoJugar::Ejecutando {
+                        p.bg
+                    } else {
+                        p.surface
+                    },
+                )),
+                text_color: p.text,
+                border: iced::Border {
+                    color: p.text,
+                    width: 2.,
+                    radius: 0.into(),
+                },
+                ..Default::default()
+            })
+            .into(),
+    }
+}
+
 /// Memoria con el contexto del equipo: barra de RAM dividida en sistema,
 /// Minecraft y libre, y un deslizador con la zona recomendada marcada.
 /// Por encima del 75 % de la RAM el valor pasa a tono de aviso.

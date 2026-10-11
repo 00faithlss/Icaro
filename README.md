@@ -20,9 +20,9 @@ Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da 
 Ícaro está en desarrollo. La interfaz ya permite recorrer instancias, servidores, descargas, consola, modpacks, capturas, ajustes y cuenta, con temas claro y oscuro.
 
 > [!NOTE]
-> El ejemplo conecta Microsoft y Modrinth, guarda las instancias, instala y actualiza mods compatibles y exporta instancias en ZIP. Sin cuenta activa muestra la bienvenida; las secciones sin datos aparecen vacías. `ICARO_DEMO=1` permite revisar los datos de muestra. Crear una instancia todavía no instala Minecraft ni su loader; el lanzamiento del juego está pendiente.
+> El ejemplo conecta Microsoft y Modrinth, guarda las instancias, instala Minecraft Vanilla con Java automático, ejecuta el juego con una cuenta activa, instala y actualiza mods compatibles y exporta instancias en ZIP. Sin cuenta activa muestra la bienvenida; las secciones sin datos aparecen vacías. `ICARO_DEMO=1` permite revisar los datos de muestra. La instalación de loaders y el lanzamiento de instancias con mods siguen pendientes.
 
-El núcleo consulta el manifiesto oficial de versiones de Minecraft y verifica el SHA-1 del JSON de una versión.
+El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, comprueba tamaño y SHA-1 y reutiliza la instalación guardada. La versión de Java se obtiene de esos metadatos; si no hay una compatible, descarga el runtime oficial de Mojang. Consulta [Vanilla y Java](docs/vanilla-y-java.md) para probar el recorrido.
 
 Los mods se gestionan dentro de cada instancia. La sección **Modpacks** está destinada a descubrir e instalar packs como nuevas instancias.
 
@@ -92,7 +92,13 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Vanilla omite la pestaña y el contador de mods; la barra inferior de Jugar se oculta sin sesión o sin instancia seleccionada.
 - [x] Explorador conectado a la carpeta real: árbol, tamaños, vista previa de texto, abrir, copiar ruta, renombrar y mover archivos a su papelera.
 - [x] Exportación ZIP con metadatos, selección de contenido, tamaños reales y selector nativo de destino; sin sobrescribir exportaciones anteriores.
-- [ ] Instalar Minecraft y el loader al crear la instancia, y cambiar su estado de **Por instalar** a lista para jugar.
+- [x] Instalar Minecraft Vanilla al crear la instancia: cliente, bibliotecas, nativos, assets y configuración de registros verificados y reutilizables.
+- [x] Detectar Java compatible o instalar el runtime oficial requerido por los metadatos de Minecraft; reutilizarlo y permitir selección por instancia.
+- [x] Ejecutar Vanilla con la cuenta activa, memoria, Metaspace y argumentos de la instancia; capturar registros y código de salida, y detener el proceso con confirmación.
+- [x] Conectar preparación, pausa, cancelación y reintento a la cola; estados reales de Jugar, Umbral, consola e informe de fallo con las composiciones existentes.
+- [x] Primer lanzamiento real de Vanilla 26.3 en Windows confirmado por el usuario; los ajustes posteriores del Umbral requieren volver a probarse jugando.
+- [ ] Validar el recorrido completo en Arch Linux y completar la revisión manual de cierre, reutilización y transición del Umbral en Windows.
+- [ ] Instalar loaders compatibles y lanzar instancias con sus mods.
 - [ ] Importar y duplicar instancias reales; cambiar Minecraft o loader con copia de seguridad y revisión de compatibilidad.
 - [ ] Exportar modpacks MRPACK con la versión concreta de Minecraft y loader.
 - [ ] Conectar recursos y shaders, su orden y activación a los archivos del juego.
@@ -117,10 +123,10 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 
 ### Próximas entregas, en orden
 
-1. **Instancia Vanilla jugable:** detectar o instalar Java, descargar Minecraft y sus archivos verificados, preparar argumentos y ejecutar el juego. Conectar consola, cola de descargas, cancelación y estados reales del proceso.
+1. **Validar Vanilla con una cuenta real:** comprobar la llegada al menú del juego, su cierre y la reutilización de la instalación; repetir en Arch Linux.
 2. **Instancias con loader:** instalar Fabric, NeoForge, Forge y Quilt en versiones compatibles y comprobar el lanzamiento con los mods ya gestionados.
 3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. Completar el cambio de versión con copias de seguridad.
-4. **Editor completo:** conectar mundos, recursos, shaders, capturas, registros, integridad y recuperación de archivos, usando las vistas del System Design.
+4. **Editor completo:** conectar mundos, recursos, shaders, capturas, integridad y recuperación de archivos; completar historial de descargas y seguimiento de la consola, usando las vistas del System Design.
 5. **Cuenta y servicios adicionales:** completar Cuenta y Estudio de skin, servidores y proveedores opcionales.
 6. **Primera publicación:** validar Windows y Arch Linux, rendimiento, teclado, ventanas angostas y empaquetado.
 

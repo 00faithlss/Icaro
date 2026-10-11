@@ -520,6 +520,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 if app.servicios.mods.busy.is_some() || app.servicios.instancias.operando { return Task::none(); }
                 let Some(s)=app.exportar.as_mut().filter(|s| !s.guardando && s.formato==0) else { return Task::none(); };
                 let Some(i)=app.servicios.instancias.registros.get(s.instancia).cloned() else { return Task::none(); };
+                if app.servicios.juego.ocupada(&i.id) { s.error=Some("Espera a que termine la instalación o cierra el juego antes de exportar.".into()); return Task::none(); }
                 let store=app.servicios.instancias.almacen.clone(); let options=s.carpetas; let target=std::path::PathBuf::from(&s.destino);
                 s.guardando=true; s.error=None;
                 return Task::perform(async move { tokio::task::spawn_blocking(move || icaro_core::exportar::zip(&store,&i,options,&target)).await.unwrap_or_else(|_| Err("No se pudo exportar la instancia.".into())) }, |r| m(Accion::Exportada(r)));
@@ -828,6 +829,7 @@ fn error_tienda<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
 }
 
 fn fallo<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
+    if !app.servicios.demo {return crate::juego_real::fallo(app);}
     let causa = container(
         row![
             icono(Icono::Alerta, Tam::Base, p.error),
@@ -1204,9 +1206,10 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
         2 => {
             col = col
                 .push(fila_ajuste(p, "Java de cada instancia", "La versión y la memoria se eligen por instancia, en la pestaña Java de su editor.", Space::with_width(0).into()))
-                .push(fila_ajuste(p, "Gestión automática", "Ícaro elige Java 21, 17 u 8 según la versión del juego.", componentes::interruptor(p, true, Mensaje::Nada)))
+                .push(fila_ajuste(p, "Gestión automática", "Ícaro obtiene el Java que pide la versión de Minecraft y lo guarda para reutilizarlo.", componentes::interruptor(p, true, Mensaje::Nada)))
                 .push(text("Instalaciones detectadas").font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text));
-            for (v, prov, ruta) in [("21.0.5", "Temurin · Ícaro", "…/icaro/java/21"), ("17.0.13", "Temurin · Ícaro", "…/icaro/java/17"), ("8.0.432", "Zulu", "C:/Program Files/Zulu/zulu-8")] {
+            let installations = if app.servicios.demo { vec![("21.0.5".into(), "Temurin · Ícaro".into(), "…/icaro/java/21".into()), ("17.0.13".into(), "Temurin · Ícaro".into(), "…/icaro/java/17".into())] } else { crate::juego_real::instalaciones_java(app).into_iter().map(|i| (i.version,i.proveedor,i.ruta)).collect() };
+            for (v, prov, ruta) in installations {
                 col = col.push(
                     container(
                         row![

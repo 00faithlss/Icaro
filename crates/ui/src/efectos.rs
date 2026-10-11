@@ -45,7 +45,7 @@ fn lamina_umbral() -> &'static Handle {
 struct CapaUmbral {
     fase: FaseUmbral,
     paleta: Paleta,
-    /// Opacidad con la que se retira la luz si el arranque falla.
+    /// Fundido de entrada o retirada por fallo de toda la capa.
     retirada: f32,
 }
 
@@ -70,12 +70,12 @@ impl<M> canvas::Program<M> for CapaUmbral {
         // Trama de líneas de la pantalla, 1 px de cada 3.
         let mut y = 2.0;
         while y < tam.height {
-            frame.fill_rectangle(Point::new(0.0, y), Size::new(tam.width, 1.0), Color { a: 0.18, ..Color::BLACK });
+            frame.fill_rectangle(Point::new(0.0, y), Size::new(tam.width, 1.0), con_alfa(Color::BLACK, 0.18 * self.retirada));
             y += 3.0;
         }
         // Velo de tinta.
         if f.velo > 0.0 {
-            frame.fill_rectangle(Point::ORIGIN, tam, Color { a: f.velo, ..Color::BLACK });
+            frame.fill_rectangle(Point::ORIGIN, tam, con_alfa(Color::BLACK, f.velo * self.retirada));
         }
 
         let arco = movimiento::arco_en(tam);
@@ -90,7 +90,7 @@ impl<M> canvas::Program<M> for CapaUmbral {
             let a = 1.0 - 0.3_f32.powf(1.0 / ANILLOS as f32);
             for i in 0..ANILLOS {
                 let r = radio * (1.0 - i as f32 / ANILLOS as f32);
-                frame.fill(&Path::circle(centro, r), con_alfa(Color::WHITE, a * f.halo));
+                frame.fill(&Path::circle(centro, r), con_alfa(Color::WHITE, a * f.halo * self.retirada));
             }
         }
 
@@ -99,7 +99,7 @@ impl<M> canvas::Program<M> for CapaUmbral {
             let r = movimiento::mezclar(arco, ventana, f.lineas);
             let mut y = r.y;
             while y < r.y + r.height {
-                frame.fill_rectangle(Point::new(r.x, y), Size::new(r.width, 2.0), con_alfa(p.fulgor, 1.0));
+                frame.fill_rectangle(Point::new(r.x, y), Size::new(r.width, 2.0), con_alfa(p.fulgor, self.retirada));
                 y += 6.0;
             }
         }
@@ -120,11 +120,12 @@ fn salida<'a, M: Clone + 'a>(
     p: Paleta,
     registro: usize,
     lineas: &[String],
+    opacidad: f32,
     al_volver: M,
 ) -> Element<'a, M> {
     let mut log = column![].spacing(2);
     for (i, l) in lineas.iter().enumerate() {
-        let alfa = if i < registro { 1.0 } else { 0.0 };
+        let alfa = if i < registro { opacidad } else { 0.0 };
         log = log.push(
             text(l.clone())
                 .font(fuentes::MONO)
@@ -134,14 +135,14 @@ fn salida<'a, M: Clone + 'a>(
         );
     }
     let volver = button(
-        text("Volver").font(fuentes::ETIQUETA).size(12).color(p.on_fulgor),
+        text("Volver").font(fuentes::ETIQUETA).size(12).color(con_alfa(p.on_fulgor, opacidad)),
     )
     .padding(Padding::from([8.0, 14.0]))
     .on_press(al_volver)
     .style(move |_, _| button::Style {
         background: None,
-        text_color: p.on_fulgor,
-        border: Border { color: p.on_fulgor, width: borde::MEDIO, radius: 0.0.into() },
+        text_color: con_alfa(p.on_fulgor, opacidad),
+        border: Border { color: con_alfa(p.on_fulgor, opacidad), width: borde::MEDIO, radius: 0.0.into() },
         ..Default::default()
     });
     container(
@@ -150,7 +151,7 @@ fn salida<'a, M: Clone + 'a>(
                 .font(fuentes::DISPLAY)
                 .size(72)
                 .line_height(iced::widget::text::LineHeight::Absolute(66.0.into()))
-                .color(p.on_fulgor),
+                .color(con_alfa(p.on_fulgor, opacidad)),
             log,
             volver,
         ]
@@ -173,35 +174,166 @@ pub fn umbral<'a, M: Clone + 'a>(
     instancia: &str,
     al_volver: M,
 ) -> Element<'a, M> {
-    let fase = movimiento::umbral(ms, pref);
     let lineas = [
         format!("[{}] Java 21.0.5 · 6.144 MB asignados", hora()),
-        format!("[{}] Verificando mods de {instancia} · 0 conflictos", hora()),
+        format!(
+            "[{}] Verificando mods de {instancia} · 0 conflictos",
+            hora()
+        ),
         format!("[{}] Cargando el cargador de mods", hora()),
         format!("[{}] Minecraft arrancando", hora()),
     ];
-    let capa = Canvas::new(CapaUmbral { fase, paleta: p, retirada: 1.0 })
-        .width(Length::Fill)
-        .height(Length::Fill);
-    let lamina = iced::widget::image(lamina_umbral().clone())
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .content_fit(iced::ContentFit::Cover);
-    let fondo = container(lamina)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(crate::estilo::bloque(Color::from_rgb8(0x05, 0x05, 0x05)));
+    umbral_registro(p, ms, pref, &lineas, al_volver)
+}
+
+/// Mismo Umbral, alimentado por el registro real en vez de datos de demostración.
+pub fn umbral_registro<'a, M: Clone + 'a>(
+    p: Paleta,
+    ms: f32,
+    pref: Preferencia,
+    lineas: &[String],
+    al_volver: M,
+) -> Element<'a, M> {
+    umbral_registro_transicion(p, ms, pref, lineas, None, al_volver)
+}
+
+/// Entrada original, retirada por fallo de 200 ms y Rastrillo al volver.
+/// El recorte conserva el tamaño de la lámina y su arco durante la retirada.
+pub fn umbral_registro_transicion<'a, M: Clone + 'a>(
+    p: Paleta,
+    ms: f32,
+    pref: Preferencia,
+    lineas: &[String],
+    retirada: Option<(f32, bool)>,
+    al_volver: M,
+) -> Element<'a, M> {
+    let fase = movimiento::umbral(ms, pref);
+    let (opacidad, recorte) = estado_capa_umbral(ms, pref, retirada);
+    let capa = Canvas::new(CapaUmbral {
+        fase,
+        paleta: p,
+        retirada: opacidad,
+    })
+    .width(Length::Fill)
+    .height(Length::Fill);
+    let fondo: Element<'a, M> = Element::new(FondoUmbral {
+        opacidad: if pref.reducir { 0.0 } else { opacidad },
+    });
     let mut pila = stack![fondo, capa];
     if fase.salida {
-        pila = pila.push(salida(p, fase.registro, &lineas, al_volver));
+        pila = pila.push(salida(
+            p,
+            if ms > 1700. {
+                lineas.len()
+            } else {
+                fase.registro
+            },
+            lineas,
+            opacidad,
+            al_volver,
+        ));
     }
     // El Umbral bloquea la interfaz mientras dura: nada debajo recibe clics.
-    iced::widget::mouse_area(pila.width(Length::Fill).height(Length::Fill)).into()
+    Element::new(RecorteUmbral {
+        contenido: iced::widget::mouse_area(pila.width(Length::Fill).height(Length::Fill)).into(),
+        restante: recorte,
+    })
+}
+
+fn estado_capa_umbral(ms: f32, pref: Preferencia, retirada: Option<(f32, bool)>) -> (f32, f32) {
+    let entrada = if pref.reducir { 1.0 } else { (ms / 120.0).clamp(0.0, 1.0) };
+    match retirada {
+        Some((ms, _)) if pref.reducir => (entrada * (1.0 - (ms / 120.0).clamp(0.0, 1.0)), 1.0),
+        Some((ms, true)) => (entrada * movimiento::umbral_retirada(ms), 1.0),
+        Some((ms, false)) => (entrada * movimiento::umbral_retirada(ms), 1.0),
+        None => (entrada, 1.0),
+    }
+}
+
+#[cfg(test)]
+mod pruebas_salida_umbral {
+    use super::*;
+
+    #[test]
+    fn salida_funde_la_capa_completa_sin_cortina() {
+        for fallo in [false, true] {
+            let (opacidad, alto) = estado_capa_umbral(3500., Preferencia { reducir: false }, Some((100., fallo)));
+            assert!(opacidad > 0. && opacidad < 1.);
+            assert_eq!(alto, 1.);
+            assert_eq!(estado_capa_umbral(3500., Preferencia { reducir: false }, Some((200., fallo))), (0., 1.));
+        }
+    }
+}
+
+struct RecorteUmbral<'a, M> {
+    contenido: Element<'a, M>,
+    restante: f32,
+}
+
+/// La imagen estándar crea su propio recorte y puede escapar del Rastrillo.
+/// Este fondo cruza el viewport recibido con la imagen, sin cambiar su cover.
+struct FondoUmbral { opacidad: f32 }
+impl<M> Widget<M, iced::Theme, iced::Renderer> for FondoUmbral {
+    fn size(&self) -> Size<Length> { Size::new(Length::Fill, Length::Fill) }
+    fn layout(&self, _: &mut Tree, _: &iced::Renderer, limites: &layout::Limits) -> layout::Node {
+        layout::atomic(limites, Length::Fill, Length::Fill)
+    }
+    fn draw(&self, _: &Tree, renderer: &mut iced::Renderer, _: &iced::Theme,
+        _: &renderer::Style, layout: Layout<'_>, _: mouse::Cursor, visible: &Rectangle) {
+        use iced::advanced::image::Renderer as _;
+        use iced::advanced::Renderer as _;
+        if self.opacidad <= 0.0 { return; }
+        let caja = layout.bounds();
+        let Some(recorte) = caja.intersection(visible) else { return; };
+        let dibujo = movimiento::cubrir(caja.size(), movimiento::UMBRAL_LAMINA);
+        let dibujo = Rectangle { x: dibujo.x + caja.x, y: dibujo.y + caja.y, ..dibujo };
+        renderer.with_layer(recorte, |renderer| {
+            renderer.fill_quad(Quad { bounds: caja, ..Quad::default() },
+                Background::Color(con_alfa(Color::from_rgb8(5, 5, 5), self.opacidad)));
+            renderer.draw_image(iced::advanced::image::Image {
+                handle: lamina_umbral().clone(),
+                filter_method: iced::advanced::image::FilterMethod::Linear,
+                rotation: iced::Radians(0.0), opacity: self.opacidad, snap: true,
+            }, dibujo);
+        });
+    }
+}
+impl<M> Widget<M, iced::Theme, iced::Renderer> for RecorteUmbral<'_, M> {
+    fn size(&self) -> Size<Length> { self.contenido.as_widget().size() }
+    fn children(&self) -> Vec<Tree> { vec![Tree::new(&self.contenido)] }
+    fn diff(&self, arbol: &mut Tree) { arbol.diff_children(std::slice::from_ref(&self.contenido)); }
+    fn layout(&self, arbol: &mut Tree, renderer: &iced::Renderer, limites: &layout::Limits) -> layout::Node {
+        self.contenido.as_widget().layout(&mut arbol.children[0], renderer, limites)
+    }
+    fn operate(&self, arbol: &mut Tree, layout: Layout<'_>, renderer: &iced::Renderer, operacion: &mut dyn iced::advanced::widget::Operation) {
+        self.contenido.as_widget().operate(&mut arbol.children[0], layout, renderer, operacion);
+    }
+    fn on_event(&mut self, arbol: &mut Tree, evento: Event, layout: Layout<'_>, cursor: mouse::Cursor,
+        renderer: &iced::Renderer, portapapeles: &mut dyn Clipboard, shell: &mut Shell<'_, M>, visible: &Rectangle) -> iced::event::Status {
+        self.contenido.as_widget_mut().on_event(&mut arbol.children[0], evento, layout, cursor, renderer, portapapeles, shell, visible)
+    }
+    fn mouse_interaction(&self, arbol: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, visible: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
+        self.contenido.as_widget().mouse_interaction(&arbol.children[0], layout, cursor, visible, renderer)
+    }
+    fn draw(&self, arbol: &Tree, renderer: &mut iced::Renderer, tema: &iced::Theme,
+        estilo: &renderer::Style, layout: Layout<'_>, cursor: mouse::Cursor, visible: &Rectangle) {
+        use iced::advanced::Renderer as _;
+        if self.restante <= 0.0 { return; }
+        let caja = layout.bounds();
+        let recorte = Rectangle { height: caja.height * self.restante, ..caja };
+        let Some(recorte) = recorte.intersection(visible) else { return; };
+        renderer.with_layer(recorte, |renderer| {
+            self.contenido.as_widget().draw(&arbol.children[0], renderer, tema, estilo, layout, cursor, &recorte);
+        });
+    }
 }
 
 fn hora() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let s = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) % 86_400;
+    let s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+        % 86_400;
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
 }
 
@@ -230,11 +362,23 @@ impl<M> canvas::Program<M> for CapaPrensa {
         let (impreso, alfa_barra) = movimiento::prensa_barra(self.t);
         let y = tam.height * impreso;
         // Lo que aún no pasó por la prensa sigue en blanco.
-        frame.fill_rectangle(Point::new(0.0, y), Size::new(tam.width, tam.height - y), self.fondo);
+        frame.fill_rectangle(
+            Point::new(0.0, y),
+            Size::new(tam.width, tam.height - y),
+            self.fondo,
+        );
         if alfa_barra > 0.0 {
             let by = (tam.height - 3.0) * impreso;
-            frame.fill_rectangle(Point::new(0.0, by - 1.0), Size::new(tam.width, 5.0), con_alfa(self.fondo, alfa_barra));
-            frame.fill_rectangle(Point::new(0.0, by), Size::new(tam.width, 3.0), con_alfa(self.barra, alfa_barra));
+            frame.fill_rectangle(
+                Point::new(0.0, by - 1.0),
+                Size::new(tam.width, 5.0),
+                con_alfa(self.fondo, alfa_barra),
+            );
+            frame.fill_rectangle(
+                Point::new(0.0, by),
+                Size::new(tam.width, 3.0),
+                con_alfa(self.barra, alfa_barra),
+            );
         }
         vec![frame.into_geometry()]
     }
@@ -244,9 +388,13 @@ impl<M> canvas::Program<M> for CapaPrensa {
 /// barra de tinta de 3 px al frente. `t` va de 0 a 1 (`dur-prensa`, 420 ms).
 /// Con `t >= 1` no ocupa nada visible.
 pub fn prensa<'a, M: 'a>(p: Paleta, fondo: Color, t: f32, alto: f32) -> Element<'a, M> {
-    let capa = Canvas::new(CapaPrensa { fondo, barra: p.text, t })
-        .width(Length::Fill)
-        .height(alto);
+    let capa = Canvas::new(CapaPrensa {
+        fondo,
+        barra: p.text,
+        t,
+    })
+    .width(Length::Fill)
+    .height(alto);
     if t >= 1.0 {
         Space::new(Length::Fill, alto).into()
     } else {

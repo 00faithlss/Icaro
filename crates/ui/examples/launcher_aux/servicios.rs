@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Estado {
+    pub juego: crate::juego_real::Estado,
     pub mods: crate::mods_reales::Estado,
     anteriores: Vec<PaginaAnterior>,
     pub dependencias: std::collections::BTreeMap<String, Result<(String, String), String>>,
@@ -70,6 +71,7 @@ impl Default for Estado {
 impl Estado {
     pub fn nuevo(demo: bool) -> Self {
         Self {
+            juego: Default::default(),
             mods: Default::default(),
             anteriores: vec![],
             dependencias: Default::default(),
@@ -1016,6 +1018,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             }
         }
         Accion::CancelarLogin => {
+            crate::juego_real::cancelar_espera_sesion(app);
             app.servicios.cancel();
             app.servicios.auth_error = None;
             app.pantalla = app
@@ -1025,6 +1028,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 .then_some(pantallas::Pantalla::Primera);
         }
         Accion::ContinuarInvitado => {
+            crate::juego_real::cancelar_espera_sesion(app);
             if app.servicios.restoring || app.servicios.auth_busy {
                 return Task::none();
             }
@@ -1033,6 +1037,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             app.pantalla = None;
         }
         Accion::Logout => {
+            app.servicios.juego.cancelar_todo();
             app.servicios.cancel();
             app.servicios.session = None;
             app.servicios.remembered = false;
@@ -1113,10 +1118,12 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 app.pantalla = Some(pantallas::Pantalla::Primera);
             }
             if interactive {
-                return iced::window::get_latest().and_then(|id| {
+                let window = iced::window::get_latest().and_then(|id| {
                     iced::window::minimize(id, false).chain(iced::window::gain_focus(id))
                 });
+                return Task::batch([window, crate::juego_real::reanudar_sesion(app)]);
             }
+            return crate::juego_real::reanudar_sesion(app);
         }
         Accion::Consulta(query) => {
             app.servicios.query = query.chars().take(512).collect();

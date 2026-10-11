@@ -76,6 +76,7 @@ pub struct Session {
     pub expires_at: Instant,
     pub(crate) refresh: Zeroizing<String>,
     minecraft: Zeroizing<String>,
+    xuid: Option<String>,
 }
 
 impl std::fmt::Debug for Session {
@@ -94,6 +95,16 @@ pub struct Profile {
 }
 
 impl Session {
+    /// Acceso exclusivo del núcleo al token que recibe el proceso del juego.
+    pub(crate) fn minecraft_token(&self) -> &str {
+        &self.minecraft
+    }
+
+    /// Identidad Xbox recibida de XSTS; no se expone a las vistas ni registros.
+    pub(crate) fn xbox_user_id(&self) -> Option<&str> {
+        self.xuid.as_deref()
+    }
+
     pub fn needs_refresh(&self) -> bool {
         Instant::now() + Duration::from_secs(60) >= self.expires_at
     }
@@ -262,6 +273,8 @@ struct XboxClaims {
 #[derive(Deserialize)]
 struct XboxUser {
     uhs: String,
+    #[serde(default)]
+    xid: Option<String>,
 }
 
 struct Endpoints<'a> {
@@ -312,6 +325,12 @@ async fn minecraft_session_with_progress(
         ([a], [b]) if !a.uhs.is_empty() && a.uhs == b.uhs => &b.uhs,
         _ => return Err(Error::Callback),
     };
+    // Algunos relying parties sólo exponen uhs. Conserva xid cuando XSTS lo
+    // entrega; nunca sustituye el identificador por uhs ni inventa uno.
+    let xuid = xsts.claims.xui[0].xid.clone().filter(|s| !s.is_empty());
+    if xuid.as_ref().is_some_and(|s| s.len() > 20 || !s.bytes().all(|b| b.is_ascii_digit()) || s.parse::<u64>().is_err()) {
+        return Err(Error::Callback);
+    }
     progress(Stage::Minecraft);
     let token: MinecraftToken = http::json(
         client.post(endpoints.login).json(
@@ -376,6 +395,7 @@ async fn minecraft_session_with_progress(
         expires_at: Instant::now() + Duration::from_secs(token.expires_in),
         refresh,
         minecraft: token.access_token,
+        xuid,
     })
 }
 
@@ -522,7 +542,7 @@ mod tests {
                         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
                         assert_eq!(json["RelyingParty"], "rp://api.minecraftservices.com/");
                         assert_eq!(json["Properties"]["UserTokens"], serde_json::json!(["CANARY_USER"]));
-                        serde_json::json!({"Token":"CANARY_XSTS", "DisplayClaims":{"xui":[{"uhs":if case == 1 {"foreign"} else {"hash"}}]}})
+                        serde_json::json!({"Token":"CANARY_XSTS", "DisplayClaims":{"xui":[{"uhs":if case == 1 {"foreign"} else {"hash"},"xid":if case == 0 {"2533274991020393"} else {""}}]}})
                     }
                     2 => {
                         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -580,6 +600,7 @@ mod tests {
         assert_eq!(session.profile.name, "Jugador");
         assert!(session.has_minecraft_access() && !session.needs_refresh());
         assert_eq!(&*session.refresh, "CANARY_REFRESH");
+        assert_eq!(session.xbox_user_id(), Some("2533274991020393"));
         assert!(matches!(exchange_case(1).await, Err(Error::Callback)));
         assert!(matches!(exchange_case(2).await, Err(Error::NoMinecraft)));
         assert!(matches!(exchange_case(3).await, Err(Error::NoMinecraft)));
@@ -616,10 +637,19 @@ mod tests {
             expires_at: Instant::now(),
             refresh: Zeroizing::new("CANARY_REFRESH".into()),
             minecraft: Zeroizing::new("CANARY_MINECRAFT".into()),
+            xuid: Some("CANARY_XUID".into()),
         };
         let debug = format!("{session:?}");
-        assert!(!debug.contains("CANARY_REFRESH") && !debug.contains("CANARY_MINECRAFT"));
+        assert!(!debug.contains("CANARY_REFRESH") && !debug.contains("CANARY_MINECRAFT") && !debug.contains("CANARY_XUID"));
         assert!(session.needs_refresh());
+    }
+
+    #[test]
+    fn xbox_claims_without_xuid_remain_compatible() {
+        let old: XboxUser = serde_json::from_str(r#"{"uhs":"hash"}"#).unwrap();
+        assert!(old.xid.is_none());
+        let current: XboxUser = serde_json::from_str(r#"{"uhs":"hash","xid":"2533274991020393"}"#).unwrap();
+        assert_eq!(current.xid.as_deref(), Some("2533274991020393"));
     }
     #[test]
     fn rejects_foreign_duplicate_and_injected_callbacks() {
