@@ -57,4 +57,8 @@ cargo test -p icaro-core --test vault_native -- --ignored
 
 Las pruebas locales cubren PKCE, validación del retorno, cancelación, intercambio de credenciales con respuestas controladas, titularidad, perfil, límites de respuestas, redirecciones y escrituras de sesión obsoletas. La prueba opcional de catálogo consulta la API pública de Modrinth. `vault_native`, disponible en Windows, escribe, lee y elimina una credencial de prueba en un espacio separado de las cuentas del launcher.
 
-La prueba manual del login con una cuenta real y la comprobación del almacén de Linux siguen pendientes. Las pruebas automatizadas no modifican las cuentas guardadas del launcher: usan un almacén en memoria o una entrada de prueba aislada en Windows.
+El 11 de octubre de 2026 se completó una prueba manual del login con una cuenta real en Windows: el navegador devolvió la autorización y el launcher mostró el perfil de Minecraft Java y la sesión recordada. Quedan pendientes las pruebas manuales de recuperación al reiniciar, renovación y eliminación al cerrar sesión, así como la comprobación del almacén de Linux.
+
+Para comprobar la recuperación, cierra Ícaro y vuelve a abrirlo: debe recuperar el mismo perfil sin solicitar autorización en el navegador. Para comprobar el cierre de sesión, pulsa **Cerrar sesión** y reinicia: debe aparecer como invitado. La renovación automática requiere una prueba con la sesión próxima a vencer.
+
+Las pruebas automatizadas no modifican las cuentas guardadas del launcher: usan un almacén en memoria o una entrada de prueba aislada en Windows.

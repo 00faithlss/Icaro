@@ -46,4 +46,4 @@ Variables de entorno opcionales:
 
 ## Pendiente
 
-El login conectado consulta el perfil de Minecraft; todavía requiere prueba con una cuenta real. La textura de la skin, el cambio de nombre y la subida siguen pendientes de integración. Las etapas y comprobaciones se detallan en el [plan de integración](integracion-real.md).
+El login conectado consulta el perfil de Minecraft y se ha probado con una cuenta real en Windows. La textura de la skin, el cambio de nombre y la subida siguen pendientes de integración. Las etapas y comprobaciones se detallan en el [plan de integración](integracion-real.md).

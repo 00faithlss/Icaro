@@ -20,7 +20,7 @@ Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da 
 Ícaro está en desarrollo. La interfaz ya permite recorrer instancias, servidores, descargas, consola, modpacks, capturas, ajustes y cuenta, con temas claro y oscuro.
 
 > [!NOTE]
-> El ejemplo conecta el inicio de sesión con Microsoft y el catálogo público de Modrinth. Las instancias, capturas y descargas restantes usan datos de demostración; la instalación y el lanzamiento del juego están pendientes. El login completo todavía requiere validación con una cuenta real.
+> El ejemplo conecta el inicio de sesión con Microsoft y el catálogo público de Modrinth. Las instancias, capturas y descargas restantes usan datos de demostración; la instalación y el lanzamiento del juego están pendientes.
 
 El núcleo consulta el manifiesto oficial de versiones de Minecraft y verifica el SHA-1 del JSON de una versión.
 
@@ -63,12 +63,12 @@ Las casillas marcadas corresponden a funciones implementadas en el alcance indic
 - [x] Interfaz de demostración con navegación, temas claro y oscuro y componentes compartidos.
 - [x] Grabados de mayor resolución, caché de imágenes, visor y mejoras de contraste y desplazamiento.
 - [x] Búsqueda global sobre los datos de demostración y avisos temporales.
-- [x] Flujo de login con PKCE, retorno local, intercambio con Xbox y Minecraft y almacenamiento de una sesión en el sistema; pendiente de prueba con cuenta real.
+- [x] Flujo de login con PKCE, retorno local, intercambio con Xbox y Minecraft y almacenamiento de una sesión en el sistema; probado con una cuenta real en Windows.
 - [x] Catálogo público de Modrinth: búsqueda, paginación, fichas y consulta de versiones compatibles.
 
 ### Primera versión funcional
 
-- [ ] Autenticación real con Microsoft y validación del perfil y acceso a Minecraft.
+- [x] Autenticación real con Microsoft y validación del perfil y acceso a Minecraft.
 - [ ] Protección de credenciales, renovación de sesión y cierre de sesión completo.
 - [ ] Creación de instancias reales, instalación verificada de Minecraft Vanilla y lanzamiento con Java.
 - [ ] Instalación de loaders: Fabric, NeoForge, Forge y Quilt.

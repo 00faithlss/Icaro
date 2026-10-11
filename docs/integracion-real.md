@@ -7,13 +7,13 @@ Estado y plan de implementación de la autenticación, la instalación del juego
 | Parte | Implementación actual |
 | --- | --- |
 | Núcleo | `crates/core/src/manifest.rs` consulta el manifiesto de Mojang y verifica el SHA-1 del JSON de una versión. |
-| Inicio de sesión | `icaro-core::auth` implementa PKCE, retorno local, Xbox, titularidad y perfil de Minecraft. `launcher_aux/servicios.rs` lo conecta con la interfaz; falta probar el flujo con una cuenta real. |
+| Inicio de sesión | `icaro-core::auth` implementa PKCE, retorno local, Xbox, titularidad y perfil de Minecraft. `launcher_aux/servicios.rs` lo conecta con la interfaz; el flujo completo se probó con una cuenta real en Windows. |
 | Tienda | `icaro-core::modrinth` consulta búsqueda, fichas y versiones compatibles. La instalación desde el catálogo está pendiente. `ICARO_DEMO=1` conserva el catálogo estático. |
 | Credenciales | `icaro-core::vault` recuerda una cuenta mediante Credential Manager en Windows o Secret Service en Linux. Si no puede guardar, la sesión queda solo en memoria. |
 | Persistencia | `launcher_aux/estado.rs` guarda grupos y ajustes en `icaro-demo/estado.json`, dentro del directorio temporal. No es un almacén de credenciales. |
 | Juego | Faltan el instalador de Minecraft, los loaders y el proceso real de lanzamiento. |
 
-La aplicación utiliza el Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. Falta verificar los tipos de cuenta admitidos y probar el intercambio con una cuenta real.
+La aplicación utiliza el Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. La prueba manual en Windows confirmó la autorización con una cuenta personal de Microsoft y el retorno al launcher.
 
 ## Inicio de sesión
 
@@ -21,7 +21,7 @@ El inicio de sesión conectado abre el navegador del sistema. El código fijo y 
 
 El flujo implementado utiliza el navegador del sistema y el retorno a `http://localhost` mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor escucha solo en loopback, acepta la respuesta correspondiente al intento iniciado y se cierra al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
 
-La autenticación comprueba Xbox, la titularidad de Minecraft Java y el perfil del juego antes de activar la cuenta. Los intercambios específicos necesitan validación con una cuenta real y la aplicación aprobada antes de considerar terminado el login.
+La autenticación comprueba Xbox, la titularidad de Minecraft Java y el perfil del juego antes de activar la cuenta. La prueba manual del 11 de octubre de 2026 completó estos intercambios y mostró la sesión como recordada. Quedan pendientes las pruebas manuales de recuperación al reiniciar, renovación y eliminación al cerrar sesión, además de la validación en Linux.
 
 ## Seguridad que debe implementar el núcleo
 
