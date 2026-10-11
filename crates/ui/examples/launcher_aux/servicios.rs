@@ -524,7 +524,7 @@ pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, M
         return window;
     }
     let p = app.modo.paleta();
-    let panel = column![
+    let mut panel = column![
         text(app.servicios.nombre("Invitado"))
             .font(fuentes::TITULO)
             .color(p.text),
@@ -534,21 +534,23 @@ pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, M
             Variante::Fantasma,
             Some(Mensaje::Ses(crate::sesion::Accion::Gestionar))
         ),
-        componentes::boton(
-            p,
-            "Iniciar sesión",
-            Variante::Secundario,
-            (!app.servicios.auth_busy).then(|| m(Accion::Login))
-        ),
-        componentes::boton(
+    ];
+    panel = if app.servicios.session.is_some() {
+        panel.push(componentes::boton(
             p,
             "Cerrar sesión",
             Variante::Peligro,
-            (!app.servicios.auth_busy).then(|| m(Accion::Logout))
-        ),
-    ]
-    .spacing(espacio::S3)
-    .padding(espacio::S4);
+            (!app.servicios.auth_busy).then(|| m(Accion::Logout)),
+        ))
+    } else {
+        panel.push(componentes::boton(
+            p,
+            "Iniciar sesión",
+            Variante::Secundario,
+            (!app.servicios.auth_busy).then(|| m(Accion::Login)),
+        ))
+    };
+    let panel = panel.spacing(espacio::S3).padding(espacio::S4);
     let outside = iced::widget::mouse_area(Space::new(Length::Fill, Length::Fill))
         .on_press(Mensaje::Ses(crate::sesion::Accion::Menu(false)));
     iced::widget::stack![

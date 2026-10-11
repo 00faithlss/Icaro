@@ -21,7 +21,7 @@ El inicio de sesión conectado abre el navegador del sistema. El código fijo y 
 
 El flujo implementado utiliza el navegador del sistema y el retorno a `http://localhost` mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor escucha solo en loopback, acepta la respuesta correspondiente al intento iniciado y se cierra al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
 
-La autenticación comprueba Xbox, la titularidad de Minecraft Java y el perfil del juego antes de activar la cuenta. La prueba manual del 11 de octubre de 2026 completó estos intercambios y mostró la sesión como recordada. Quedan pendientes las pruebas manuales de recuperación al reiniciar, renovación y eliminación al cerrar sesión, además de la validación en Linux.
+La autenticación comprueba Xbox, la titularidad de Minecraft Java y el perfil del juego antes de activar la cuenta. La prueba manual del 11 de octubre de 2026 completó estos intercambios y confirmó la recuperación de la cuenta al reiniciar el launcher en Windows. Quedan pendientes las pruebas manuales de renovación y eliminación al cerrar sesión, además de la validación en Linux.
 
 ## Seguridad que debe implementar el núcleo
 
