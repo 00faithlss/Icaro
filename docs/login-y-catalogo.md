@@ -9,7 +9,7 @@ cargo run -p icaro-ui --example launcher
 ```
 
 1. Abre el menú de cuenta y pulsa **Iniciar sesión**.
-2. Ícaro solicita un código a Microsoft y lo muestra en las celdas de la página de inicio de sesión. Pulsa **Copiar código** e introdúcelo en la página de Microsoft que se abre en el navegador. **Abrir página** permite abrirla de nuevo.
+2. Ícaro solicita un código a Microsoft y lo muestra en las celdas de la página de inicio de sesión. Pulsa **Copiar código**, luego **Abrir Microsoft** e introdúcelo en la página de vinculación del navegador. El navegador se abre únicamente al pulsar ese botón.
 3. Autoriza la vinculación con Ícaro desde Microsoft.
 4. Vuelve a Ícaro. La cuenta aparece activa después de comprobar Xbox, el acceso a Minecraft Java y el perfil del juego; no requiere pulsar una confirmación en el launcher.
 
@@ -17,7 +17,7 @@ El código es emitido por Microsoft para cada intento. La pantalla muestra el ti
 
 El Client ID público de Ícaro está incluido en el núcleo. El registro de Azure debe admitir cuentas personales de Microsoft y permitir flujos de cliente público para la vinculación por código. Este ajuste se encuentra en **Autenticación → Configuración → Permitir flujos de cliente público**. No se usa un secreto de cliente. Microsoft documenta este [flujo por código de dispositivo](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code) y su [configuración de cliente público](https://learn.microsoft.com/en-us/entra/identity-platform/msal-client-applications).
 
-**Usar inicio automático en el navegador** cambia al flujo con PKCE y retorno local, cancelando el código anterior. Esta alternativa necesita `http://localhost` registrado como URI de aplicaciones móviles y de escritorio; utiliza un puerto temporal y un intento vence a los diez minutos.
+La pantalla de vinculación utiliza un único recorrido por código. El núcleo conserva la implementación de PKCE y retorno local, probada anteriormente, pero la interfaz ya no ofrece cambiar a ese método durante la vinculación.
 
 **Cancelar** interrumpe el intento. Si el navegador permanece abierto, su autorización posterior no activa la cuenta en Ícaro. Ante un error se muestra la etapa o un mensaje específico, sin copiar la descripción del proveedor ni sus credenciales.
 
@@ -28,6 +28,8 @@ La primera integración admite una cuenta activa y recordada por equipo. La cred
 Si el almacén del sistema no está disponible o no permite guardar, la cuenta funciona durante esa apertura y la interfaz indica que la sesión no quedó recordada. No se escribe una copia de la credencial en archivos JSON. En Linux se requiere un servicio de secretos disponible en la sesión y `libdbus` para compilar este backend.
 
 **Cerrar sesión** cancela solicitudes, retira la cuenta activa y elimina la credencial guardada. Si la eliminación falla, la interfaz lo indica y permite reintentar. Este cierre es local: la sesión del navegador de Microsoft se administra desde el navegador.
+
+La barra inferior de **Jugar** aparece en la lista de instancias cuando hay una cuenta activa y una instancia seleccionada. Muestra el nombre y la versión de esa instancia. Al abrir el launcher no se selecciona una instancia por defecto; las pantallas de vinculación, cuenta y otros pasos tampoco muestran la barra.
 
 La autorización se renueva antes de vencer, con una sola operación de autenticación en curso. Los intentos antiguos no pueden guardar credenciales ni sustituir la cuenta después de una cancelación o cierre de sesión.
 

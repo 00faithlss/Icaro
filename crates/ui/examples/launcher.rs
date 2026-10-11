@@ -57,7 +57,7 @@ struct App {
     seccion: Seccion,
     colapsada: bool,
     filtro: usize,
-    seleccionada: usize,
+    seleccionada: Option<usize>,
     menu: Option<usize>,
     dialogo: bool,
     aviso: Option<icaro_ui::avisos::Aviso<Mensaje>>,
@@ -319,7 +319,7 @@ fn abrir_instancia(app: &mut App, i: usize) {
     app.servicios.reset_catalog();
     app.mods_vista = 0;
     let datos = &instancias()[i];
-    app.seleccionada = i;
+    app.seleccionada = Some(i);
     app.editor_inst = i;
     app.exp = Explorador::abrir(&datos.nombre);
     app.general.nombre = datos.nombre.clone();
@@ -430,7 +430,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                     abrir_instancia(app, i);
                 }
                 busqueda::Destino::Mod(id) if !instancias().is_empty() => {
-                    let i = if app.editor.is_some() { app.editor_inst } else { app.seleccionada };
+                    let i = if app.editor.is_some() { Some(app.editor_inst) } else { app.seleccionada };
+                    let Some(i) = i else { return Task::none(); };
                     app.seccion = Seccion::Instancias;
                     abrir_instancia(app, i.min(instancias().len() - 1));
                     app.editor = Some(2);
@@ -448,7 +449,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             }
         }
         Mensaje::Editar => {
-            let i = app.menu.unwrap_or(app.seleccionada);
+            let Some(i) = app.menu.or(app.seleccionada) else { return Task::none(); };
             abrir_instancia(app, i);
         }
         Mensaje::AbrirInstancia(i) => abrir_instancia(app, i),
@@ -462,7 +463,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::MoverGrupo(g) => {
             arrancar(app);
-            let i = app.menu.unwrap_or(app.seleccionada);
+            let Some(i) = app.menu.or(app.seleccionada) else { return Task::none(); };
             app.grupos[i] = g.clone();
             app.menu = None;
             let nombre = instancias()[i].nombre.clone();
@@ -490,7 +491,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.edicion_grupo = Some(EdicionGrupo { original: None, texto: String::new(), mover: None });
         }
         Mensaje::NuevoGrupoParaInstancia => {
-            let i = app.menu.unwrap_or(app.seleccionada);
+            let Some(i) = app.menu.or(app.seleccionada) else { return Task::none(); };
             app.menu = None;
             app.edicion_grupo = Some(EdicionGrupo { original: None, texto: String::new(), mover: Some(i) });
         }
@@ -767,7 +768,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             // El Umbral solo se dispara desde Jugar, nunca al abrir el launcher.
             let ahora = std::time::Instant::now();
             app.menu = None;
-            app.seleccionada = i;
+            app.seleccionada = Some(i);
             app.umbral = Some(ahora);
             app.ahora = ahora;
         }
@@ -784,8 +785,9 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                 && !hay_dialogo(app);
             let reintento = app.picar.as_ref().is_some_and(|p| p.soltada.is_some() && p.rota.is_none());
             if libre && (app.picar.is_none() || reintento) {
+                let Some(instancia) = app.seleccionada else { return Task::none(); };
                 let ahora = std::time::Instant::now();
-                app.picar = Some(Picar { instancia: app.seleccionada, inicio: ahora, soltada: None, rota: None });
+                app.picar = Some(Picar { instancia, inicio: ahora, soltada: None, rota: None });
                 app.ahora = ahora;
             }
         }
@@ -1102,7 +1104,7 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
         let mut tarjetas: Vec<Element<Mensaje>> = Vec::new();
         for i in miembros {
             let mut d = todas[i].clone();
-            d.seleccionada = i == app.seleccionada;
+            d.seleccionada = Some(i) == app.seleccionada;
             let tarjeta = tarjeta_instancia(
                 p,
                 &d,
@@ -2857,26 +2859,41 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         Seccion::Capturas => pantalla_capturas(app),
         }
     };
-    let pie = row![
-        column![
-            text("Supervivencia")
-                .font(fuentes::TITULO)
-                .size(texto::HEADING.0)
-                .color(p.text),
-            text("1.21.4 · FABRIC")
-                .font(fuentes::MONO)
-                .size(texto::MONO_SM.0)
-                .color(p.text_muted),
-        ],
-        Space::with_width(Length::Fill),
-        componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Jugar(app.seleccionada))),
-    ]
-    .align_y(Alignment::Center)
-    .padding(Padding::from([espacio::S2, espacio::S12]));
-    let pie: Element<Mensaje> = match sesion::banner_jugar(app) {
-        Some(banner) => column![banner, pie].into(),
-        None => pie.into(),
-    };
+    let pie = app.seleccionada.and_then(|i| {
+        let lista = instancias();
+        let datos = lista.get(i)?;
+        let cuenta_activa = if app.servicios.demo {
+            app.sesion.estado == icaro_ui::cuenta::EstadoSesion::Activa
+        } else {
+            app.servicios.session.is_some()
+        };
+        if !cuenta_activa || app.pantalla.is_some() || app.editor.is_some()
+            || app.seccion != Seccion::Instancias
+            || app.picar.as_ref().is_some_and(|p| p.instancia == i && p.rota.is_some()) {
+            return None;
+        }
+        let pie = row![
+            column![
+                text(datos.nombre.clone())
+                    .font(fuentes::TITULO)
+                    .size(texto::HEADING.0)
+                    .color(p.text),
+                text(datos.version.clone())
+                    .font(fuentes::MONO)
+                    .size(texto::MONO_SM.0)
+                    .color(p.text_muted),
+            ],
+            Space::with_width(Length::Fill),
+            componentes::boton(p, "Jugar", Variante::Primario, Some(Mensaje::Jugar(i))),
+        ]
+        .align_y(Alignment::Center)
+        .padding(Padding::from([espacio::S2, espacio::S12]));
+        let pie: Element<Mensaje> = match sesion::banner_jugar(app) {
+            Some(banner) => column![banner, pie].into(),
+            None => pie.into(),
+        };
+        Some(pie)
+    });
     let mut ventana = app_shell(
         p,
         if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { None } else { Some(app.seccion) },
@@ -2884,7 +2901,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         Cuenta { nombre: app.servicios.nombre(app.sesion.estado.nombre()), proveedor: "Microsoft", estado: app.sesion.estado },
         app.servicios.demo.then_some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 }),
         contenido,
-        (app.seccion == Seccion::Instancias && app.editor.is_none() && !matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio))).then_some(pie),
+        pie,
         MensajesShell {
             ir_a: Box::new(Mensaje::Ir),
             arrastrar: Mensaje::Arrastrar,
@@ -2995,7 +3012,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
     }
 
     if let Some(t) = app.umbral {
-        let nombre = instancias().get(app.seleccionada).map(|d| d.nombre.clone()).unwrap_or_default();
+        let nombre = app.seleccionada.and_then(|i| instancias().get(i).map(|d| d.nombre.clone())).unwrap_or_default();
         let pref = icaro_ui::movimiento::Preferencia { reducir: app.reducir };
         ventana = iced::widget::stack![
             ventana,
@@ -3175,7 +3192,7 @@ fn main() -> iced::Result {
                 seccion,
                 colapsada: false,
                 filtro: 0,
-                seleccionada: 0,
+                seleccionada: std::env::var("ICARO_EDITOR").ok().and_then(|_| (total > 0).then_some(0)),
                 menu,
                 dialogo: con_dialogo,
                 aviso: None,
