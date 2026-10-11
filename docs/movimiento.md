@@ -1,44 +1,46 @@
 # Movimiento
 
-La lógica de las animaciones está en `crates/ui/src/movimiento.rs` y se prueba sin ventana. El dibujo está en `crates/ui/src/efectos.rs` y en `laminas.rs`. Los tiempos y curvas salen del sistema de diseño (`tokens.json`, componentes Movimiento, Umbral, Picar y Lupa).
+Comportamiento de las animaciones del ejemplo `launcher`. La lógica está en [movimiento.rs](../crates/ui/src/movimiento.rs), el dibujo de los efectos en [efectos.rs](../crates/ui/src/efectos.rs) y los grabados en [laminas.rs](../crates/ui/src/laminas.rs). Las duraciones se definen en [tema.rs](../crates/ui/src/tema.rs) y en el [launcher](../crates/ui/examples/launcher.rs).
 
-## Verbos implementados
+## Animaciones activas
 
-| Verbo | Dónde se dispara | Tiempos |
+| Efecto | Dónde se dispara | Comportamiento |
 | --- | --- | --- |
-| Umbral | Botón Jugar (tarjeta, pie, editor y menú contextual) | 1400 ms: velo 260 ms, líneas 220 a 920 ms, luz 320 a 1220 ms, salida y registro desde 1220 ms (una línea cada 90 ms) |
-| Picar | Mantener Supr sobre la instancia seleccionada | Una etapa cada 120 ms, 10 etapas; soltar retira dos etapas cada 40 ms; 48 escombros en 620 a 800 ms |
-| Prensa | Bandas y portadas de instancia al aparecer | 420 ms, 8 pasos, barra de 3 px |
-| Colocar | Tarjeta restituida al deshacer una eliminación | 120 ms, aro de 2 px |
-| Lupa | Láminas a media ventana (informe de fallo, pantallas con lámina lateral) | Lente de 200 px, aumento de 2× a 6× |
-| Losa, menús y panel lateral | Ya existían; no cambian | Sin cambios |
+| Entrada del contenido | Al cambiar de sección o pestaña | Fundido de 320 ms. En el editor de instancia y en la página de un mod se aplica al contenido de la pestaña. |
+| Umbral | Botón Jugar en tarjetas, pie, editor y menú contextual | Secuencia de luz y registro de arranque. |
+| Picar | Mantener Supr sobre la instancia seleccionada | Una etapa de grietas cada 120 ms, hasta 10 etapas. Soltar retira dos etapas cada 40 ms; la rotura dibuja 48 escombros. |
+| Colocar | Tarjeta restituida al deshacer una eliminación | Aro de 2 px durante 120 ms. |
+| Losa | Apertura de diálogos | Desplazamiento vertical de 280 ms. |
+| Menús y panel lateral | Apertura del menú contextual o del panel de instancia | Entrada del menú en 160 ms y del panel en 240 ms. |
+| Avisos | Mensajes temporales | Duración de 3 segundos, con fundido en los últimos 180 ms. Un nuevo mensaje sustituye al anterior. |
 
-El cambio de sección conserva el fundido suave del contenido. No se usa el muro de bloques.
+## Grabados y visor
+
+Los grabados se muestran sin animación de revelado ni zoom al pasar el puntero. Las utilidades Prensa y Lupa permanecen en la biblioteca de efectos, pero no se aplican a los grabados del launcher.
+
+El visor se abre y cierra de inmediato, con fondo opaco y bloqueo de interacción con el contenido de detrás. Las capturas usan un marco 16:9 y los grabados conservan su proporción original. Las flechas recorren las imágenes y los controles de zoom cambian el aumento en pasos de 25 %.
 
 ## Reducir movimiento
 
 El ajuste del launcher se comunica con `movimiento::fijar_reducir`. Con la opción activa:
 
-- El Umbral es un fundido a `fulgor` de 120 ms con el registro completo.
-- La Prensa es un fundido de 120 ms sin barra.
+- El Umbral usa un fundido a `fulgor` de 120 ms y muestra el registro completo.
 - Picar conserva las grietas y omite los escombros.
-- La Lupa no tiene transición.
+- El contenido, los menús, el panel lateral y los diálogos aparecen sin desplazamiento ni fundido de entrada.
+- Los avisos mantienen su duración de 3 segundos y se retiran sin fundido.
 
-## Lupa
+## Comprobación manual
 
-Rueda o `+` y `-` cambian el aumento. Las flechas mueven la lente un 2 % de la lámina, o un 10 % con Mayús. Mientras la lente está activa, la lectura en píxeles de la imagen aparece en la esquina inferior de la lámina. Se usa la lámina empaquetada, no recortes de mayor resolución, porque el repositorio aún no incluye el grupo Detalles.
-
-## Probar a mano
-
-Variables del ejemplo `launcher`:
-
-```
-ICARO_UMBRAL=1        abre con el Umbral en marcha
-ICARO_PICAR=7:1       detiene la eliminación de la instancia 1 en la etapa 7
-ICARO_PANTALLA=fallo  muestra una lámina lateral con Lupa
-```
-
-```
-cargo test -p icaro-ui
+```sh
 cargo run -p icaro-ui --example launcher
 ```
+
+Variables de entorno para abrir estados concretos:
+
+| Variable | Efecto |
+| --- | --- |
+| `ICARO_UMBRAL=1` | Abre con el Umbral en marcha. |
+| `ICARO_PICAR=7:1` | Detiene la eliminación de la instancia de índice 1 en la etapa 7. |
+| `ICARO_PANTALLA=fallo` | Muestra el informe de fallo con un grabado lateral. |
+
+Las pruebas de la lógica de movimiento se ejecutan con `cargo test -p icaro-ui`.

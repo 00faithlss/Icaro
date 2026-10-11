@@ -1,8 +1,8 @@
-# Pasar de maqueta a launcher funcional
+# Integración del launcher
 
-Revisión del 10 de octubre de 2026. Este documento describe el trabajo pendiente; no acredita una implementación ni una auditoría de seguridad terminada.
+Plan de implementación de la autenticación, la instalación del juego y las tiendas de mods. Las funciones pendientes y sus condiciones de aceptación se detallan a continuación.
 
-## Estado comprobado
+## Estado actual
 
 | Parte | Implementación actual |
 | --- | --- |
@@ -12,13 +12,13 @@ Revisión del 10 de octubre de 2026. Este documento describe el trabajo pendient
 | Persistencia | `launcher_aux/estado.rs` guarda grupos y ajustes en `icaro-demo/estado.json`, dentro del directorio temporal. No es un almacén de credenciales. |
 | Juego | Faltan el instalador de Minecraft, los loaders y el proceso real de lanzamiento. |
 
-El propietario proporcionó el Client ID público aprobado. Su captura de Azure confirma `http://localhost` como URI de redirección bajo aplicaciones móviles y de escritorio. Falta verificar los tipos de cuenta admitidos y probar el intercambio real; no se solicitó ningún secreto de cliente. La revisión por patrones de los cambios de interfaz no encontró tokens o claves con los patrones examinados. Eso no demuestra que un flujo de autenticación futuro sea seguro.
+La aplicación tiene un Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. Falta verificar los tipos de cuenta admitidos e integrar y probar el intercambio real.
 
 ## Inicio de sesión
 
-La interfaz actual propone código de dispositivo. Ese flujo no requiere URI de redirección y necesita configuración de cliente público. Debe obtener un código real, respetar el intervalo y la caducidad recibidos y permitir cancelar. Se elimina la confirmación simulada. Véase [registro de aplicaciones de escritorio](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-overview) y [protocolo de dispositivo](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).
+La interfaz actual muestra una demostración del flujo de código de dispositivo. Su integración requiere obtener un código real, respetar el intervalo y la caducidad recibidos, permitir cancelar y sustituir la confirmación simulada. Este flujo no requiere URI de redirección y necesita configuración de cliente público. Véase [registro de aplicaciones de escritorio](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-overview) y [protocolo de dispositivo](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).
 
-Con la URI `http://localhost` comprobada, la opción propuesta para producción es abrir el navegador y regresar automáticamente mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor escucha solo en loopback, acepta la respuesta correspondiente al intento iniciado y se cierra al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
+El flujo previsto para producción utiliza el navegador del sistema y el retorno a `http://localhost` mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor debe escuchar solo en loopback, aceptar la respuesta correspondiente al intento iniciado y cerrarse al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
 
 La autenticación de Microsoft debe continuar hasta obtener acceso a Minecraft y comprobar el perfil y la titularidad del juego. Una sesión de Microsoft por sí sola no debe marcar la cuenta como lista para jugar. Los intercambios específicos de Xbox y Minecraft necesitan validación con la aplicación aprobada antes de considerar terminado el login.
 
@@ -36,13 +36,13 @@ Estas medidas reducen exposición accidental. El almacén del sistema no garanti
 
 Integrar primero el catálogo público con la API documentada. No necesita el token de Minecraft. El cliente debe identificar Ícaro mediante `User-Agent`, respetar límites y tratar errores sin bloquear la interfaz. [Descripción de la API](https://docs.modrinth.com/api/).
 
-La comprobación de red de esta revisión consultó producción sin credenciales: encontró Sodium (`AANobbMI`) para Fabric y Minecraft 1.21.4 y obtuvo la versión `mc1.21.4-0.6.13-fabric`, su archivo y su SHA-512. Esto valida el acceso al catálogo, todavía no su integración en la interfaz ni la instalación. Usar un identificador HTTP válido, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/Icaro)`.
+El `User-Agent` debe incluir el nombre, la versión de Ícaro y un enlace al proyecto, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/Icaro)`.
 
 La búsqueda usa texto, tipo de proyecto, versión de Minecraft y loader. Se pagina y se descartan respuestas antiguas al cambiar filtros. La selección final de versión vuelve a comprobar compatibilidad, porque encontrar un proyecto no garantiza que cualquier archivo sirva para la instancia. [Búsqueda](https://docs.modrinth.com/api/operations/searchprojects/) y [versiones](https://docs.modrinth.com/api/operations/getprojectversions/).
 
 Antes de descargar, resolver dependencias obligatorias y conflictos; después verificar tamaño y SHA-512, escribir en un archivo temporal y publicar el resultado en la instancia. Validar nombres, rutas y archivos comprimidos para impedir escrituras fuera del destino. Guardar los IDs estables de proyecto y versión junto al archivo instalado para actualizaciones y reconocimiento posteriores.
 
-Los modpacks crean instancias desde sus manifiestos; los mods se instalan dentro de cada instancia, como se acordó para la navegación.
+Los modpacks crean instancias desde sus manifiestos; los mods se instalan dentro de cada instancia.
 
 ## CurseForge
 
@@ -62,4 +62,4 @@ No publicar la clave en Git ni asumir que incluirla en el ejecutable la mantiene
 | Modpacks | Importar manifiestos y rechazar rutas peligrosas, archivos desproporcionados y conflictos sin dejar una instalación parcial activa. |
 | CurseForge | Acceso y distribución acordados, protección de clave y tratamiento claro de descargas restringidas. |
 
-Los servicios viven en `icaro-core`; iced solo presenta su estado y ejecuta trabajo asíncrono. Separar los ejemplos de diseño del ejecutable de producción para impedir que una cuenta o descarga simulada se confunda con una real.
+La implementación debe situar los servicios en `icaro-core` y usar iced para presentar su estado y ejecutar trabajo asíncrono. Los ejemplos de diseño deben mantenerse separados del ejecutable de producción para impedir que una cuenta o descarga simulada se confunda con una real.

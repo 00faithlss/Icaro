@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Visor a pantalla completa de capturas y de piezas del Gabinete: velo casi
-//! opaco, la imagen centrada sin marco, barra superior con nombre y acciones,
+//! Visor a pantalla completa de capturas y de piezas del Gabinete: fondo
+//! opaco, la imagen centrada, barra superior con nombre y acciones,
 //! flechas para recorrer y zoom en pasos de 25 %. Apertura y cierre inmediatos.
 
 use std::time::Instant;
@@ -31,7 +31,7 @@ pub const ZOOM_MIN: u32 = 25;
 pub const ZOOM_MAX: u32 = 400;
 pub const ZOOM_PASO: u32 = 25;
 
-/// Velo del visor: casi opaco, igual en ambos temas.
+/// Fondo opaco del visor, igual en ambos temas.
 const VELO: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
 
 /// Estado del visor abierto.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Las pantallas hechas hasta ahora, juntas. Ejecutar con
+//! Maqueta del launcher con navegación y datos de demostración. Ejecutar con
 //! `cargo run -p icaro-ui --example launcher`.
 
 use icaro_ui::ajustes::indice_ajustes;

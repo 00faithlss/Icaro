@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Editor de instancia: encabezado con datos clave y el contenido de las
-//! pestañas General, Java, Recursos, Mundos y Archivos. La pestaña Mods
-//! queda fuera hasta que se ordene su desarrollo.
+//! Editor de instancia: encabezado con datos clave, navegación entre pestañas
+//! y controles de General, Java, Recursos, Mundos y Archivos.
 
 use iced::widget::{column, container, row, text, Space};
 use iced::{Alignment, Element, Length, Padding};

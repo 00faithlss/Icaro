@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Láminas de grabado: imágenes de dominio público (CC0) que abren cada
-//! sección. Cada una existe en positivo (tema Piedra) y en negativo (Tinta).
+//! Grabados y encuadres de las secciones de Ícaro, preparados para los temas
+//! Piedra y Tinta.
 
 
 use iced::widget::image::Handle;
