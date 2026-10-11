@@ -2,7 +2,7 @@
 // Copyright (C) 2026 00faithlss
 
 //! Tokens del sistema de diseño de Ícaro: paletas, espaciado, medidas,
-//! escala tipográfica y duraciones. Los nombres siguen `tokens.json`.
+//! escala tipográfica y duraciones.
 
 use iced::Color;
 

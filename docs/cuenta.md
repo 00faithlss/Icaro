@@ -46,4 +46,4 @@ Variables de entorno opcionales:
 
 ## Pendiente
 
-Los datos reales de la cuenta (perfil de Minecraft, textura de la skin, cambio de nombre y subida) se conectan después de pulir las pantallas.
+La autenticación y las operaciones de perfil, textura de la skin, cambio de nombre y subida están pendientes de integración con los servicios de Microsoft y Minecraft. Las etapas y comprobaciones se detallan en el [plan de integración](integracion-real.md).
