@@ -12,13 +12,13 @@ Revisión del 10 de octubre de 2026. Este documento describe el trabajo pendient
 | Persistencia | `launcher_aux/estado.rs` guarda grupos y ajustes en `icaro-demo/estado.json`, dentro del directorio temporal. No es un almacén de credenciales. |
 | Juego | Faltan el instalador de Minecraft, los loaders y el proceso real de lanzamiento. |
 
-El propietario proporcionó el Client ID público aprobado. Todavía falta comprobar la configuración de autenticación de esa aplicación; no se solicitó ningún secreto de cliente. La revisión por patrones de los cambios de interfaz no encontró tokens o claves con los patrones examinados. Eso no demuestra que un flujo de autenticación futuro sea seguro.
+El propietario proporcionó el Client ID público aprobado. Su captura de Azure confirma `http://localhost` como URI de redirección bajo aplicaciones móviles y de escritorio. Falta verificar los tipos de cuenta admitidos y probar el intercambio real; no se solicitó ningún secreto de cliente. La revisión por patrones de los cambios de interfaz no encontró tokens o claves con los patrones examinados. Eso no demuestra que un flujo de autenticación futuro sea seguro.
 
 ## Inicio de sesión
 
 La interfaz actual propone código de dispositivo. Ese flujo no requiere URI de redirección y necesita configuración de cliente público. Debe obtener un código real, respetar el intervalo y la caducidad recibidos y permitir cancelar. Se elimina la confirmación simulada. Véase [registro de aplicaciones de escritorio](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-overview) y [protocolo de dispositivo](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).
 
-Para abrir el navegador y regresar automáticamente al launcher, la alternativa es autorización con PKCE S256, comprobación de `state` y una URI registrada de escritorio. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow).
+Con la URI `http://localhost` comprobada, la opción propuesta para producción es abrir el navegador y regresar automáticamente mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor escucha solo en loopback, acepta la respuesta correspondiente al intento iniciado y se cierra al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
 
 La autenticación de Microsoft debe continuar hasta obtener acceso a Minecraft y comprobar el perfil y la titularidad del juego. Una sesión de Microsoft por sí sola no debe marcar la cuenta como lista para jugar. Los intercambios específicos de Xbox y Minecraft necesitan validación con la aplicación aprobada antes de considerar terminado el login.
 
@@ -35,6 +35,8 @@ Estas medidas reducen exposición accidental. El almacén del sistema no garanti
 ## Modrinth
 
 Integrar primero el catálogo público con la API documentada. No necesita el token de Minecraft. El cliente debe identificar Ícaro mediante `User-Agent`, respetar límites y tratar errores sin bloquear la interfaz. [Descripción de la API](https://docs.modrinth.com/api/).
+
+La comprobación de red de esta revisión consultó producción sin credenciales: encontró Sodium (`AANobbMI`) para Fabric y Minecraft 1.21.4 y obtuvo la versión `mc1.21.4-0.6.13-fabric`, su archivo y su SHA-512. Esto valida el acceso al catálogo, todavía no su integración en la interfaz ni la instalación. Usar un identificador HTTP válido, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/Icaro)`.
 
 La búsqueda usa texto, tipo de proyecto, versión de Minecraft y loader. Se pagina y se descartan respuestas antiguas al cambiar filtros. La selección final de versión vuelve a comprobar compatibilidad, porque encontrar un proyecto no garantiza que cualquier archivo sirva para la instancia. [Búsqueda](https://docs.modrinth.com/api/operations/searchprojects/) y [versiones](https://docs.modrinth.com/api/operations/getprojectversions/).
 
