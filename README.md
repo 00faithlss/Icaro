@@ -20,7 +20,7 @@ Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da 
 Ícaro está en desarrollo. La interfaz ya permite recorrer instancias, servidores, descargas, consola, modpacks, capturas, ajustes y cuenta, con temas claro y oscuro.
 
 > [!NOTE]
-> El launcher de ejemplo utiliza cuentas, catálogos y descargas de demostración. La autenticación, la instalación del juego y su lanzamiento están pendientes.
+> El ejemplo conecta el inicio de sesión con Microsoft y el catálogo público de Modrinth. Las instancias, capturas y descargas restantes usan datos de demostración; la instalación y el lanzamiento del juego están pendientes. El login completo todavía requiere validación con una cuenta real.
 
 El núcleo consulta el manifiesto oficial de versiones de Minecraft y verifica el SHA-1 del JSON de una versión.
 
@@ -37,7 +37,7 @@ git switch develop
 cargo run -p icaro-ui --example launcher
 ```
 
-La rama `develop` contiene el trabajo en curso; `main` recibe los cambios integrados. El ejemplo abre la interfaz de demostración.
+La rama `develop` contiene el trabajo en curso; `main` recibe los cambios integrados. El ejemplo abre la interfaz con autenticación y catálogo conectados. `ICARO_DEMO=1` conserva las cuentas y tiendas simuladas para revisar el diseño sin consultas de red. Consulta [Inicio de sesión y catálogo](docs/login-y-catalogo.md) para probar los servicios.
 
 > [!TIP]
 > Para revisar los componentes del sistema de diseño, ejecuta `cargo run -p icaro-ui --example galeria`.
@@ -63,6 +63,8 @@ Las casillas marcadas corresponden a funciones implementadas en el alcance indic
 - [x] Interfaz de demostración con navegación, temas claro y oscuro y componentes compartidos.
 - [x] Grabados de mayor resolución, caché de imágenes, visor y mejoras de contraste y desplazamiento.
 - [x] Búsqueda global sobre los datos de demostración y avisos temporales.
+- [x] Flujo de login con PKCE, retorno local, intercambio con Xbox y Minecraft y almacenamiento de una sesión en el sistema; pendiente de prueba con cuenta real.
+- [x] Catálogo público de Modrinth: búsqueda, paginación, fichas y consulta de versiones compatibles.
 
 ### Primera versión funcional
 
@@ -99,6 +101,13 @@ El [plan de integración](docs/integracion-real.md) desarrolla el flujo de auten
 | [thiserror](https://github.com/dtolnay/thiserror) | 2.0.21 | Errores del núcleo | [MIT][mit] OR [Apache-2.0][apache] |
 | [anyhow](https://github.com/dtolnay/anyhow) | 1.0.104 | Errores de la herramienta de línea de comandos | [MIT][mit] OR [Apache-2.0][apache] |
 | [embed-resource](https://github.com/nabijaczleweli/rust-embed-resource) | 3.0.12 | Recursos del ejecutable de Windows | [MIT][mit] |
+| [base64](https://github.com/marshallpierce/rust-base64) | 0.22.1 | Codificación del desafío PKCE | [MIT][mit] OR [Apache-2.0][apache] |
+| [getrandom](https://github.com/rust-random/getrandom) | 0.3.4 | Aleatoriedad del sistema para PKCE y estado de autorización | [MIT][mit] OR [Apache-2.0][apache] |
+| [sha2 · RustCrypto](https://github.com/RustCrypto/hashes) | 0.10.9 | SHA-256 del desafío PKCE | [MIT][mit] OR [Apache-2.0][apache] |
+| [zeroize](https://github.com/RustCrypto/utils) | 1.9.1 | Limpieza de buffers de credenciales | [Apache-2.0][apache] OR [MIT][mit] |
+| [tokio-util](https://github.com/tokio-rs/tokio) | 0.7.20 | Cancelación de autenticación y consultas | [MIT][mit] |
+| [webbrowser](https://github.com/amodm/webbrowser-rs) | 1.2.4 | Apertura del navegador del sistema | [MIT][mit] OR [Apache-2.0][apache] |
+| [keyring](https://github.com/hwchen/keyring-rs) | 3.6.3 | Credential Manager en Windows y Secret Service en Linux | [MIT][mit] OR [Apache-2.0][apache] |
 
 `MIT OR Apache-2.0` indica una elección entre esas dos licencias. El árbol completo, incluidas las dependencias transitivas, está registrado en [Cargo.lock](Cargo.lock); los paquetes publicados incluyen sus propios textos de licencia.
 
@@ -120,6 +129,7 @@ Las obras y reproducciones utilizadas en los grabados conservan las condiciones 
 - [Desarrollo y estructura del proyecto](docs/desarrollo.md)
 - [Cuenta y estudio de skin](docs/cuenta.md)
 - [Integración real, autenticación y seguridad](docs/integracion-real.md)
+- [Inicio de sesión y catálogo](docs/login-y-catalogo.md)
 - [Créditos](docs/creditos.md)
 
 ## Licencia

@@ -1,6 +1,6 @@
 # Cuenta, estudio de skin y estados de sesión
 
-Referencia de las pantallas de cuenta del launcher y de cómo abrirlas en la maqueta.
+Referencia de las pantallas de cuenta y skin del modo de demostración (`ICARO_DEMO=1`). El login conectado se describe en [inicio de sesión y catálogo](login-y-catalogo.md).
 
 ## Pantallas
 
@@ -46,4 +46,4 @@ Variables de entorno opcionales:
 
 ## Pendiente
 
-La autenticación y las operaciones de perfil, textura de la skin, cambio de nombre y subida están pendientes de integración con los servicios de Microsoft y Minecraft. Las etapas y comprobaciones se detallan en el [plan de integración](integracion-real.md).
+El login conectado consulta el perfil de Minecraft; todavía requiere prueba con una cuenta real. La textura de la skin, el cambio de nombre y la subida siguen pendientes de integración. Las etapas y comprobaciones se detallan en el [plan de integración](integracion-real.md).

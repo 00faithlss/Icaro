@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Maqueta del launcher con navegación y datos de demostración. Ejecutar con
+//! Launcher con autenticación y catálogo conectados; instancias de demostración.
+//! Ejecutar con
 //! `cargo run -p icaro-ui --example launcher`.
 
 use icaro_ui::ajustes::indice_ajustes;
@@ -39,6 +40,8 @@ mod sesion;
 mod red;
 #[path = "launcher_aux/busqueda.rs"]
 mod busqueda;
+#[path = "launcher_aux/servicios.rs"]
+mod servicios;
 
 use archivos::Explorador;
 use icaro_ui::scroll::desplazable;
@@ -49,6 +52,7 @@ use iced::widget::{column, container, row, text, Space};
 use iced::{window, Alignment, Element, Length, Padding, Point, Size, Task};
 
 struct App {
+    servicios: servicios::Estado,
     modo: Modo,
     seccion: Seccion,
     colapsada: bool,
@@ -171,6 +175,7 @@ impl App {
 
 #[derive(Debug, Clone)]
 enum Mensaje {
+    Servicio(servicios::Accion),
     AbrirBusqueda,
     CerrarBusqueda,
     BuscarGlobal(String),
@@ -311,6 +316,8 @@ fn con_entrada<'a>(app: &App, contenido: Element<'a, Mensaje>) -> Element<'a, Me
 }
 
 fn abrir_instancia(app: &mut App, i: usize) {
+    app.servicios.reset_catalog();
+    app.mods_vista = 0;
     let datos = &instancias()[i];
     app.seleccionada = i;
     app.editor_inst = i;
@@ -374,7 +381,13 @@ fn guardar_si_cambio(app: &mut App) {
 }
 
 fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
+    if !app.servicios.demo && matches!(&m, Mensaje::TiendaInstalar | Mensaje::InstalarMod(_, _) | Mensaje::VersionMod(_, _)
+        | Mensaje::InstalarModpack(_) | Mensaje::AlternarMod(_) | Mensaje::EliminarMod(_)) {
+        app.avisar("La instalación y gestión de archivos de mods todavía están en desarrollo.".into());
+        return Task::none();
+    }
     match m {
+        Mensaje::Servicio(action) => return servicios::actualizar(app, action),
         Mensaje::AbrirBusqueda => {
             if hay_dialogo(app) || app.capt.visor.is_some() || app.umbral.is_some() {
                 return Task::none();
@@ -465,6 +478,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Pestana(i) => {
             app.editor = Some(i);
             arrancar(app);
+            if matches!(i, 2 | 3) && app.mods_vista == 1 && !app.servicios.demo { return servicios::buscar(app, 0, false); }
         }
         Mensaje::Nombre(v) => app.general.nombre = v,
         Mensaje::Grupo(v) => {
@@ -585,6 +599,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::BuscarConsola(v) => app.busqueda_consola = v,
         Mensaje::Capt(a) => return capt::actualizar(app, a),
         Mensaje::Ir(s) => {
+            app.servicios.reset_catalog();
             app.seccion = s;
             if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) {
                 app.pantalla = None;
@@ -592,6 +607,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.sesion.menu = false;
             arrancar(app);
             app.editor = None;
+            if s == Seccion::Modpacks && !app.servicios.demo { return servicios::buscar(app, 0, false); }
         }
         Mensaje::Filtro(i) => {
             app.filtro = i;
@@ -664,8 +680,14 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::VistaMods(v) => {
             app.mods_vista = v;
             arrancar(app);
+            if v == 1 && !app.servicios.demo { return servicios::buscar(app, 0, false); }
         }
         Mensaje::AbrirModPagina(id) => {
+            if !app.servicios.demo {
+                app.mods_vista = 1;
+                app.mod_pagina = None;
+                return servicios::actualizar(app, servicios::Accion::Proyecto(id));
+            }
             app.mod_pagina = Some(id);
             app.mod_pestana = 0;
             app.mod_filtro_mc = "Todas".into();
@@ -733,6 +755,10 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             sesion::avanzar(app);
         }
         Mensaje::Jugar(i) => {
+            if !app.servicios.demo {
+                app.avisar("La instalación y el lanzamiento de Minecraft todavía están en desarrollo.".into());
+                return Task::none();
+            }
             // Una sesión vencida muestra el aviso en lugar de abrir el Umbral.
             let _ = sesion::actualizar(app, sesion::Accion::Jugar);
             if app.sesion.banner_jugar {
@@ -882,7 +908,10 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             return window::get_oldest().and_then(|id| window::minimize(id, true))
         }
         Mensaje::Maximizar => return window::get_oldest().and_then(window::toggle_maximize),
-        Mensaje::Cerrar => return window::get_oldest().and_then(window::close),
+        Mensaje::Cerrar => {
+            app.servicios.cancel();
+            return window::get_oldest().and_then(window::close);
+        }
         Mensaje::Nada | Mensaje::ImagenesActualizadas => {}
     }
     Task::none()
@@ -1105,6 +1134,9 @@ fn pantalla_instancias(app: &App) -> Element<'_, Mensaje> {
     }
     cuadricula = cuadricula.push(tarjeta_nueva(p, Mensaje::Pant(pantallas::Accion::NuevaInstancia)));
     let mut cuerpo_col = column![herramientas].spacing(espacio::S6);
+    if !app.servicios.demo {
+        cuerpo_col = cuerpo_col.push(text("Instancias de demostración · La instalación de Minecraft todavía está en desarrollo.").size(texto::BODY_SM.0).color(p.text_muted));
+    }
     if let Some(e) = &app.edicion_grupo {
         cuerpo_col = cuerpo_col.push(
             row![
@@ -1362,6 +1394,7 @@ fn lista_mods(app: &App) -> Element<'_, Mensaje> {
 /// Tienda: filtros a la izquierda, resultados y barra inferior invertida con
 /// la lista de instalación que se arma antes de instalar todo junto.
 fn tienda_mods(app: &App) -> Element<'_, Mensaje> {
+    if !app.servicios.demo { return servicios::store_view(app); }
     use icaro_ui::componentes::{casilla, etiqueta, insignia, Estado};
     let p = app.modo.paleta();
     let instancia = instancias()[app.editor_inst].nombre.clone();
@@ -2414,6 +2447,7 @@ fn pagina_modpack(app: &App, i: usize) -> Element<'_, Mensaje> {
 
 /// Catálogo de modpacks: cada uno se instala como una instancia nueva.
 fn pantalla_modpacks(app: &App) -> Element<'_, Mensaje> {
+    if !app.servicios.demo { return servicios::store_view(app); }
     let p = app.modo.paleta();
     if let Some(i) = app.modpack_pagina {
         return pagina_modpack(app, i);
@@ -2847,8 +2881,8 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         p,
         if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { None } else { Some(app.seccion) },
         app.colapsada,
-        Cuenta { nombre: app.sesion.estado.nombre(), proveedor: "Microsoft", estado: app.sesion.estado },
-        Some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 }),
+        Cuenta { nombre: app.servicios.nombre(app.sesion.estado.nombre()), proveedor: "Microsoft", estado: app.sesion.estado },
+        app.servicios.demo.then_some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 }),
         contenido,
         (app.seccion == Seccion::Instancias && app.editor.is_none() && !matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio))).then_some(pie),
         MensajesShell {
@@ -2999,6 +3033,9 @@ fn main() -> iced::Result {
         .subscription(|app| {
             let mut subs = vec![window::resize_events().map(|(_, s)| Mensaje::Tamano(s)),
                 icaro_ui::laminas::suscripcion().map(|()| Mensaje::ImagenesActualizadas)];
+            if !app.servicios.demo && app.servicios.session.is_some() {
+                subs.push(iced::time::every(std::time::Duration::from_secs(30)).map(|_| Mensaje::Servicio(servicios::Accion::Renovar)));
+            }
             if let Some(aviso) = &app.aviso {
                 let ms = if !app.reducir && aviso.saliendo(app.ahora) { 16 } else { 60 };
                 subs.push(iced::time::every(std::time::Duration::from_millis(ms)).map(Mensaje::AvisoTic));
@@ -3128,6 +3165,7 @@ fn main() -> iced::Result {
         let total = instancias().len();
         (
             App {
+                servicios: servicios::Estado::default(),
                 modo: if piedra { Modo::Piedra } else { Modo::Tinta },
                 busqueda: busqueda::Estado::default(),
                 seccion,
@@ -3255,7 +3293,7 @@ fn main() -> iced::Result {
                 colocada: None,
                 sesion: sesion::Sesion::desde_entorno(),
             },
-            Task::none(),
+            Task::perform(async {}, |_| Mensaje::Servicio(servicios::Accion::Inicializar)),
         )
     })
 }

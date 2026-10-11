@@ -10,3 +10,16 @@ serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
 thiserror.workspace = true
+base64 = "0.22"
+getrandom = "0.3"
+sha2 = "0.10"
+zeroize = { version = "1", features = ["serde"] }
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+webbrowser = "1"
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }

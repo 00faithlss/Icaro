@@ -3,6 +3,7 @@
 ## Requisitos
 
 Rust estable, instalado con [rustup](https://rustup.rs), en Windows o Arch Linux.
+En Arch Linux, el backend de credenciales requiere `libdbus` para compilar y un servicio de secretos en la sesión del usuario para recordar cuentas.
 
 ## Compilar y probar
 
@@ -33,6 +34,7 @@ El ejemplo `launcher` acepta variables de entorno para abrir una pantalla en un 
 
 | Variable | Efecto |
 | --- | --- |
+| `ICARO_DEMO=1` | Cuentas y tiendas simuladas, sin consultas a servicios reales |
 | `ICARO_SECCION` | Sección inicial, de 1 a 7 |
 | `ICARO_PIEDRA` | Tema claro |
 | `ICARO_VACIO` | Todas las pantallas sin datos, para ver los estados vacíos |
@@ -41,6 +43,7 @@ El ejemplo `launcher` acepta variables de entorno para abrir una pantalla en un 
 | `ICARO_BUSCAR` | Texto de búsqueda de la tienda de mods |
 
 Las capturas del ejemplo son recortes de grabados; copiar y abrir carpeta están simulados.
+El login y el catálogo se prueban según la guía de [inicio de sesión y catálogo](login-y-catalogo.md). Las variables de estados ficticios de cuenta requieren el modo de demostración.
 
 ## Licencia
 

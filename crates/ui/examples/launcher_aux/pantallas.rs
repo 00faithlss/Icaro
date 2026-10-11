@@ -225,6 +225,20 @@ fn agregar_instancia(app: &mut App, d: DatosInstancia) {
 }
 
 pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
+    if !app.servicios.demo {
+        match &a {
+            Accion::Abrir(Pantalla::Codigo) | Accion::PedirOtroCodigo | Accion::SimularConfirmacion | Accion::AbrirPaginaMicrosoft =>
+                return crate::servicios::actualizar(app, crate::servicios::Accion::Login),
+            Accion::Cerrar if app.pantalla == Some(Pantalla::Codigo) =>
+                return crate::servicios::actualizar(app, crate::servicios::Accion::CancelarLogin),
+            Accion::JugarComoInvitado => {
+                app.pantalla = None;
+                return crate::servicios::actualizar(app, crate::servicios::Accion::Logout);
+            }
+            Accion::CopiarCodigo => return Task::none(),
+            _ => {}
+        }
+    }
     match a {
         Accion::Abrir(p) => {
             app.pantalla = Some(p);
@@ -577,7 +591,7 @@ fn m(a: Accion) -> Mensaje {
 // ------------------------------------------------------------------ vistas
 
 /// Mitad izquierda de una pantalla con lámina a toda altura.
-fn con_lamina<'a>(p: Paleta, lamina: Lamina, derecha: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+pub(crate) fn con_lamina<'a>(p: Paleta, lamina: Lamina, derecha: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
     // Como en el sistema: la lámina va sin marco, en una columna con una regla
     // de 1 px a la derecha; las figuras se muestran enteras y centradas.
     let entera = matches!(lamina, Lamina::Icaro | Lamina::Hermes | Lamina::Faeton | Lamina::HermesHilos | Lamina::ApoloBelvedere);
@@ -661,6 +675,7 @@ fn primera<'a>(_app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
 }
 
 fn codigo<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
+    if !app.servicios.demo { return crate::servicios::login_view(app); }
     let restante = 900u64.saturating_sub(app.ahora.saturating_duration_since(app.codigo_inicio).as_secs());
     let fase = match app.codigo_fase {
         FaseCodigo::Esperando if restante == 0 => FaseCodigo::Vencido,

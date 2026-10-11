@@ -3,4 +3,8 @@
 
 //! Núcleo de Ícaro: manifiestos de Mojang, descargas, instancias y lanzamiento.
 
+pub mod auth;
+mod http;
 pub mod manifest;
+pub mod modrinth;
+pub mod vault;

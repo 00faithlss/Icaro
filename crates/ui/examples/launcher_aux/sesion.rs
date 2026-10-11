@@ -68,9 +68,10 @@ impl Sesion {
     pub fn desde_entorno() -> Self {
         let mut s = Self::nueva(match std::env::var("ICARO_SESION").ok().as_deref() {
             Some("invitado") => EstadoSesion::Invitado,
-            Some("vencida") => EstadoSesion::Vencida,
-            Some("sinjuego") => EstadoSesion::SinJuego,
-            _ => EstadoSesion::Activa,
+            Some("vencida") if std::env::var("ICARO_DEMO").as_deref() == Ok("1") => EstadoSesion::Vencida,
+            Some("sinjuego") if std::env::var("ICARO_DEMO").as_deref() == Ok("1") => EstadoSesion::SinJuego,
+            _ if std::env::var("ICARO_DEMO").as_deref() == Ok("1") => EstadoSesion::Activa,
+            _ => EstadoSesion::Invitado,
         });
         s.menu = std::env::var_os("ICARO_MENU_CUENTA").is_some();
         s.banner_jugar = std::env::var_os("ICARO_BANNER_JUGAR").is_some();
@@ -144,6 +145,23 @@ fn validar_png(ruta: &Path) -> Result<String, String> {
 }
 
 pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
+    if !app.servicios.demo {
+        match &a {
+            Accion::AgregarCuenta | Accion::IniciarSesion | Accion::VolverAEntrar | Accion::ElegirVencida =>
+                return crate::servicios::actualizar(app, crate::servicios::Accion::Login),
+            Accion::ElegirActiva if app.servicios.session.is_none() =>
+                return crate::servicios::actualizar(app, crate::servicios::Accion::Login),
+            Accion::CerrarSesion | Accion::ElegirInvitado | Accion::JugarComoInvitado => {
+                app.pantalla = Some(pantallas::Pantalla::Cuenta);
+                return crate::servicios::actualizar(app, crate::servicios::Accion::Logout);
+            }
+            Accion::AbrirEstudio | Accion::Aplicar | Accion::UsarDeNuevo | Accion::Cargar => {
+                app.avisar("La edición de skins todavía está en desarrollo.".into());
+                return Task::none();
+            }
+            _ => {}
+        }
+    }
     let pant = |app: &mut App, p| {
         app.pantalla = Some(p);
         app.sesion.menu = false;
@@ -266,6 +284,7 @@ fn progreso_menu(app: &App) -> f32 {
 }
 
 pub fn vista_cuenta(app: &App) -> Element<'_, Mensaje> {
+    if !app.servicios.demo { return crate::servicios::account_view(app); }
     let p = app.modo.paleta();
     let s = &app.sesion;
     let nombre = s.estado.nombre();
@@ -325,6 +344,7 @@ pub fn vista_estudio(app: &App) -> Element<'_, Mensaje> {
 /// Menú de cuentas anclado al bloque de la barra lateral, con un fondo
 /// transparente que lo cierra al pulsar fuera.
 pub fn con_selector<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+    if !app.servicios.demo { return crate::servicios::selector(app, ventana); }
     if !app.sesion.menu {
         return ventana;
     }

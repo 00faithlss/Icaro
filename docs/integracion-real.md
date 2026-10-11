@@ -1,26 +1,27 @@
 # Integración del launcher
 
-Plan de implementación de la autenticación, la instalación del juego y las tiendas de mods. Las funciones pendientes y sus condiciones de aceptación se detallan a continuación.
+Estado y plan de implementación de la autenticación, la instalación del juego y las tiendas de mods. La guía de [inicio de sesión y catálogo](login-y-catalogo.md) describe cómo probar los servicios conectados.
 
 ## Estado actual
 
 | Parte | Implementación actual |
 | --- | --- |
 | Núcleo | `crates/core/src/manifest.rs` consulta el manifiesto de Mojang y verifica el SHA-1 del JSON de una versión. |
-| Inicio de sesión | `launcher_aux/pantallas.rs` muestra un código fijo y permite simular la confirmación. `sesion.rs` usa cuentas de ejemplo. |
-| Tienda | `launcher_aux/mods.rs` contiene un catálogo estático. Las descargas de `red.rs` están simuladas. |
+| Inicio de sesión | `icaro-core::auth` implementa PKCE, retorno local, Xbox, titularidad y perfil de Minecraft. `launcher_aux/servicios.rs` lo conecta con la interfaz; falta probar el flujo con una cuenta real. |
+| Tienda | `icaro-core::modrinth` consulta búsqueda, fichas y versiones compatibles. La instalación desde el catálogo está pendiente. `ICARO_DEMO=1` conserva el catálogo estático. |
+| Credenciales | `icaro-core::vault` recuerda una cuenta mediante Credential Manager en Windows o Secret Service en Linux. Si no puede guardar, la sesión queda solo en memoria. |
 | Persistencia | `launcher_aux/estado.rs` guarda grupos y ajustes en `icaro-demo/estado.json`, dentro del directorio temporal. No es un almacén de credenciales. |
 | Juego | Faltan el instalador de Minecraft, los loaders y el proceso real de lanzamiento. |
 
-La aplicación tiene un Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. Falta verificar los tipos de cuenta admitidos e integrar y probar el intercambio real.
+La aplicación utiliza el Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. Falta verificar los tipos de cuenta admitidos y probar el intercambio con una cuenta real.
 
 ## Inicio de sesión
 
-La interfaz actual muestra una demostración del flujo de código de dispositivo. Su integración requiere obtener un código real, respetar el intervalo y la caducidad recibidos, permitir cancelar y sustituir la confirmación simulada. Este flujo no requiere URI de redirección y necesita configuración de cliente público. Véase [registro de aplicaciones de escritorio](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-overview) y [protocolo de dispositivo](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).
+El inicio de sesión conectado abre el navegador del sistema. El código fijo y la confirmación simulada se conservan únicamente con `ICARO_DEMO=1`; no autentican cuentas reales.
 
-El flujo previsto para producción utiliza el navegador del sistema y el retorno a `http://localhost` mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor debe escuchar solo en loopback, aceptar la respuesta correspondiente al intento iniciado y cerrarse al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
+El flujo implementado utiliza el navegador del sistema y el retorno a `http://localhost` mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor escucha solo en loopback, acepta la respuesta correspondiente al intento iniciado y se cierra al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
 
-La autenticación de Microsoft debe continuar hasta obtener acceso a Minecraft y comprobar el perfil y la titularidad del juego. Una sesión de Microsoft por sí sola no debe marcar la cuenta como lista para jugar. Los intercambios específicos de Xbox y Minecraft necesitan validación con la aplicación aprobada antes de considerar terminado el login.
+La autenticación comprueba Xbox, la titularidad de Minecraft Java y el perfil del juego antes de activar la cuenta. Los intercambios específicos necesitan validación con una cuenta real y la aplicación aprobada antes de considerar terminado el login.
 
 ## Seguridad que debe implementar el núcleo
 
@@ -34,7 +35,7 @@ Estas medidas reducen exposición accidental. El almacén del sistema no garanti
 
 ## Modrinth
 
-Integrar primero el catálogo público con la API documentada. No necesita el token de Minecraft. El cliente debe identificar Ícaro mediante `User-Agent`, respetar límites y tratar errores sin bloquear la interfaz. [Descripción de la API](https://docs.modrinth.com/api/).
+El catálogo público usa la API documentada y un cliente independiente del login. No recibe el token de Minecraft. Identifica Ícaro mediante `User-Agent`, respeta la espera recibida con HTTP 429 y trata errores sin bloquear la interfaz. [Descripción de la API](https://docs.modrinth.com/api/).
 
 El `User-Agent` debe incluir el nombre, la versión de Ícaro y un enlace al proyecto, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/Icaro)`.
 
