@@ -51,6 +51,7 @@ iconos! {
     ZoomMas => "zoom-in",
     ZoomMenos => "zoom-out",
     Carpeta => "folder",
+    Rama => "git-branch",
     Editar => "pencil",
     Subir => "upload",
     Acciones => "more-vertical",
@@ -75,6 +76,19 @@ iconos! {
     Refrescar => "refresh",
     Usuario => "user",
     UsuarioMas => "user-plus",
+    Monitor => "monitor",
+    Bug => "bug",
+    Codigo => "code",
+    Notas => "notes",
+    Usuarios => "users",
+    Documento => "file-text",
+    Corazon => "heart",
+    Calendario => "calendar",
+    Paquete => "package",
+    Imagen => "image",
+    Cuadricula => "grid-3x3",
+    Brillo => "sparkle",
+    Cpu => "cpu",
 }
 
 /// Tamaños permitidos, múltiplos del píxel de arte.

@@ -1,6 +1,6 @@
 # Roadmap del System Design
 
-Actualizado el **11-10-2026**. Referencia: `icaro-design-system.rar`, sus componentes, definiciones y previews originales. Este archivo sigue la implementación del diseño; el [roadmap general](../README.md#roadmap) sigue las funciones del launcher.
+Actualizado el **12-10-2026**. Referencias: `icaro-design-system.rar` y `icaro-componentes-nuevos.zip` (`CambioVersionInstancia`, `InfoProyecto` y `PaginaMod`), sus componentes, definiciones y previews originales. Este archivo sigue la implementación del diseño; el [roadmap general](../README.md#roadmap) sigue las funciones del launcher.
 
 Las siguientes entregas deben conectar y completar esos diseños, conservando sus composiciones, iconos, tipografías, colores y controles. Las diferencias conocidas se registran para evaluación antes de sustituir una vista.
 
@@ -18,6 +18,14 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 
 ## Avances recientes
 
+- [x] Paso 1 con `SelectorVersion` y paso 2 con `SelectorLoader`, separados; versiones oficiales de Fabric, Quilt, NeoForge y Forge, sin valores de muestra en modo real.
+- [x] `CambioVersionInstancia` del ZIP nuevo: lista virtualizada, compatibilidad de todos los mods por lotes en segundo plano, caché, recomendación desde 95 %, loader seleccionable y actualizaciones opcionales. Respaldo obligatorio al bajar, copia y recuperación si falla la publicación de los cambios.
+- [x] `PaginaMod` e `InfoProyecto` nuevos: galería, tabla de versiones, columna de 320 px, enlaces/iconos originales y avatares reales. Perfil interno del creador pendiente de componente; los datos ausentes de la API se omiten.
+- [x] Recursos y nueva pestaña Shaders reutilizan `FilaMod`/`ModsInstancia` por petición del usuario, con inventarios reales y acciones individuales y múltiples.
+- [x] Clic fuera cierra la ficha rápida; volver desde la página del proyecto restaura el contexto de instancia o catálogo.
+- [x] Resourcepacks ZIP, inventario y activación en `options.txt`; compatibilidad independiente del loader e instalación fuera de versión con confirmación.
+- [x] Barra de ventana conservada en los visores, panel de mod entrando desde la derecha, selección de todos los mods y menú del editor conectado.
+- [x] `ActualizacionLauncher` conectado a releases de GitHub y descarga verificada; falta publicar los artefactos para probar una actualización completa.
 - [x] Vanilla y Java oficiales conectados al asistente y a Jugar, con archivos guardados y verificados.
 - [x] Estados de BotonJugar, cola de preparación, registros reales en Umbral/Consola e informe de fallo sin causas ficticias.
 - [x] Asistente de cuatro pasos con selector de versiones, tarjetas de loader, radios de rombo y botones con sus flechas.
@@ -47,7 +55,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `Tooltip` | Parcial | Ayudas disponibles en algunos controles; falta cubrir todos los botones de solo icono y el modo angosto. |
 | `Banda`, `Detalle`, `Lamina`, `Cover` | Implementado | Grabados, recortes, portadas de respaldo y composición de títulos sobre bloques propios. Las capturas reales como portada siguen pendientes. |
 | `Lupa` | Parcial | Utilidades existentes y zoom del visor. La lupa sobre las láminas del launcher todavía no está aplicada. |
-| `ListaVirtual` | Pendiente | Los catálogos tienen paginación; falta una lista que dibuje solo las filas visibles para versiones, archivos y registros extensos. |
+| `ListaVirtual` | Parcial | Selectores de versiones y consola dibujan solo filas visibles; compatibilidad en segundo plano con caché y cuatro destinos simultáneos. Catálogos con paginación; falta extender la virtualización al explorador de archivos. |
 | `ListaReordenable` | Parcial | Hay interacción de orden en la maqueta de servidores. Falta aplicarla a recursos reales y persistir sus prioridades en el juego. |
 | `SelectorColor` | Pendiente | Falta conectar el selector definido a iconos/colores de instancia y revisar su composición original. |
 | `ZonaSoltar` | Parcial | Hay estados de arrastre en las maquetas. Falta conectar la importación real de packs, recursos y skins con la zona original. |
@@ -69,14 +77,14 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | Referencia original | Estado | Lo que tenemos y lo que falta |
 | --- | --- | --- |
 | `TarjetaInstancia`, `PanelLateral` | Parcial | Lista, selección, grupos y metadatos guardados. Vanilla pasa de instalación a lista y ejecución con datos reales. Los loaders quedan **Por instalar**. Falta tiempo jugado acumulado y lanzamiento de loaders. |
-| `Asistente`, `SelectorVersion`, `SelectorLoader` | Parcial | Composición original de cuatro pasos, iconos y radios de rombo; versiones Mojang con caché, nombre, portada y carpeta propia. Crear Vanilla instala Minecraft y Java. Falta consultar e instalar versiones concretas de loaders. |
+| `Asistente`, `SelectorVersion`, `SelectorLoader` | Parcial | Selectores separados por paso, fechas, búsqueda y versiones antiguas; catálogo oficial de versiones de loaders y elección persistida. Crear Vanilla instala Minecraft y Java. Falta instalar y lanzar los loaders. |
 | `EditorInstancia` | Parcial | Encabezado y pestañas existentes; nombre, grupo y Java guardados; Vanilla omite Mods. Java, memoria y argumentos aplicados al juego. General requiere icono/color, notas y guardado completo de resolución/servidor. |
 | `AccionesInstancia` | Parcial | Abrir carpeta, eliminar a papelera y Deshacer conectados. Exportación ZIP real con diálogo original. Duplicar, importar y otras acciones aún necesitan núcleo. |
-| `CambiarVersion` | Maqueta | Diálogo de riesgo y alternativa de copia disponibles. Faltan copia real, compatibilidad e instalación de la versión o loader nuevo. |
+| `CambioVersionInstancia`, `CambiarVersion` | Parcial | Selector nuevo con compatibilidad de todos los mods instalados por SHA512, recomendación desde 95 %, loader elegible, actualizaciones opcionales y desactivación desplegable. Respaldo obligatorio al bajar, copia independiente, preparación aislada y recuperación si falla; conserva mods inactivos. Minecraft se instala después mediante Instalar; instalación de loaders pendiente. |
 | `ImportarClonar` | Maqueta | Selector de orígenes y composición disponibles. Falta leer packs, detectar otros launchers, mostrar datos reales e importar/clonar archivos. |
 | `ExportarModpack` | Pendiente | Falta el flujo completo MRPACK: nombre, versión, autor, referencias de mods y archivos incluidos. El selector MRPACK del diálogo de instancia permanece deshabilitado. |
 | `ArchivosInstancia`, `Explorador` | Parcial | Barra con iconos, árbol y tamaños, abrir/copiar ruta/renombrar, vista previa de texto y papelera. Falta Deshacer/eliminación definitiva, navegación completa por flechas y previews de imágenes, JAR y mundos. |
-| `RecursosInstancia` | Parcial | Componentes de recursos disponibles; la integración actual debe recuperar la separación original entre recursos y shaders. Faltan inventario real, prioridad en `options.txt`, activación, compatibilidad e instalación. |
+| `RecursosInstancia` | Parcial | Por petición del usuario, resourcepacks y nueva pestaña Shaders reutilizan filas y controles de `ModsInstancia`: búsqueda, filtros, selección, activación, actualizaciones y retirada. ZIP e inventarios reales; recursos activos en `options.txt`, shaders en configuración existente de Iris. Versiones no declaradas requieren confirmación. Falta prioridad de resourcepacks por arrastre y soporte de otros motores de shaders. |
 | `MundosInstancia` | Maqueta | Lista y panel de copias disponibles. Falta leer mundos, gestionar copias/restauración y conectar sus acciones al juego y disco. |
 | `Capturas` | Parcial | Galería original conectada a las PNG que Minecraft guarda por instancia, filtros por identidad, refresco en segundo plano y visor con el original. Copiar imagen/archivos y abrir carpeta funcionan en Windows. Falta eliminación reversible y copia de imágenes en Linux. |
 | `BotonJugar`, `Umbral` | Parcial | Estados originales conectados a instalación, preparación y ejecución Vanilla; Jugar sin MB, Preparando al verificar archivos guardados e Instalando solo al descargar archivos. En Windows el Umbral espera la ventana del proceso Minecraft y retira la capa completa con fundido, sin cortina ni remontar la vista, según la corrección solicitada por el usuario. Falta detección equivalente en Linux y cerrar launcher conservando juego mediante bandeja. |
@@ -90,8 +98,9 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `ModsInstancia` | Implementado | Inventario real, filtros, selección múltiple, activar/desactivar, actualizaciones con confirmación, quitar a papelera y Deshacer. |
 | `TiendaMods` | Parcial | Composición original, filtros laterales, contexto de Minecraft/loader, búsqueda, filas y lista inferior de instalación. Modrinth conectado; CurseForge visible pero deshabilitado. |
 | `FichaMod` | Implementado | Panel rápido con acciones, miniaturas, versiones compatibles, nombres/estado de dependencias y selección de opcionales. Ver página y Volver conservan la navegación anterior. |
-| `PaginaMod` | Implementado | Página completa con cabecera/pestañas visibles, columna fija de información, descripción, galería, tabla de versiones, cambios y dependencias desde Modrinth. Instalar modpacks sigue pendiente. |
-| `VisorCaptura` | Parcial | Compartido entre capturas locales reales y galería de proyectos; originales de mayor resolución, zoom, arrastre, flechas y Escape. Copiar y abrir carpeta conectados en Windows. Falta eliminación reversible de capturas locales. |
+| `PaginaMod` (ZIP nuevo, 12-10) | Parcial | Cabecera de 64 px, autor/categorías/lado y resumen, columna 320 px con InfoProyecto y tres mods reales del dueño; galería 3 columnas 16:9, filtros, canales, compatibilidad y grupos de dependencias. Perfil interno del creador requiere diseño; motivos de incompatibilidad y datos no publicados se omiten. Instalar modpacks sigue pendiente. |
+| `InfoProyecto` (ZIP nuevo, 12-10) | Parcial | Versiones mono, tres filas, snapshots opcionales, `.x` solo con manifiesto que prueba toda la familia; plataformas, entornos, enlaces, etiquetas, creadores y detalles reales, compartidos con el panel rápido. Faltan conteos de contenido del MRPACK y datos fiables de rendimiento/mínimos de shaders; no se simulan. |
+| `VisorCaptura` | Parcial | Compartido entre capturas locales y galería de proyectos; originales, zoom, arrastre, flechas y Escape. Conserva barra de búsqueda, arrastre y controles de ventana. Copiar y abrir carpeta conectados en Windows; eliminación reversible pendiente. |
 | `BibliotecaMods` | A evaluar | El original reúne un mod y todas las instancias que lo usan. La sección actual es **Modpacks**, según el alcance trabajado, y los mods se gestionan por instancia. Esa biblioteca global no está implementada; evaluar su ubicación antes de añadir una sección. |
 
 ## Servicios, ajustes y pantallas auxiliares
@@ -109,7 +118,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `Apariencia` | Parcial | Tinta/Piedra y reducir movimiento disponibles. Falta completar seguir el tema del sistema, Mármol/Plata/Bronce y aplicar/validar escala de 80 a 150 %. |
 | `AjustesJava` | Parcial | Configuración por instancia guardada y aplicada; selección automática según metadatos, detección de Java del sistema y descarga verificada del runtime oficial. Ajustes/editor muestran runtimes reales guardados; sliders limitados por la RAM real. Faltan agregar/probar rutas manuales desde Ajustes y completar las recomendaciones de memoria. |
 | `AjustesAlmacenamiento`, `Almacenamiento` | Maqueta | Pantalla disponible con cifras de muestra. Faltan tamaños reales, barra por tramas, limpieza y traslado seguro de la carpeta de instancias. Los tamaños reales del diálogo ZIP no completan esta pantalla. |
-| `ActualizacionLauncher` | Maqueta | Pantalla de versión y notas disponible. Falta buscar, descargar y aplicar actualizaciones del propio launcher. |
+| `ActualizacionLauncher` | Parcial | Pantalla y banner con versiones y notas reales; consulta GitHub, verifica tamaño/SHA-256 y aplica ahora o al cerrar con recuperación del ejecutable anterior. Requiere release portable y `latest.json` publicados; automático para Windows x86-64. |
 | `Integridad` | Maqueta | Cuadrícula y progreso de ejemplo disponibles. Falta revisar/reparar todos los archivos reales de una instancia; la verificación de mods descargados ya existe en otro flujo. |
 | `ArchivosNoVerificados` | Maqueta | Composición disponible; se preservan los mods locales ajenos a Ícaro. Falta identificación por hash, lista real y acciones de buscar, confiar o quitar. |
 | `PantallaError`, `InformeFallo` | Parcial | Fallos reales del juego con código de salida, causa desconocida cuando corresponde, registro y copia de informe en la composición original. Falta diagnóstico específico de conflictos y exportación del informe a archivo. |
@@ -118,10 +127,10 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 
 ## Orden para completar el diseño
 
-1. **Instancia jugable:** validar Vanilla con una cuenta real y en Linux; extender el instalador a loaders manteniendo los componentes ya conectados. Completar historial de descargas, seguimiento de consola y Umbral.
-2. **Editor y acciones:** completar General/Java, Archivos, Recursos, Mundos y Capturas; después cambiar versión, importar/clonar y exportar MRPACK con copias de seguridad.
+1. **Instancia jugable:** extender el instalador a loaders manteniendo los componentes ya conectados; repetir en Linux el recorrido de Vanilla confirmado en Windows. Completar historial de descargas y unificar los instaladores en la cola global.
+2. **Editor y acciones:** completar General/Java, recuperación de Archivos/Capturas, prioridad de Recursos y Mundos; importar/clonar y exportar MRPACK. El cambio de versión con respaldo/copia ya está conectado; falta instalar el loader elegido.
 3. **Cuenta:** evaluar la diferencia de PantallaCuenta y conectar su composición original junto con EstudioSkin y todos los estados de sesión.
-4. **Servicios adicionales:** servidores, red/sincronización, integridad, archivos sin verificar, almacenamiento, bandeja y actualización del launcher.
+4. **Servicios adicionales:** servidores, red/sincronización, integridad, archivos sin verificar, almacenamiento y bandeja. Publicar los artefactos para validar la actualización del launcher ya implementada.
 5. **Revisión transversal:** ventanas angostas, escala, metales, foco y teclado, tooltips, virtualización y movimientos pendientes; comprobar ambas paletas.
 
 ## Diferencias para evaluar
@@ -140,6 +149,10 @@ Los ajustes de adaptación ya conocidos —tercer filtro de versiones antiguas e
 | Asistente, exportación, ajustes y pantallas auxiliares | [pantallas.rs](../crates/ui/examples/launcher_aux/pantallas.rs) |
 | Filas, selección, tienda y ficha rápida | [diseno_mods.rs](../crates/ui/examples/launcher_aux/diseno_mods.rs) |
 | Página completa, versiones, galería y cambios | [ficha.rs](../crates/ui/examples/launcher_aux/ficha.rs) |
+| Columna compartida y creadores | [info_proyecto.rs](../crates/ui/examples/launcher_aux/info_proyecto.rs) |
+| Selector y migración de versión | [selector_cambio.rs](../crates/ui/examples/launcher_aux/selector_cambio.rs), [versiones_instancia.rs](../crates/core/src/versiones_instancia.rs) |
+| Recursos y shaders | [packs_reales.rs](../crates/ui/examples/launcher_aux/packs_reales.rs), [mods.rs](../crates/core/src/mods.rs) |
+| Actualización del launcher | [actualizacion_real.rs](../crates/ui/examples/launcher_aux/actualizacion_real.rs), [actualizacion.rs](../crates/core/src/actualizacion.rs), [contrato de publicación](actualizaciones-launcher.md) |
 | Servicios y navegación | [servicios.rs](../crates/ui/examples/launcher_aux/servicios.rs), [mods_reales.rs](../crates/ui/examples/launcher_aux/mods_reales.rs) |
 | Instancias, editor y archivos | [instancias_reales.rs](../crates/ui/examples/launcher_aux/instancias_reales.rs), [editor.rs](../crates/ui/src/editor.rs), [archivos.rs](../crates/ui/examples/launcher_aux/archivos.rs) |
 | Componentes y tokens | [componentes.rs](../crates/ui/src/componentes.rs), [tema.rs](../crates/ui/src/tema.rs), [iconos.rs](../crates/ui/src/iconos.rs) |

@@ -58,41 +58,14 @@ pub fn pestanas_editor_con_mods<'a, M: Clone + 'a>(
     mostrar_mods: bool,
     al_elegir: impl Fn(usize) -> M,
 ) -> Element<'a, M> {
-    if !mostrar_mods {
-        return pestanas(
-            p,
-            &[
-                ("General", None),
-                ("Java", None),
-                ("Recursos", None),
-                ("Mundos", Some(mundos)),
-                ("Capturas", None),
-                ("Registros", None),
-                ("Archivos", None),
-            ],
-            if activa > 2 {
-                activa - 1
-            } else {
-                activa.min(1)
-            },
-            move |i| al_elegir(if i >= 2 { i + 1 } else { i }),
-        );
-    }
-    pestanas(
-        p,
-        &[
-            ("General", None),
-            ("Java", None),
-            ("Mods", Some(mods)),
-            ("Recursos", None),
-            ("Mundos", Some(mundos)),
-            ("Capturas", None),
-            ("Registros", None),
-            ("Archivos", None),
-        ],
-        activa,
-        al_elegir,
-    )
+    let mut opciones = vec![("General", None), ("Java", None)];
+    let mut indices = vec![0, 1];
+    if mostrar_mods { opciones.push(("Mods", Some(mods))); indices.push(2); }
+    opciones.extend([("Recursos", None), ("Shaders", None), ("Mundos", Some(mundos)),
+        ("Capturas", None), ("Registros", None), ("Archivos", None)]);
+    indices.extend([3, 8, 4, 5, 6, 7]);
+    let elegida = indices.iter().position(|i| *i == activa).unwrap_or(0);
+    pestanas(p, &opciones, elegida, move |i| al_elegir(indices[i]))
 }
 
 fn dato<'a, M: 'a>(p: Paleta, nombre: &str, valor: &str) -> Element<'a, M> {

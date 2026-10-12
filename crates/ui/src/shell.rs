@@ -162,7 +162,7 @@ fn boton_ventana<'a, M: Clone + 'a>(
     .into()
 }
 
-fn barra_titulo<'a, M: Clone + 'a>(p: Paleta, m: &MensajesShell<'a, M>) -> Element<'a, M> {
+pub fn barra_titulo<'a, M: Clone + 'a>(p: Paleta, m: &MensajesShell<'a, M>) -> Element<'a, M> {
     let marca = text("ÍCARO")
         .font(fuentes::DISPLAY)
         .size(13.0)

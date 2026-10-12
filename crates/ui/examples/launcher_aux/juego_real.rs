@@ -422,6 +422,10 @@ fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::path::PathBu
     )
 }
 pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
+    if app.actualizacion.descargando {
+        app.avisar("Espera a que termine de descargarse la actualización de Ícaro.".into());
+        return Task::none();
+    }
     let Some(i) = app.servicios.instancias.registros.get(index).cloned() else {
         return Task::none();
     };
@@ -1530,8 +1534,10 @@ pub fn estado_boton(app: &App, index: usize) -> (EstadoJugar, String, Option<Men
             _ => {}
         }
     }
+    let listo = crate::instancias().get(index).is_some_and(|d|
+        matches!(d.estado, EstadoInstancia::Lista | EstadoInstancia::Desactualizada));
     (
-        EstadoJugar::Listo,
+        if listo { EstadoJugar::Listo } else { EstadoJugar::PorInstalar },
         String::new(),
         Some(Mensaje::Jugar(index)),
     )

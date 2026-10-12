@@ -190,8 +190,12 @@ impl Explorador {
         self.ruta_elegida().map(|r| r.display().to_string())
     }
     pub fn ruta_relativa(&self) -> Option<String> { self.ruta_elegida().and_then(|r| r.strip_prefix(&self.raiz).ok().map(|p| p.to_string_lossy().replace('\\',"/"))) }
-    pub fn abrir_carpeta(&self) {
-        if let Some(r)=self.ruta_elegida() { crate::pantallas::abrir_en_sistema(if r.is_dir() { &r } else { r.parent().unwrap_or(&self.raiz) }); }
+    pub fn abrir_carpeta(&mut self) {
+        if let Some(r)=self.ruta_elegida() {
+            if let Err(error) = crate::pantallas::abrir_en_sistema(if r.is_dir() { &r } else { r.parent().unwrap_or(&self.raiz) }) {
+                self.nota = Some((Estado::Error, error));
+            }
+        }
     }
 
     /// Abre la carpeta o el archivo con el sistema.

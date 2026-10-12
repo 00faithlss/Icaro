@@ -4,6 +4,25 @@
 use icaro_core::modrinth::{Catalog, Kind, Search};
 
 #[tokio::test]
+#[ignore = "Consulta de lectura a Modrinth, su CDN y avatares GitHub; requiere red"]
+async fn creadores_cargan_avatares_publicados_y_organizacion() {
+    let catalog = Catalog::new().unwrap();
+    let project = catalog.project("AANobbMI").await.unwrap();
+    let members = catalog.members(&project.id).await.unwrap();
+    assert!(!members.is_empty());
+    for member in members {
+        if let Some(avatar) = member.user.avatar_url {
+            let bytes = catalog.image(&avatar).await.unwrap_or_else(|error|
+                panic!("Avatar de {}: {error}", member.user.username));
+            assert!(!bytes.is_empty() && bytes.len() <= 4 * 1024 * 1024);
+        }
+    }
+    let organization = catalog.organization(project.organization.as_deref().unwrap()).await.unwrap();
+    let bytes = catalog.image(organization.icon_url.as_deref().unwrap()).await.unwrap();
+    assert!(!bytes.is_empty() && bytes.len() <= 4 * 1024 * 1024);
+}
+
+#[tokio::test]
 #[ignore = "Consulta de lectura a la API pública de Modrinth; requiere red"]
 async fn consulta_catalogo_proyecto_y_versiones_compatibles() {
     let catalog = Catalog::new().unwrap();

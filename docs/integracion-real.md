@@ -2,18 +2,21 @@
 
 Estado y plan de implementación de la autenticación, la instalación del juego y las tiendas de mods. La guía de [inicio de sesión y catálogo](login-y-catalogo.md) describe cómo probar los servicios conectados.
 
+Actualizado el **12-10-2026**. El [roadmap general](../README.md#roadmap) y el [roadmap del diseño](roadmap-system-design.md) distinguen los recorridos conectados de las maquetas y pendientes.
+
 ## Estado actual
 
 | Parte | Implementación actual |
 | --- | --- |
 | Núcleo | `crates/core/src/manifest.rs` consulta el manifiesto de Mojang y verifica el SHA-1 del JSON de una versión. |
 | Inicio de sesión | `icaro-core::auth` usa PKCE, Xbox, titularidad y perfil de Minecraft. La interfaz ofrece un único acceso por navegador. El retorno local y el directo por `icaro://oauth/microsoft` se probaron con una cuenta real en Windows. Sin cuenta activa aparece la bienvenida. La API de código de dispositivo se conserva sin acceso desde la interfaz real. |
-| Tienda | `icaro-core::modrinth` consulta búsqueda, fichas y versiones compatibles. `icaro-core::mods` descarga mods y dependencias obligatorias, verifica tamaño y SHA-512 y prepara las actualizaciones antes de sustituir los archivos. `ICARO_DEMO=1` conserva el catálogo estático. La instalación de modpacks y recursos sigue pendiente. |
+| Tienda | `icaro-core::modrinth` consulta búsqueda, fichas, versiones y creadores reales. `icaro-core::mods` descarga mods y dependencias obligatorias, verifica tamaño y SHA-512 y prepara las actualizaciones antes de sustituir los archivos. Resourcepacks y shaders ZIP cuentan con inventario, instalación, activación, actualización y eliminación reales. `ICARO_DEMO=1` conserva el catálogo estático. Instalar modpacks sigue pendiente. |
 | Credenciales | `icaro-core::vault` recuerda una cuenta mediante Credential Manager en Windows o Secret Service en Linux. Si no puede guardar, la sesión queda solo en memoria. |
-| Instancias | El asistente existente consulta las versiones de Mojang y guarda versión, familia de loader, nombre y portada en una carpeta propia. Vanilla no muestra la pestaña Mods. El editor permite renombrarlas sin mover sus archivos. Todavía no descarga ni inicia Minecraft ni instala el loader. |
+| Instancias | Selectores separados de Minecraft y loader con catálogos oficiales; guardan la elección, nombre y portada en una carpeta propia. Crear Vanilla instala Minecraft y Java. Cambio de versión con revisión de todos los mods, actualizaciones opcionales, respaldo/copia y recuperación ante fallos. Vanilla omite Mods; el editor renombra sin mover archivos. Instalar loaders sigue pendiente. |
 | Persistencia | `launcher_aux/estado.rs` guarda grupos y ajustes en `%APPDATA%/Icaro/estado.json` en Windows o en el directorio de datos de Linux. El modo de demostración usa `icaro-demo/estado.json`, dentro del directorio temporal. No es un almacén de credenciales. |
-| Juego | Faltan el instalador de Minecraft, los loaders y el proceso real de lanzamiento. |
+| Juego | Vanilla se descarga y verifica desde Mojang, detecta o instala Java oficial y se ejecuta con la cuenta y ajustes de la instancia. Cola, Umbral, consola y fallo reciben estados/registros reales; las capturas se leen del disco. El usuario confirmó el lanzamiento en Windows. Faltan loaders y validación del recorrido completo en Linux. |
 | Exportación | `icaro-core::exportar` genera ZIP con metadatos y archivos seleccionados; el diálogo usa el diseño original y un selector nativo. MRPACK queda pendiente de la instalación y versión concreta del loader. |
+| Actualización | `icaro-core::actualizacion` consulta releases, valida el manifiesto y descarga por tamaño/SHA-256. Reemplazo portable ahora o al cerrar en Windows x86-64. Falta publicar los artefactos y probar una actualización completa; ver [contrato](actualizaciones-launcher.md). |
 
 La aplicación utiliza el Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. La prueba manual en Windows confirmó la autorización con una cuenta personal de Microsoft y el retorno al launcher.
 
@@ -48,6 +51,14 @@ La búsqueda usa texto, tipo de proyecto, versión de Minecraft y loader. Se pag
 Antes de descargar, resolver dependencias obligatorias y conflictos; después verificar tamaño y SHA-512, escribir en un archivo temporal y publicar el resultado en la instancia. Validar nombres, rutas y archivos comprimidos para impedir escrituras fuera del destino. Guardar los IDs estables de proyecto y versión junto al archivo instalado para actualizaciones y reconocimiento posteriores.
 
 Los modpacks crean instancias desde sus manifiestos; los mods se instalan dentro de cada instancia.
+
+### Recursos, shaders y cambio de versión
+
+Los resourcepacks no se filtran por el loader de mods. Un ZIP de recursos debe contener `pack.mcmeta`; si no anuncia la versión de Minecraft de la instancia, se permite instalarlo después de confirmar. Su activación se guarda en `options.txt`. Los shaders deben contener archivos bajo `shaders/` y usan la configuración existente de Iris; solo uno queda activo. Otros motores y la prioridad de resourcepacks por arrastre siguen pendientes.
+
+`versiones_instancia` identifica todos los mods instalados mediante SHA-512 y consultas por lotes, incluidos los desactivados. El selector calcula compatibilidad en segundo plano con caché, sin verificar Minecraft al dibujar filas. Permite escoger destino y loader, revisar actualizaciones y desactivaciones, respaldar mundos y crear una copia. Al aplicar, prepara mods/dependencias en una carpeta aislada, verifica los originales antes de sustituirlos y recupera archivos y metadatos si falla. Conserva los mods desactivados; el respaldo es obligatorio al bajar de versión. Seleccionar un loader todavía no lo instala.
+
+`InfoProyecto` y `PaginaMod` usan datos publicados por Modrinth y los componentes del ZIP nuevo. Las métricas internas de MRPACK, mínimos/rendimiento de shaders y razones no publicadas de incompatibilidad se omiten. El perfil interno del creador requiere un componente de diseño aún no entregado; sus enlaces abren Modrinth.
 
 ## CurseForge
 

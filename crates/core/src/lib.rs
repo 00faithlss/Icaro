@@ -14,3 +14,5 @@ pub mod vault;
 pub mod java;
 pub mod minecraft;
 pub mod lanzamiento;
+pub mod versiones_instancia;
+pub mod actualizacion;

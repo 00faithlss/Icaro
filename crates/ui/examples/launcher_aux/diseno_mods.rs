@@ -61,6 +61,7 @@ pub enum Accion {
     Categoria(String),
     Lado(usize),
     Seleccionar(String),
+    SeleccionarTodos,
     LimpiarSeleccion,
     Activar(bool),
     ActualizarSeleccion,
@@ -281,6 +282,12 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 if !set.remove(&f) {
                     set.insert(f);
                 }
+            }
+        }
+        Accion::SeleccionarTodos => {
+            if let Some(i) = mods_reales::instancia(app).cloned() {
+                let todos = mods_reales::lista(app).iter().map(|m| m.archivo.clone()).collect();
+                app.servicios.mods.diseno.seleccion.insert(i.id, todos);
             }
         }
         Accion::LimpiarSeleccion => {
@@ -755,7 +762,10 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
             Mensaje::FiltroMods(n),
         ));
     }
-    toolbar = toolbar.push(Space::with_width(Length::Fill));
+    toolbar = toolbar.push(componentes::boton_compacto(
+        p, "Seleccionar todos", Variante::Secundario,
+        (!installed.is_empty()).then(|| m(Accion::SeleccionarTodos)),
+    ));
     if !mods_reales::updates(app).is_empty() {
         toolbar = toolbar.push(componentes::boton_con_icono(
             p,
@@ -789,7 +799,11 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
                 text(format!("{count} seleccionados"))
                     .font(fuentes::TITULO)
                     .color(p.bg)
-                    .width(Length::Fill),
+                    .width(200),
+                componentes::boton_compacto(
+                    inv, "Seleccionar todos", Variante::Secundario,
+                    (count < installed.len()).then(|| m(Accion::SeleccionarTodos)),
+                ),
                 componentes::boton_compacto(
                     inv,
                     "Activar",
@@ -828,13 +842,14 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
                 )
             ]
             .spacing(8)
-            .align_y(Alignment::Center),
+            .align_y(Alignment::Center)
+            .wrap(),
         )
         .padding(12)
         .style(icaro_ui::estilo::bloque(p.text))
         .into()
     } else {
-        toolbar.into()
+        toolbar.wrap().into()
     };
     let mut rows = column![].spacing(0);
     for item in installed.iter().filter(|v| {
@@ -1147,6 +1162,11 @@ pub fn ficha(app: &App) -> Element<'_, Mensaje> {
         .collect::<Vec<_>>()
         .join(", ");
     let (mc, ld) = crate::juego_de_instancia(app);
+    let pack = match project.project_type.as_str() {
+        "resourcepack" => Some(mods::TipoPack::Recursos),
+        "shader" => Some(mods::TipoPack::Shaders),
+        _ => None,
+    };
     let mut body = column![
         row![
             s.images.vista(p, project.icon_url.as_deref(), 56.),
@@ -1177,7 +1197,11 @@ pub fn ficha(app: &App) -> Element<'_, Mensaje> {
         .align_y(Alignment::Center),
         regla(p),
         row![
-            accion(app, &project.id, None, true),
+            if let Some(tipo) = pack {
+                mods_reales::packs::accion_instalar(app, tipo, &project.id, None)
+            } else {
+                accion(app, &project.id, None, true)
+            },
             componentes::boton_con_icono(
                 p,
                 Icono::Externo,
@@ -1218,7 +1242,11 @@ pub fn ficha(app: &App) -> Element<'_, Mensaje> {
     }
     body = body.push(componentes::etiqueta(
         p,
-        &format!("Versiones para {mc} · {ld}"),
+        &match pack {
+            Some(mods::TipoPack::Recursos) => "Versiones de resourcepack".into(),
+            Some(mods::TipoPack::Shaders) => format!("Versiones para Minecraft {mc} · Shaders"),
+            None => format!("Versiones para {mc} · {ld}"),
+        },
     ));
     for v in versions
         .iter()
@@ -1267,9 +1295,11 @@ pub fn ficha(app: &App) -> Element<'_, Mensaje> {
                 mods_reales::lista(app)
                     .iter()
                     .any(|m| m.project_id == *id && m.activo)
+                    || [mods::TipoPack::Recursos, mods::TipoPack::Shaders].iter().any(|tipo|
+                        mods_reales::packs::lista(app, *tipo).iter().any(|m| m.project_id == *id && m.activo))
             });
             let en_lista = dep.is_some_and(|(id, _)| {
-                cesta(app).is_some_and(|c| c.plan.iter().any(|(v, _)| &v.project_id == id))
+                pack.is_none() && cesta(app).is_some_and(|c| c.plan.iter().any(|(v, _)| &v.project_id == id))
             });
             let title = button(
                 crate::catalogo::texto_publico(name)
@@ -1280,7 +1310,7 @@ pub fn ficha(app: &App) -> Element<'_, Mensaje> {
             .width(Length::Fill)
             .on_press_maybe(dep.map(|(id, _)| Mensaje::PanelMod(Some(id.clone()))))
             .style(icaro_ui::estilo::sin_estilo(p.text));
-            let estado = if d.dependency_type == "optional" && !installed {
+            let estado = if d.dependency_type == "optional" && !installed && pack.is_none() {
                 if let Some((id, _)) = dep {
                     let id = id.clone();
                     let version = d.version_id.clone();
@@ -1308,7 +1338,8 @@ pub fn ficha(app: &App) -> Element<'_, Mensaje> {
                         "incompatible" => "Incompatible",
                         "embedded" => "Incluida",
                         _ if installed => "Instalada",
-                        "required" => "Se instalará",
+                        "required" if pack.is_none() => "Se instalará",
+                        "required" => "Obligatoria",
                         _ => "Opcional",
                     },
                 )
@@ -1320,6 +1351,7 @@ pub fn ficha(app: &App) -> Element<'_, Mensaje> {
             );
         }
     }
+    body = body.push(crate::info_proyecto::vista(app, project, 592.));
     row![
         container(Space::new(2, Length::Fill)).style(icaro_ui::estilo::bloque(p.text)),
         container(crate::desplazable_pub(body.into()))

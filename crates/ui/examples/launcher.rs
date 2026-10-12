@@ -44,6 +44,8 @@ mod busqueda;
 mod atajos;
 #[path = "launcher_aux/juego_real.rs"]
 mod juego_real;
+#[path = "launcher_aux/actualizacion_real.rs"]
+mod actualizacion_real;
 #[path = "launcher_aux/instancias_reales.rs"]
 mod instancias_reales;
 #[path = "launcher_aux/mods_reales.rs"]
@@ -58,6 +60,8 @@ mod servicios;
 mod catalogo;
 #[path = "launcher_aux/ficha.rs"]
 mod ficha;
+#[path = "launcher_aux/info_proyecto.rs"]
+mod info_proyecto;
 #[path = "launcher_aux/ventana.rs"]
 mod ventana;
 
@@ -70,6 +74,7 @@ use iced::widget::{column, container, row, text, Space};
 use iced::{window, Alignment, Element, Length, Padding, Point, Size, Task};
 
 struct App {
+    actualizacion: actualizacion_real::Estado,
     servicios: servicios::Estado,
     modo: Modo,
     seccion: Seccion,
@@ -199,11 +204,13 @@ impl App {
 
 #[derive(Debug, Clone)]
 enum Mensaje {
+    Actualizacion(actualizacion_real::Accion),
     Juego(juego_real::Accion),
     CapturarDiseno,
     DisenoCapturado(window::Screenshot),
     DisenoMods(diseno_mods::Accion),
     ModsReales(mods_reales::Accion),
+    PacksReales(mods_reales::packs::Accion),
     Instancias(instancias_reales::Accion),
     AtajoSeccion(Seccion),
     Servicio(servicios::Accion),
@@ -374,6 +381,7 @@ fn abrir_instancia(app: &mut App, i: usize) {
     app.seleccionada = Some(i);
     app.editor_inst = i;
     mods_reales::cargar_local(app);
+    mods_reales::cargar_recursos(app);
     app.exp = exp;
     app.general.nombre = datos.nombre.clone();
     app.general.grupo = app.grupos[i].clone();
@@ -386,6 +394,7 @@ fn abrir_instancia(app: &mut App, i: usize) {
 fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     let guardar = !matches!(&m, Mensaje::Cuadro(_) | Mensaje::Cursor(_)
         | Mensaje::Tamano(_) | Mensaje::Maximizada(_) | Mensaje::AvisoTic(_) | Mensaje::Nada | Mensaje::ImagenesActualizadas
+        | Mensaje::Pant(pantallas::Accion::VersionScroll(..) | pantallas::Accion::AsistenteBuscar(_) | pantallas::Accion::CambiarBuscar(_))
         | Mensaje::Juego(juego_real::Accion::Progreso(..) | juego_real::Accion::Evento(..)));
     let instalaciones = app.instalando.len();
     mods::fijar_recurso(app.editor == Some(3));
@@ -410,7 +419,8 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
 }
 
 fn hay_dialogo(app: &App) -> bool {
-    if app.servicios.mods.confirmacion.is_some() { return true; }
+    if app.servicios.mods.confirmacion.is_some() || app.servicios.mods.confirmacion_recurso.is_some()
+        || app.servicios.mods.packs.confirmacion.is_some() { return true; }
     app.dialogo || app.asistente.is_some() || app.importar.is_some() || app.exportar.is_some() || app.cambiar.is_some()
 }
 
@@ -440,6 +450,9 @@ fn guardar_si_cambio(app: &mut App) {
 }
 
 fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
+    if matches!(&m, Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Actualizacion))) {
+        return actualizacion_real::actualizar(app, actualizacion_real::Accion::Abrir);
+    }
     if !app.servicios.demo && matches!(&m, Mensaje::Red(red::Mensaje::Agregar | red::Mensaje::Jugar(_))) {
         app.avisar("La gestión de servidores todavía está en preparación.".into());
         return Task::none();
@@ -450,6 +463,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         return Task::none();
     }
     match m {
+        Mensaje::Actualizacion(a) => return actualizacion_real::actualizar(app, a),
         Mensaje::Juego(a) => return juego_real::actualizar(app, a),
         Mensaje::CapturarDiseno => return window::get_latest().then(|id| id.map_or(Task::none(),|id| window::screenshot(id).map(Mensaje::DisenoCapturado))),
         Mensaje::DisenoCapturado(s) => {
@@ -471,6 +485,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Servicio(action) => return servicios::actualizar(app, action),
         Mensaje::ModsReales(action) => return mods_reales::actualizar(app, action),
+        Mensaje::PacksReales(action) => return mods_reales::packs::actualizar(app, action),
         Mensaje::AbrirBusqueda => {
             if hay_dialogo(app) || app.capt.visor.is_some() || app.servicios.ficha.visor.is_some() || app.umbral.is_some() {
                 return Task::none();
@@ -576,9 +591,14 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.editor = Some(i);
             arrancar(app);
             if i == 2 && !app.servicios.demo { return mods_reales::actualizar(app, mods_reales::Accion::Cargar); }
+            if matches!(i, 3 | 8) && !app.servicios.demo {
+                return mods_reales::packs::cargar(app, if i == 3 {
+                    icaro_core::mods::TipoPack::Recursos
+                } else { icaro_core::mods::TipoPack::Shaders });
+            }
             if i == 5 { return capt::refrescar(app); }
             if i == 6 && !app.servicios.demo { return juego_real::cargar_consola(app); }
-            if matches!(i, 2 | 3) && app.mods_vista == 1 && !app.servicios.demo { return servicios::buscar(app, 0, false); }
+            if matches!(i, 2 | 3 | 8) && app.mods_vista == 1 && !app.servicios.demo { return servicios::buscar(app, 0, false); }
         }
         Mensaje::Nombre(v) => app.general.nombre = v,
         Mensaje::Grupo(v) => {
@@ -779,7 +799,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                     return task;
                 }
                 app.mod_panel = None;
-                return servicios::actualizar(app, servicios::Accion::Volver);
+                return servicios::actualizar(app, servicios::Accion::CerrarPanel);
             }
             if id.is_some() && !app.reducir {
                 app.anim_panel = Some(std::time::Instant::now());
@@ -925,7 +945,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Jugar(i) => {
             if !app.servicios.demo {
-                return juego_real::iniciar(app,i,true);
+                let jugar = instancias().get(i).is_some_and(|d| matches!(d.estado, EstadoInstancia::Lista | EstadoInstancia::Desactualizada | EstadoInstancia::Jugando));
+                return juego_real::iniciar(app,i,jugar);
             }
             // Una sesión vencida muestra el aviso en lugar de abrir el Umbral.
             let _ = sesion::actualizar(app, sesion::Accion::Jugar);
@@ -1103,6 +1124,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Maximizar => return window::get_oldest().and_then(window::toggle_maximize),
         Mensaje::Cerrar => {
+            if !actualizacion_real::al_cerrar(app) { return Task::none(); }
             if !app.servicios.demo && app.editor.is_some() {
                 let nombre = app.general.nombre.clone();
                 if let Err(error) = instancias_reales::renombrar(app, &nombre) {
@@ -1417,7 +1439,8 @@ fn pestana_mods(app: &App) -> Element<'_, Mensaje> {
 
 /// Versión del juego y loader de la instancia que se edita.
 fn juego_de_instancia(app: &App) -> (String, String) {
-    let datos = &instancias()[app.editor_inst];
+    let lista = instancias();
+    let Some(datos) = lista.get(app.editor_inst) else { return (String::new(), String::new()); };
     let mut partes = datos.version.split(" · ");
     (partes.next().unwrap_or("").to_owned(), partes.next().unwrap_or("").to_owned())
 }
@@ -1469,6 +1492,7 @@ fn lista_mods(app: &App) -> Element<'_, Mensaje> {
         return tienda_mods(app);
     }
     if !app.servicios.demo && app.editor == Some(2) { return mods_reales::vista(app); }
+    if !app.servicios.demo && app.editor == Some(3) { return mods_reales::vista_recursos(app); }
     let p = app.modo.paleta();
     let instancia = instancias()[app.editor_inst].nombre.clone();
     let (mc_inst, cargador_inst) = juego_de_instancia(app);
@@ -2767,9 +2791,9 @@ fn pantalla_modpacks(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
-    if !app.servicios.demo && matches!(pestana, 2 | 3) && app.mods_vista == 1 { return servicios::store_view(app); }
+    if !app.servicios.demo && matches!(pestana, 2 | 3 | 8) && app.mods_vista == 1 { return servicios::store_view(app); }
     let p = app.modo.paleta();
-    if pestana == 2 || pestana == 3 {
+    if matches!(pestana, 2 | 3 | 8) {
         if let Some(id) = &app.mod_pagina {
             return pagina_mod(app, id);
         }
@@ -2792,7 +2816,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         MensajesEncabezado {
             volver: Mensaje::VolverEditor,
             abrir_carpeta: Mensaje::Pant(pantallas::Accion::AbrirCarpetaInstancia(app.editor_inst)),
-            mas: Mensaje::Nada,
+            mas: Mensaje::Menu(Some(app.editor_inst)),
             jugar: Mensaje::Jugar(app.editor_inst),
         },
         mods_reales::permite_mods(app),
@@ -2835,6 +2859,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         ),
         2 => pestana_mods(app),
         3 => pestana_mods(app),
+        8 => mods_reales::packs::vista(app, icaro_core::mods::TipoPack::Shaders),
         4 => pestana_mundos(
             p,
             &if app.servicios.demo { vec![
@@ -3044,6 +3069,20 @@ fn pantalla_ajustes(app: &App) -> Element<'_, Mensaje> {
     .into()
 }
 
+pub(crate) fn con_barra_ventana<'a>(app: &App, contenido: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+    container(column![icaro_ui::shell::barra_titulo(app.modo.paleta(), &MensajesShell {
+        ir_a: Box::new(Mensaje::Ir),
+        arrastrar: Mensaje::Arrastrar,
+        buscar: Mensaje::AbrirBusqueda,
+        cuenta: Mensaje::Ses(sesion::Accion::Menu(true)),
+        minimizar: Mensaje::Minimizar,
+        maximizar: Mensaje::Maximizar,
+        cerrar: Mensaje::Cerrar,
+    }), container(contenido).width(Length::Fill).height(Length::Fill)]
+    .width(Length::Fill).height(Length::Fill))
+    .style(icaro_ui::estilo::bloque(app.modo.paleta().bg)).into()
+}
+
 fn vista(app: &App) -> Element<'_, Mensaje> {
     mods::fijar_recurso(app.editor == Some(3));
     let p = app.modo.paleta();
@@ -3060,6 +3099,9 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         Seccion::Capturas => pantalla_capturas(app),
         }
     };
+    let contenido = if let Some(banner) = actualizacion_real::banner(app) {
+        column![banner, container(contenido).height(Length::Fill)].height(Length::Fill).into()
+    } else { contenido };
     let pie = app.seleccionada.and_then(|i| {
         let lista = instancias();
         let datos = lista.get(i)?;
@@ -3095,7 +3137,9 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         };
         Some(pie)
     });
-    let mut ventana = app_shell(
+    let mut ventana = if app.pantalla == Some(pantallas::Pantalla::Actualizacion) {
+        con_barra_ventana(app, contenido)
+    } else { app_shell(
         p,
         if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { None } else { Some(app.seccion) },
         app.colapsada,
@@ -3112,7 +3156,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             maximizar: Mensaje::Maximizar,
             cerrar: Mensaje::Cerrar,
         },
-    );
+    ) };
     let capa_menu = if app.menu.is_some() {
         let grupo_menu = app.grupos[app.menu.unwrap_or(0)].clone();
         let mut elementos_grupos: Vec<ElementoMenu<Mensaje>> = app
@@ -3161,14 +3205,14 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             .on_scroll(|_| Mensaje::Menu(None))).into())
     } else { None };
     ventana = icaro_ui::superficies::capa_flotante(ventana, capa_menu);
-    let capa_mod = if let (Some(id), Some(2 | 3)) = (&app.mod_panel, app.editor) {
+    let capa_mod = if let (Some(id), Some(2 | 3 | 8)) = (&app.mod_panel, app.editor) {
         let t = icaro_ui::movimiento::Curva::Salida.aplicar(progreso(app.anim_panel, app.ahora, MS_PANEL));
-        let desfase = (1.0 - t) * 640.0;
-        Some(container(row![
-                Space::with_width(Length::Fill),
-                container(ficha_mod(app, id)).height(Length::Fill),
-                Space::with_width(desfase),
-            ])
+        let panel = icaro_ui::efectos::panel_desde_derecha(
+                iced::widget::opaque(container(ficha_mod(app, id)).height(Length::Fill)).into(),
+                (1.0 - t) * 640.0,
+            );
+        Some(container(iced::widget::opaque(iced::widget::mouse_area(panel)
+                .on_press(Mensaje::PanelMod(None))))
             .padding(Padding { top: 38.0, ..Padding::ZERO })
             .width(Length::Fill)
             .height(Length::Fill).into())
@@ -3240,7 +3284,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
     };
     ventana = iced::widget::stack![ventana, umbral].into();
     let ventana = sesion::con_selector(app, ventana);
-    let mut ventana = mods_reales::capa(app, servicios::capa(app, capt::capa(app, ventana)));
+    let mut ventana = mods_reales::packs::capa(app, mods_reales::capa(app, servicios::capa(app, capt::capa(app, ventana))));
     let aviso: Element<'_, Mensaje> = if let Some(a) = &app.aviso {
             container(toast_con_opacidad(p, Icono::Check, &a.texto, a.accion.clone().map(|m| ("Deshacer", m)), Some(Mensaje::CerrarAviso), false, a.opacidad(app.ahora, app.reducir)))
                 .align_x(iced::alignment::Horizontal::Left)
@@ -3304,6 +3348,7 @@ fn main() -> iced::Result {
                 || (hay_dialogo(app) && progreso(app.anim_dialogo, app.ahora, MS_LOSA) < 1.0)
                 || sesion::animando(app)
                 || app.capt.animando(app.ahora, app.reducir)
+                || (!app.reducir && app.servicios.instancias.cambio.as_ref().is_some_and(|c| !c.confirmando && !c.cargando_compatibilidad.is_empty()))
             {
                 subs.push(window::frames().map(Mensaje::Cuadro));
             }
@@ -3389,7 +3434,7 @@ fn main() -> iced::Result {
             decorations: false,
             resizable: true,
             exit_on_close_request: false,
-            size: Size::new(1280.0, 800.0),
+            size: if std::env::var_os("ICARO_CAPTURA_DISENO").is_some() && std::env::var("ICARO_VISTA_DISENO").is_ok_and(|v| v.ends_with("angosto")) { Size::new(940.,720.) } else { Size::new(1280.0, 800.0) },
             min_size: Some(Size::new(940.0, 600.0)),
             icon: window::icon::from_file_data(
                 include_bytes!("../assets/icono/icaro-256.png"),
@@ -3420,7 +3465,11 @@ fn main() -> iced::Result {
 fn iniciar_app(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo: bool, mut servicios: servicios::Estado) -> (App, Task<Mensaje>) {
     if !servicios.demo { servicios.instancias.cargar(); }
     let guardado = estado::Guardado::cargar(servicios.demo);
-    iniciar_con_guardado(seccion, piedra, menu, con_dialogo, servicios, guardado)
+    let (mut app, inicio) = iniciar_con_guardado(seccion, piedra, menu, con_dialogo, servicios, guardado);
+    if !app.servicios.demo {
+        app.actualizacion.comprobando = true;
+        (app, Task::batch([inicio, actualizacion_real::comprobar()]))
+    } else { (app, inicio) }
 }
 
 fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo: bool, mut servicios: servicios::Estado, mut guardado: Option<estado::Guardado>) -> (App, Task<Mensaje>) {
@@ -3465,6 +3514,7 @@ fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con
         let total = instancias().len();
         (
             App {
+                actualizacion: actualizacion_real::Estado::default(),
                 servicios,
                 modo: if piedra { Modo::Piedra } else { Modo::Tinta },
                 busqueda: busqueda::Estado::default(),

@@ -270,6 +270,47 @@ struct RecorteUmbral<'a, M> {
     restante: f32,
 }
 
+/// FichaMod conserva su ancho y entra desde el borde donde está anclada.
+pub fn panel_desde_derecha<'a, M: 'a>(contenido: Element<'a, M>, desfase: f32) -> Element<'a, M> {
+    Element::new(PanelDerecho { contenido, desfase: desfase.max(0.0) })
+}
+
+struct PanelDerecho<'a, M> {
+    contenido: Element<'a, M>,
+    desfase: f32,
+}
+
+impl<M> Widget<M, iced::Theme, iced::Renderer> for PanelDerecho<'_, M> {
+    fn size(&self) -> Size<Length> { Size::new(Length::Fill, Length::Fill) }
+    fn children(&self) -> Vec<Tree> { vec![Tree::new(&self.contenido)] }
+    fn diff(&self, arbol: &mut Tree) { arbol.diff_children(std::slice::from_ref(&self.contenido)); }
+    fn layout(&self, arbol: &mut Tree, renderer: &iced::Renderer, limites: &layout::Limits) -> layout::Node {
+        let tam = limites.resolve(Length::Fill, Length::Fill, Size::ZERO);
+        let mut ficha = self.contenido.as_widget().layout(&mut arbol.children[0], renderer,
+            &layout::Limits::new(Size::ZERO, tam));
+        ficha.move_to_mut(Point::new((tam.width - ficha.size().width).max(0.0) + self.desfase, 0.0));
+        layout::Node::with_children(tam, vec![ficha])
+    }
+    fn operate(&self, arbol: &mut Tree, layout: Layout<'_>, renderer: &iced::Renderer, operacion: &mut dyn iced::advanced::widget::Operation) {
+        self.contenido.as_widget().operate(&mut arbol.children[0], layout.children().next().unwrap(), renderer, operacion);
+    }
+    fn on_event(&mut self, arbol: &mut Tree, evento: Event, layout: Layout<'_>, cursor: mouse::Cursor,
+        renderer: &iced::Renderer, portapapeles: &mut dyn Clipboard, shell: &mut Shell<'_, M>, visible: &Rectangle) -> iced::event::Status {
+        self.contenido.as_widget_mut().on_event(&mut arbol.children[0], evento, layout.children().next().unwrap(), cursor, renderer, portapapeles, shell, visible)
+    }
+    fn mouse_interaction(&self, arbol: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, visible: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
+        self.contenido.as_widget().mouse_interaction(&arbol.children[0], layout.children().next().unwrap(), cursor, visible, renderer)
+    }
+    fn draw(&self, arbol: &Tree, renderer: &mut iced::Renderer, tema: &iced::Theme,
+        estilo: &renderer::Style, layout: Layout<'_>, cursor: mouse::Cursor, visible: &Rectangle) {
+        use iced::advanced::Renderer as _;
+        let Some(recorte) = layout.bounds().intersection(visible) else { return; };
+        renderer.with_layer(recorte, |renderer| {
+            self.contenido.as_widget().draw(&arbol.children[0], renderer, tema, estilo, layout.children().next().unwrap(), cursor, &recorte);
+        });
+    }
+}
+
 /// La imagen estándar crea su propio recorte y puede escapar del Rastrillo.
 /// Este fondo cruza el viewport recibido con la imagen, sin cambiar su cover.
 struct FondoUmbral { opacidad: f32 }

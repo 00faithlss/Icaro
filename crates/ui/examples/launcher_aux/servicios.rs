@@ -109,8 +109,12 @@ impl Estado {
     }
 }
 impl Estado {
-    pub fn hay_anterior(&self) -> bool { !self.anteriores.is_empty() }
-    pub fn hay_catalogo(&self) -> bool { self.results.is_some() }
+    pub fn hay_anterior(&self) -> bool {
+        !self.anteriores.is_empty()
+    }
+    pub fn hay_catalogo(&self) -> bool {
+        self.results.is_some()
+    }
     pub fn nombre<'a>(&'a self, demo_name: &'a str) -> &'a str {
         if self.demo {
             demo_name
@@ -148,6 +152,7 @@ impl Estado {
 }
 struct PaginaAnterior {
     panel: Option<String>,
+    mods_vista: usize,
     detail: (Project, Vec<Version>),
     ficha: ficha::Estado,
     documento: catalogo::Documento,
@@ -182,6 +187,7 @@ pub enum Accion {
     Proyecto(String),
     ProyectoRecibido(u64, Result<(Project, Vec<Version>), String>),
     Volver,
+    CerrarPanel,
     FichaPestana(ficha::Pestana),
     Galeria(usize),
     VisorAbrir(usize),
@@ -192,6 +198,8 @@ pub enum Accion {
     CargarMiembros,
     MiembrosRecibidos(u64, Result<Vec<Member>, String>),
     OrganizacionRecibida(u64, Result<Organization, String>),
+    CargarRelacionados,
+    Relacionados(u64, Result<Vec<modrinth::RelatedProject>, String>),
     VersionMinecraft(String),
     VersionLoader(String),
     VersionPruebas(bool),
@@ -201,7 +209,9 @@ pub enum Accion {
     CambiosVersion(String),
     CambiosSeleccionar(String),
     CambiosRecibidos(u64, u64, Result<Version, String>),
-    CompatibilidadAmpliada,
+    InfoSnapshots(bool),
+    InfoVersiones,
+    MostrarTodas(bool),
     Minecraft(String),
     Loader(String),
     Orden(Order),
@@ -379,6 +389,8 @@ fn context(app: &App) -> Search {
         Kind::Modpack
     } else if app.editor == Some(3) {
         Kind::Resourcepack
+    } else if app.editor == Some(8) {
+        Kind::Shader
     } else {
         Kind::Mod
     };
@@ -391,7 +403,7 @@ fn context(app: &App) -> Search {
     } else {
         let (mc, loader) = crate::juego_de_instancia(app);
         (
-            Some(mc),
+            matches!(kind, Kind::Mod | Kind::Shader).then_some(mc),
             (kind == Kind::Mod && !loader.eq_ignore_ascii_case("vanilla"))
                 .then(|| loader.to_lowercase()),
         )
@@ -426,8 +438,20 @@ pub fn buscar(app: &mut App, offset: u32, debounce: bool) -> Task<Mensaje> {
     app.servicios.busy = true;
     app.servicios.error = None;
     let catalog = app.servicios.catalog.clone();
-    let categories = if app.editor == Some(2) { app.tienda_cat.clone() } else { vec![] };
-    let environment = if app.editor == Some(2) { match app.tienda_lado { 0 => None, 1 => Some("client_only"), _ => None } } else { None };
+    let categories = if app.editor == Some(2) {
+        app.tienda_cat.clone()
+    } else {
+        vec![]
+    };
+    let environment = if app.editor == Some(2) {
+        match app.tienda_lado {
+            0 => None,
+            1 => Some("client_only"),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let tags = cargar_tags(app);
     let search = Task::perform(
         async move {
@@ -488,7 +512,16 @@ pub fn cargar_imagenes(app: &mut App, urls: Vec<String>) -> Task<Mensaje> {
 }
 
 fn imagenes_visibles(app: &App) -> Vec<String> {
-    if app.mod_panel.is_some() { if let Some((p,_)) = &app.servicios.detail { return p.icon_url.iter().cloned().chain(p.gallery.iter().take(3).map(|g| g.url.clone())).collect(); } }
+    if app.mod_panel.is_some() {
+        if let Some((p, _)) = &app.servicios.detail {
+            return p
+                .icon_url
+                .iter()
+                .cloned()
+                .chain(p.gallery.iter().take(3).map(|g| g.url.clone()))
+                .collect();
+        }
+    }
     if let Some((project, _)) = &app.servicios.detail {
         app.servicios
             .ficha
@@ -537,13 +570,23 @@ fn cargar_miembros(app: &mut App) -> Task<Mensaje> {
     );
     Task::batch([members_task, organization_task])
 }
+fn cargar_relacionados(app:&mut App)->Task<Mensaje> {
+    let Some((project,_))=&app.servicios.detail else{return Task::none();};
+    if app.servicios.ficha.relacionados_busy{return Task::none();}
+    let owner=project.organization.as_ref().map(|id|(id.clone(),true)).or_else(||app.servicios.ficha.miembros.iter().find(|m|m.is_owner).map(|m|(m.user.id.clone(),false)));
+    let Some((owner,organization))=owner else{return Task::none();};
+    let id=app.servicios.search_id;let catalog=app.servicios.catalog.clone();
+    app.servicios.ficha.relacionados_busy=true;app.servicios.ficha.relacionados_error=None;
+    Task::perform(async move{async{catalog?.creator_projects(&owner,organization).await}.await.map_err(|e|e.to_string())},move |r|m(Accion::Relacionados(id,r)))
+}
 
 fn cargar_versiones(app: &mut App) -> Task<Mensaje> {
-    let bound = app.editor.is_some().then(|| context(app));
+    let bound = (app.editor.is_some() && !app.servicios.ficha.mostrar_todas).then(|| context(app));
     let Some((project, _)) = &app.servicios.detail else {
         return Task::none();
     };
     let id = project.id.clone();
+    let resource = project.project_type == "resourcepack";
     let generation = app.servicios.search_id;
     let catalog = app.servicios.catalog.clone();
     let s = &mut app.servicios.ficha;
@@ -559,8 +602,22 @@ fn cargar_versiones(app: &mut App) -> Task<Mensaje> {
     s.pagina = 0;
     s.seleccionada = None;
     s.limpiar_cambios();
-    let minecraft = bound.as_ref().map_or_else(|| (s.minecraft != "Todas las versiones").then(|| s.minecraft.clone()), |b| b.minecraft.clone());
-    let loader = bound.as_ref().map_or_else(|| (s.loader != "Todos los loaders").then(|| s.loader.clone()), |b| b.loader.clone());
+    let minecraft = (!resource)
+        .then(|| {
+            bound.as_ref().map_or_else(
+                || (s.minecraft != "Todas las versiones").then(|| s.minecraft.clone()),
+                |b| b.minecraft.clone(),
+            )
+        })
+        .flatten();
+    let loader = (!matches!(project.project_type.as_str(), "resourcepack" | "shader"))
+        .then(|| {
+            bound.as_ref().map_or_else(
+                || (s.loader != "Todos los loaders").then(|| s.loader.clone()),
+                |b| b.loader.clone(),
+            )
+        })
+        .flatten();
     Task::perform(
         async move {
             tokio::select! {
@@ -575,29 +632,64 @@ fn cargar_versiones(app: &mut App) -> Task<Mensaje> {
 
 fn cargar_dependencias(app: &App) -> Task<Mensaje> {
     let s = &app.servicios;
-    let Some((_, versions)) = &s.detail else { return Task::none(); };
-    let Some(v) = versions.iter().find(|v| Some(&v.id) == s.ficha.seleccionada.as_ref()) else { return Task::none(); };
-    let deps: Vec<_> = v.dependencies.iter().take(128).filter(|d| !s.dependencias.contains_key(&clave_dependencia(d))).cloned().collect();
-    if deps.is_empty() { return Task::none(); }
+    let Some((_, versions)) = &s.detail else {
+        return Task::none();
+    };
+    let Some(v) = versions
+        .iter()
+        .find(|v| Some(&v.id) == s.ficha.seleccionada.as_ref())
+    else {
+        return Task::none();
+    };
+    let deps: Vec<_> = v
+        .dependencies
+        .iter()
+        .take(128)
+        .filter(|d| !s.dependencias.contains_key(&clave_dependencia(d)))
+        .cloned()
+        .collect();
+    if deps.is_empty() {
+        return Task::none();
+    }
     let catalog = s.catalog.clone();
     let generation = s.search_id;
-    Task::perform(async move {
-        let mut result = vec![];
-        for dep in deps {
-            let key = clave_dependencia(&dep);
-            let value = async {
-                let catalog = catalog.as_ref().map_err(|e| e.to_string())?;
-                let id = if let Some(p) = dep.project_id { p } else if let Some(v) = dep.version_id { catalog.version(&v).await.map_err(|e| e.to_string())?.project_id } else { return Err("Dependencia externa".into()); };
-                let project = catalog.project(&id).await.map_err(|e| e.to_string())?;
-                Ok((project.id, project.title))
-            }.await;
-            result.push((key, value));
-        }
-        result
-    }, move |r| m(Accion::Dependencias(generation, r)))
+    Task::perform(
+        async move {
+            let mut result = vec![];
+            for dep in deps {
+                let key = clave_dependencia(&dep);
+                let value = async {
+                    let catalog = catalog.as_ref().map_err(|e| e.to_string())?;
+                    let id = if let Some(p) = dep.project_id {
+                        p
+                    } else if let Some(v) = dep.version_id {
+                        catalog
+                            .version(&v)
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .project_id
+                    } else {
+                        return Err("Dependencia externa".into());
+                    };
+                    let project = catalog.project(&id).await.map_err(|e| e.to_string())?;
+                    Ok((project.id, project.title))
+                }
+                .await;
+                result.push((key, value));
+            }
+            result
+        },
+        move |r| m(Accion::Dependencias(generation, r)),
+    )
 }
 pub fn clave_dependencia(dep: &modrinth::Dependency) -> String {
-    if let Some(p) = &dep.project_id { format!("p:{p}") } else if let Some(v) = &dep.version_id { format!("v:{v}") } else { format!("f:{}", dep.file_name.as_deref().unwrap_or("externa")) }
+    if let Some(p) = &dep.project_id {
+        format!("p:{p}")
+    } else if let Some(v) = &dep.version_id {
+        format!("v:{v}")
+    } else {
+        format!("f:{}", dep.file_name.as_deref().unwrap_or("externa"))
+    }
 }
 fn cargar_cambios(app: &mut App) -> Task<Mensaje> {
     let Some((project, _)) = &app.servicios.detail else {
@@ -689,7 +781,7 @@ fn cargar_visor(app: &mut App) -> Task<Mensaje> {
 pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
     if let Some((project, _)) = &app.servicios.detail {
         if let Some(visor) = ficha::visor(app, project) {
-            return visor;
+            return crate::con_barra_ventana(app, visor);
         }
     }
     ventana
@@ -697,6 +789,13 @@ pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mens
 
 pub fn suscripcion(app: &App) -> iced::Subscription<Mensaje> {
     if app.servicios.ficha.visor.is_none() {
+        if app.mod_panel.is_some() && !app.busqueda.abierta && !crate::hay_dialogo(app)
+            && app.capt.visor.is_none() && app.umbral.is_none() {
+            return iced::keyboard::on_key_press(|key, _| {
+                (key == iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape))
+                    .then_some(Mensaje::PanelMod(None))
+            });
+        }
         return iced::Subscription::none();
     }
     iced::keyboard::on_key_press(|key, _| {
@@ -797,15 +896,37 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             let s = &mut app.servicios.ficha;
             s.organizacion_busy = false;
             match result {
-                Ok(org) => s.organizacion = Some(org),
+                Ok(org) => {
+                    let urls = org.icon_url.iter().cloned().collect();
+                    s.organizacion = Some(org);
+                    return Task::batch([cargar_imagenes(app, urls),cargar_relacionados(app)]);
+                }
                 Err(error) => s.organizacion_error = Some(error),
             }
         }
-        Accion::CompatibilidadAmpliada => {
-            app.servicios.ficha.compatibilidad_ampliada =
-                !app.servicios.ficha.compatibilidad_ampliada
+        Accion::InfoSnapshots(value) => app.servicios.ficha.info_snapshots=value,
+        Accion::MostrarTodas(value) => {
+            let instancia=context(app);
+            app.servicios.ficha.mostrar_todas=value;
+            if value {app.servicios.ficha.minecraft="Todas las versiones".into();app.servicios.ficha.loader="Todos los loaders".into();}
+            else {app.servicios.ficha.minecraft=instancia.minecraft.unwrap_or_else(||"Todas las versiones".into());app.servicios.ficha.loader=instancia.loader.unwrap_or_else(||"Todos los loaders".into());}
+            return cargar_versiones(app);
+        }
+        Accion::InfoVersiones => {
+            let page = if app.mod_panel.is_some() { ampliar_ficha(app) } else { Task::none() };
+            app.servicios.ficha.tab=ficha::Pestana::Versiones;
+            app.servicios.ficha.mostrar_todas=true;
+            app.servicios.ficha.minecraft="Todas las versiones".into();
+            app.servicios.ficha.loader="Todos los loaders".into();
+            return Task::batch([page,cargar_versiones(app)]);
         }
         Accion::CargarMiembros => return cargar_miembros(app),
+        Accion::CargarRelacionados=>return cargar_relacionados(app),
+        Accion::Relacionados(id,result) if id==app.servicios.search_id && app.servicios.detail.is_some()=>{
+            let current=app.servicios.detail.as_ref().unwrap().0.id.clone();
+            let state=&mut app.servicios.ficha;state.relacionados_busy=false;
+            match result {Ok(projects)=>{state.relacionados=projects.into_iter().filter(|p|p.id!=current&&(p.project_type=="mod"||p.project_types.iter().any(|t|t=="mod"))).take(3).collect();let urls=state.relacionados.iter().filter_map(|p|p.icon_url.clone()).collect();return cargar_imagenes(app,urls);},Err(error)=>state.relacionados_error=Some(error)}
+        }
         Accion::MiembrosRecibidos(id, result)
             if id == app.servicios.search_id && app.servicios.detail.is_some() =>
         {
@@ -813,20 +934,28 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             s.miembros_busy = false;
             match result {
                 Ok(members) => {
-                    let urls = members.iter().filter_map(|m| m.user.avatar_url.clone()).collect();
+                    let urls = members
+                        .iter()
+                        .filter_map(|m| m.user.avatar_url.clone())
+                        .collect();
                     s.miembros = members;
-                    return cargar_imagenes(app, urls);
+                    let related=if app.servicios.detail.as_ref().is_some_and(|(p,_)|p.organization.is_none()){cargar_relacionados(app)}else{Task::none()};
+                    return Task::batch([cargar_imagenes(app, urls),related]);
                 }
                 Err(error) => s.miembros_error = Some(error),
             }
         }
         Accion::VersionMinecraft(v) => {
-            if app.editor.is_some() { return Task::none(); }
+            if app.editor.is_some() && !app.servicios.ficha.mostrar_todas {
+                return Task::none();
+            }
             app.servicios.ficha.minecraft = v;
             return cargar_versiones(app);
         }
         Accion::VersionLoader(v) => {
-            if app.editor.is_some() { return Task::none(); }
+            if app.editor.is_some() && !app.servicios.ficha.mostrar_todas {
+                return Task::none();
+            }
             app.servicios.ficha.loader = v;
             return cargar_versiones(app);
         }
@@ -843,7 +972,9 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 Ok(versions) => {
                     s.elegir_predeterminada(&versions);
                     app.servicios.detail.as_mut().unwrap().1 = versions;
-                    if s.tab == ficha::Pestana::Dependencias { return cargar_dependencias(app); }
+                    if s.tab == ficha::Pestana::Dependencias {
+                        return cargar_dependencias(app);
+                    }
                     if s.tab == ficha::Pestana::Cambios {
                         return cargar_cambios(app);
                     }
@@ -861,7 +992,9 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             if s.tab == ficha::Pestana::Cambios {
                 return cargar_cambios(app);
             }
-            if s.tab == ficha::Pestana::Dependencias { return cargar_dependencias(app); }
+            if s.tab == ficha::Pestana::Dependencias {
+                return cargar_dependencias(app);
+            }
         }
         Accion::VersionPagina(page) => {
             if let Some((_, versions)) = &app.servicios.detail {
@@ -889,7 +1022,9 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             if s.tab != ficha::Pestana::Dependencias {
                 s.tab = ficha::Pestana::Cambios;
             }
-            if s.tab == ficha::Pestana::Dependencias { return cargar_dependencias(app); }
+            if s.tab == ficha::Pestana::Dependencias {
+                return cargar_dependencias(app);
+            }
             if s.tab == ficha::Pestana::Cambios {
                 return cargar_cambios(app);
             }
@@ -940,7 +1075,9 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             }
             app.servicios.ficha.tab = tab;
             crate::arrancar(app);
-            if tab == ficha::Pestana::Dependencias { return cargar_dependencias(app); }
+            if tab == ficha::Pestana::Dependencias {
+                return cargar_dependencias(app);
+            }
             if tab == ficha::Pestana::Cambios {
                 return cargar_cambios(app);
             }
@@ -1148,13 +1285,28 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
         }
         Accion::Proyecto(id) => {
             if let Some(detail) = app.servicios.detail.take() {
-                if app.servicios.anteriores.len() >= 32 { app.servicios.anteriores.remove(0); }
+                if app.servicios.anteriores.len() >= 32 {
+                    app.servicios.anteriores.remove(0);
+                }
                 let mut state = std::mem::take(&mut app.servicios.ficha);
-                if let Some(c) = state.versiones_cancel.take() { c.cancel(); }
-                if let Some(c) = state.cambios_cancel.take() { c.cancel(); }
-                state.versiones_busy = false; state.cambios_busy = false;
-                state.miembros_busy = false; state.organizacion_busy = false;
-                app.servicios.anteriores.push(PaginaAnterior { panel:app.mod_panel.clone(), detail, ficha: state, documento: std::mem::take(&mut app.servicios.document) });
+                if let Some(c) = state.versiones_cancel.take() {
+                    c.cancel();
+                }
+                if let Some(c) = state.cambios_cancel.take() {
+                    c.cancel();
+                }
+                state.versiones_busy = false;
+                state.cambios_busy = false;
+                state.miembros_busy = false;
+                state.organizacion_busy = false;
+                state.relacionados_busy = false;
+                app.servicios.anteriores.push(PaginaAnterior {
+                    panel: app.mod_panel.clone(),
+                    mods_vista: app.mods_vista,
+                    detail,
+                    ficha: state,
+                    documento: std::mem::take(&mut app.servicios.document),
+                });
             }
             if let Some(cancel) = app.servicios.search_cancel.take() {
                 cancel.cancel();
@@ -1178,7 +1330,9 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                         result = async {
                             let catalog = catalog?;
                             let project = catalog.project(&id).await?;
-                            let versions = catalog.versions(&project.id, filter.minecraft.as_deref(), filter.loader.as_deref()).await?;
+                            let resource = project.project_type == "resourcepack";
+                            let pack = matches!(project.project_type.as_str(), "resourcepack" | "shader");
+                            let versions = catalog.versions(&project.id, if resource { None } else { filter.minecraft.as_deref() }, if pack { None } else { filter.loader.as_deref() }).await?;
                             Ok::<_, modrinth::Error>((project, versions))
                         } => result.map_err(|e| e.to_string()),
                     }
@@ -1196,13 +1350,29 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     app.servicios.detail = Some(detail);
                     crate::arrancar(app);
                     let images = cargar_imagenes(app, imagenes_visibles(app));
-                    return Task::batch([images, cargar_miembros(app), cargar_dependencias(app)]);
+                    return Task::batch([images, cargar_miembros(app), cargar_dependencias(app),crate::instancias_reales::abrir(app)]);
                 }
                 Err(error) => app.servicios.error = Some(error),
             }
         }
+        Accion::CerrarPanel => {
+            if let Some(cancel) = app.servicios.search_cancel.take() {
+                cancel.cancel();
+            }
+            app.servicios.search_id += 1;
+            app.servicios.anteriores.clear();
+            app.servicios.detail = None;
+            app.servicios.ficha = Default::default();
+            app.servicios.document = Default::default();
+            app.servicios.error = None;
+            app.servicios.busy = false;
+            app.mod_panel = None;
+            crate::arrancar(app);
+        }
         Accion::Volver => {
-            if let Some(cancel) = app.servicios.search_cancel.take() { cancel.cancel(); }
+            if let Some(cancel) = app.servicios.search_cancel.take() {
+                cancel.cancel();
+            }
             app.servicios.search_id += 1;
             app.servicios.detail = None;
             app.servicios.ficha = Default::default();
@@ -1211,15 +1381,23 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             app.mod_panel = None;
             if let Some(previous) = app.servicios.anteriores.pop() {
                 app.mod_panel = previous.panel;
+                app.mods_vista = previous.mods_vista;
                 app.servicios.detail = Some(previous.detail);
                 app.servicios.ficha = previous.ficha;
                 app.servicios.document = previous.documento;
-                let changes = if app.servicios.ficha.tab == ficha::Pestana::Cambios { cargar_cambios(app) } else { Task::none() };
+                let changes = if app.servicios.ficha.tab == ficha::Pestana::Cambios {
+                    cargar_cambios(app)
+                } else {
+                    Task::none()
+                };
                 return Task::batch([cargar_dependencias(app), cargar_miembros(app), changes]);
             }
             crate::arrancar(app);
             if app.servicios.results.is_none() {
-                if app.editor.is_some() { app.mods_vista = 0; return Task::none(); }
+                if app.editor.is_some() {
+                    app.mods_vista = 0;
+                    return Task::none();
+                }
                 return buscar(app, 0, false);
             }
         }
@@ -1229,17 +1407,55 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
 }
 
 pub fn ampliar_ficha(app: &mut App) -> Task<Mensaje> {
-    let Some(detail)=app.servicios.detail.clone() else { return Task::none(); };
-    let mut previous=std::mem::take(&mut app.servicios.ficha);
-    let mut current=ficha::Estado::nuevo(app.servicios.filter.as_ref(),&detail.1);
-    current.miembros=previous.miembros.clone(); current.organizacion=previous.organizacion.clone();
-    if let Some(c)=previous.versiones_cancel.take() { c.cancel(); }
-    if let Some(c)=previous.cambios_cancel.take() { c.cancel(); }
-    previous.versiones_busy=false; previous.cambios_busy=false; previous.miembros_busy=false; previous.organizacion_busy=false;
-    if app.servicios.anteriores.len()>=32 { app.servicios.anteriores.remove(0); }
-    app.servicios.anteriores.push(PaginaAnterior { panel:app.mod_panel.take(), detail, ficha:previous, documento:app.servicios.document.clone() });
-    app.servicios.ficha=current; app.mods_vista=1;
+    let Some(detail) = app.servicios.detail.clone() else {
+        return Task::none();
+    };
+    let mut previous = std::mem::take(&mut app.servicios.ficha);
+    let mut current = ficha::Estado::nuevo(app.servicios.filter.as_ref(), &detail.1);
+    current.miembros = previous.miembros.clone();
+    current.organizacion = previous.organizacion.clone();
+    current.info_snapshots = previous.info_snapshots;
+    current.relacionados = previous.relacionados.clone();
+    if let Some(c) = previous.versiones_cancel.take() {
+        c.cancel();
+    }
+    if let Some(c) = previous.cambios_cancel.take() {
+        c.cancel();
+    }
+    previous.versiones_busy = false;
+    previous.cambios_busy = false;
+    previous.miembros_busy = false;
+    previous.organizacion_busy = false;
+    previous.relacionados_busy = false;
+    if app.servicios.anteriores.len() >= 32 {
+        app.servicios.anteriores.remove(0);
+    }
+    app.servicios.anteriores.push(PaginaAnterior {
+        panel: app.mod_panel.take(),
+        mods_vista: app.mods_vista,
+        detail,
+        ficha: previous,
+        documento: app.servicios.document.clone(),
+    });
+    app.servicios.ficha = current;
+    app.mods_vista = 1;
     cargar_miembros(app)
+}
+
+/// La captura visual usa respuestas públicas e imágenes ya guardadas en Temp;
+/// no inicia sesiones, peticiones ni escrituras en las instancias del usuario.
+pub fn preparar_creadores_diseno(app: &mut App) {
+    let Some(directory) = std::env::var_os("ICARO_QA_CREATORES") else { return; };
+    let json = std::fs::read(std::path::PathBuf::from(directory).join("creadores.json"))
+        .expect("Fixture local de creadores");
+    let fixture: serde_json::Value = serde_json::from_slice(&json).expect("Fixture JSON");
+    app.servicios.ficha.miembros = serde_json::from_value(fixture["members"].clone()).expect("Miembros");
+    app.servicios.ficha.organizacion = Some(serde_json::from_value(fixture["organization"].clone()).expect("Organización"));
+    for image in fixture["images"].as_array().expect("Imágenes") {
+        let bytes = std::fs::read(image["path"].as_str().expect("Ruta local")).expect("Imagen descargada");
+        let decoded = catalogo::decodificar(bytes).expect("Avatar decodificable");
+        app.servicios.images.recibir(image["url"].as_str().expect("URL pública").into(), Some(decoded));
+    }
 }
 
 pub fn welcome_status(app: &App) -> Element<'_, Mensaje> {
@@ -1473,16 +1689,54 @@ pub fn store_view(app: &App) -> Element<'_, Mensaje> {
     let kind = context(app).kind;
     let mut content = column![].spacing(espacio::S4);
     if let Some((project, versions)) = &s.detail {
-        if app.mod_panel.is_none() { return ficha::vista(app, project, versions, kind); }
+        if app.mod_panel.is_none() {
+            return ficha::vista(app, project, versions, kind);
+        }
     }
-    if kind == Kind::Mod && app.editor == Some(2) { return crate::diseno_mods::tienda(app); }
+    if kind == Kind::Mod && app.editor == Some(2) {
+        return crate::diseno_mods::tienda(app);
+    }
     if s.hay_anterior() {
         let status = s.error.as_deref().unwrap_or("Obteniendo el proyecto…");
-        return container(column![componentes::boton_con_icono(p, Icono::ChevronIzquierda, "Volver", Variante::Fantasma, Some(m(Accion::Volver)), false), text(status).color(if s.error.is_some() { p.warning } else { p.text_muted })].spacing(espacio::S4)).padding(espacio::S6).into();
+        return container(
+            column![
+                componentes::boton_con_icono(
+                    p,
+                    Icono::ChevronIzquierda,
+                    "Volver",
+                    Variante::Fantasma,
+                    Some(m(Accion::Volver)),
+                    false
+                ),
+                text(status).color(if s.error.is_some() {
+                    p.warning
+                } else {
+                    p.text_muted
+                })
+            ]
+            .spacing(espacio::S4),
+        )
+        .padding(espacio::S6)
+        .into();
     }
     if app.editor.is_some() {
-        content = content.push(componentes::boton_con_icono(p, Icono::ChevronIzquierda, if app.editor == Some(2) { "Volver a mis mods" } else { "Volver a mis recursos" }, Variante::Fantasma, Some(Mensaje::VistaMods(0)), false));
-        if app.editor == Some(2) { content = content.push(crate::mods_reales::estado_operacion(app)); }
+        content = content.push(componentes::boton_con_icono(
+            p,
+            Icono::ChevronIzquierda,
+            if app.editor == Some(2) {
+                "Volver a mis mods"
+            } else if app.editor == Some(8) {
+                "Volver a mis shaders"
+            } else {
+                "Volver a mis recursos"
+            },
+            Variante::Fantasma,
+            Some(Mensaje::VistaMods(0)),
+            false,
+        ));
+        if app.editor == Some(2) {
+            content = content.push(crate::mods_reales::estado_operacion(app));
+        }
     }
     {
         content = content
@@ -1490,7 +1744,13 @@ pub fn store_view(app: &App) -> Element<'_, Mensaje> {
                 text(if kind == Kind::Modpack {
                     "MODPACKS"
                 } else {
-                    if kind == Kind::Mod { "MODS" } else { "RECURSOS" }
+                    if kind == Kind::Mod {
+                        "MODS"
+                    } else if kind == Kind::Shader {
+                        "SHADERS"
+                    } else {
+                        "RECURSOS"
+                    }
                 })
                 .font(fuentes::DISPLAY)
                 .size(40)
@@ -1617,7 +1877,43 @@ pub fn store_view(app: &App) -> Element<'_, Mensaje> {
                 .color(p.text_muted),
             );
             for hit in &results.hits {
-                content = content.push(if kind == Kind::Mod && app.editor == Some(2) { catalogo::tarjeta_proyecto_con_accion(p, hit, &s.images, Some(crate::mods_reales::accion_proyecto(app, &hit.project_id, None))) } else { catalogo::tarjeta_proyecto(p, hit, &s.images) });
+                content = content.push(if kind == Kind::Mod && app.editor == Some(2) {
+                    catalogo::tarjeta_proyecto_con_accion(
+                        p,
+                        hit,
+                        &s.images,
+                        Some(crate::mods_reales::accion_proyecto(
+                            app,
+                            &hit.project_id,
+                            None,
+                        )),
+                    )
+                } else if kind == Kind::Resourcepack && app.editor == Some(3) {
+                    catalogo::tarjeta_proyecto_con_accion(
+                        p,
+                        hit,
+                        &s.images,
+                        Some(crate::mods_reales::accion_recurso(
+                            app,
+                            &hit.project_id,
+                            None,
+                        )),
+                    )
+                } else if kind == Kind::Shader && app.editor == Some(8) {
+                    catalogo::tarjeta_proyecto_con_accion(
+                        p,
+                        hit,
+                        &s.images,
+                        Some(crate::mods_reales::packs::accion_instalar(
+                            app,
+                            icaro_core::mods::TipoPack::Shaders,
+                            &hit.project_id,
+                            None,
+                        )),
+                    )
+                } else {
+                    catalogo::tarjeta_proyecto(p, hit, &s.images)
+                });
             }
             if results.hits.is_empty() {
                 content = content.push(
@@ -1800,6 +2096,22 @@ mod tests {
         assert!(app.servicios.ficha.miembros_busy);
         let _ = actualizar(&mut app, Accion::MiembrosRecibidos(actual, Ok(Vec::new())));
         assert!(!app.servicios.ficha.miembros_busy);
+        let creator_avatar = "https://avatars3.githubusercontent.com/u/31803019?v=4";
+        let member: Member = serde_json::from_value(serde_json::json!({
+            "user": {"id":"creator", "username":"IMS", "avatar_url":creator_avatar},
+            "role":"Maintainer"
+        })).unwrap();
+        let _ = actualizar(&mut app, Accion::MiembrosRecibidos(actual, Ok(vec![member])));
+        assert_eq!(app.servicios.ficha.miembros.len(), 1);
+        assert!(app.servicios.images.pedir([creator_avatar.into()]).is_empty(),
+            "El avatar se encola al recibir el creador, sin esperar otra navegación");
+        let org_avatar = "https://cdn.modrinth.com/data/LjcZDkRW/icon.webp";
+        let organization: Organization = serde_json::from_value(serde_json::json!({
+            "id":"LjcZDkRW", "name":"CaffeineMC", "icon_url":org_avatar
+        })).unwrap();
+        let _ = actualizar(&mut app, Accion::OrganizacionRecibida(actual, Ok(organization)));
+        assert!(app.servicios.images.pedir([org_avatar.into()]).is_empty(),
+            "También se solicita la imagen de la organización");
         let _ = actualizar(&mut app, Accion::FichaPestana(ficha::Pestana::Galeria));
         let _ = actualizar(&mut app, Accion::Galeria(8));
         let _ = actualizar(&mut app, Accion::Galeria(999));
@@ -1922,9 +2234,13 @@ mod tests {
         let original_selection = app.servicios.ficha.seleccionada.clone();
         let _ = actualizar(&mut app, Accion::Proyecto("dependency".into()));
         assert_eq!(app.servicios.anteriores.len(), 1);
-        let mut dependency = original.0.clone(); dependency.id = "dependency".into();
+        let mut dependency = original.0.clone();
+        dependency.id = "dependency".into();
         let request = app.servicios.search_id;
-        let _ = actualizar(&mut app, Accion::ProyectoRecibido(request, Ok((dependency, vec![]))));
+        let _ = actualizar(
+            &mut app,
+            Accion::ProyectoRecibido(request, Ok((dependency, vec![]))),
+        );
         let _ = actualizar(&mut app, Accion::Volver);
         assert_eq!(app.servicios.detail.as_ref().unwrap().0.id, original.0.id);
         assert_eq!(app.servicios.ficha.tab, original_tab);
@@ -1952,8 +2268,14 @@ mod tests {
 
         // Instancias reales: disco, editor, asistente y recuperación por identidad.
         let temp = std::env::temp_dir();
-        let suffix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let root = temp.join(format!("icaro-instance-ui-test-{}-{suffix}", std::process::id()));
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = temp.join(format!(
+            "icaro-instance-ui-test-{}-{suffix}",
+            std::process::id()
+        ));
         let store = icaro_core::instancias::Almacen::nuevo(&root);
         let first = store.crear("Mi mundo", "1.21.4", 1).unwrap();
         let second = store.crear("Otro mundo", "1.20.1", 2).unwrap();
@@ -1965,10 +2287,21 @@ mod tests {
         let mut config_a = crate::config_por_defecto();
         config_a.memoria_max = 8192;
         let mut saved = crate::estado::Guardado::nuevo(
-            &["Amigos".into()], &[None, Some("Amigos".into())], &[], &[config_b, config_a], &[],
+            &["Amigos".into()],
+            &[None, Some("Amigos".into())],
+            &[],
+            &[config_b, config_a],
+            &[],
         );
         saved.asociar(vec![second.id.clone(), first.id.clone()]);
-        let (mut real, _) = crate::iniciar_con_guardado(Seccion::Instancias, false, None, false, services, Some(saved));
+        let (mut real, _) = crate::iniciar_con_guardado(
+            Seccion::Instancias,
+            false,
+            None,
+            false,
+            services,
+            Some(saved),
+        );
         assert_eq!(crate::instancias().len(), 2);
         assert_eq!(crate::instancias()[0].nombre, "Mi mundo");
         assert_eq!(real.grupos, vec![Some("Amigos".into()), None]);
@@ -1998,6 +2331,9 @@ mod tests {
             r#"{"latest":{"release":"1.21.4","snapshot":"25w01a"},"versions":[{"id":"1.21.4","type":"release","url":"https://piston-meta.mojang.com/test","sha1":"test","releaseTime":"2024-12-03T10:00:00Z"},{"id":"25w01a","type":"snapshot","url":"https://piston-meta.mojang.com/test","sha1":"test","releaseTime":"2025-01-01T10:00:00Z"}]}"#,
         ).unwrap().versions;
         real.servicios.instancias.cargando = false;
+        let mut loaders=icaro_core::versiones_instancia::Loaders::default();
+        loaders.versiones[1]=vec!["0.16.9".into()];
+        real.servicios.instancias.loaders.insert("1.21.4".into(),loaders);
         let _ = pantallas::actualizar(&mut real, pantallas::Accion::AsistenteVersion(999));
         assert_eq!(real.asistente.as_ref().unwrap().version, 0);
         let _ = pantallas::actualizar(&mut real, pantallas::Accion::AsistenteSiguiente);
@@ -2012,65 +2348,134 @@ mod tests {
         let _ = pantallas::actualizar(&mut real, pantallas::Accion::AsistenteCancelar);
         assert!(real.asistente.is_some());
         let selected = crate::instancias_reales::elegida(&real).unwrap();
-        let created = store.crear_con_loader(&real.asistente.as_ref().unwrap().nombre, &selected, "fabric", 3).unwrap();
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Instancias(crate::instancias_reales::Accion::Creada(Ok(created.clone()))));
+        let created = store
+            .crear_con_loader(
+                &real.asistente.as_ref().unwrap().nombre,
+                &selected,
+                "fabric",
+                3,
+            )
+            .unwrap();
+        let _ = crate::actualizar_estado(
+            &mut real,
+            Mensaje::Instancias(crate::instancias_reales::Accion::Creada(
+                Ok(created.clone()),
+            )),
+        );
         assert!(real.asistente.is_none() && !real.servicios.instancias.creando);
         assert_eq!(crate::instancias().len(), 3);
         assert_eq!(real.servicios.instancias.registros[2], created);
         assert_eq!(real.grupos.len(), 3);
         assert_eq!(real.configs.len(), 3);
         assert_eq!(store.cargar().unwrap().instancias.len(), 3);
-        assert!(crate::instancias().iter().all(|i| i.estado == icaro_ui::instancias::EstadoInstancia::Pendiente));
+        assert!(crate::instancias()
+            .iter()
+            .all(|i| i.estado == icaro_ui::instancias::EstadoInstancia::Pendiente));
         // Catálogo de mods y versiones quedan limitados a la instancia Fabric.
         crate::abrir_instancia(&mut real, 2);
         let _ = crate::actualizar_estado(&mut real, Mensaje::Pestana(2));
         assert!(crate::mods_reales::permite_mods(&real));
-        real.busqueda_mods = "mis mods".into(); real.mods_filtro = 1;
+        real.busqueda_mods = "mis mods".into();
+        real.mods_filtro = 1;
         let _ = crate::actualizar_estado(&mut real, Mensaje::VistaMods(1));
         let filter = context(&real);
         assert_eq!(filter.minecraft.as_deref(), Some("1.21.4"));
         assert_eq!(filter.loader.as_deref(), Some("fabric"));
-        real.servicios.ficha.minecraft = "1.21.4".into(); real.servicios.ficha.loader = "Fabric".into();
+        real.editor = Some(8);
+        let shader_filter = context(&real);
+        assert_eq!(shader_filter.kind, Kind::Shader);
+        assert_eq!(shader_filter.minecraft.as_deref(), Some("1.21.4"));
+        assert!(shader_filter.loader.is_none(), "Los shaders no son mods de Fabric");
+        real.editor = Some(2);
+        real.servicios.ficha.minecraft = "1.21.4".into();
+        real.servicios.ficha.loader = "Fabric".into();
         let _ = actualizar(&mut real, Accion::VersionMinecraft("1.20.1".into()));
         let _ = actualizar(&mut real, Accion::VersionLoader("Forge".into()));
         assert_eq!(real.servicios.ficha.minecraft, "1.21.4");
         assert_eq!(real.servicios.ficha.loader, "Fabric");
         let _ = crate::actualizar_estado(&mut real, Mensaje::VolverEditor);
-        assert_eq!(real.editor, Some(2)); assert_eq!(real.mods_vista, 0);
-        assert_eq!(real.busqueda_mods, "mis mods"); assert_eq!(real.mods_filtro, 1);
+        assert_eq!(real.editor, Some(2));
+        assert_eq!(real.mods_vista, 0);
+        assert_eq!(real.busqueda_mods, "mis mods");
+        assert_eq!(real.mods_filtro, 1);
         let version: Version = serde_json::from_value(serde_json::json!({"id":"new", "project_id":"mod", "name":"Actualización", "version_number":"2", "version_type":"release", "game_versions":["1.21.4"], "loaders":["fabric"], "files":[], "dependencies":[]})).unwrap();
         let before = real.servicios.mods.busy.clone();
-        let _ = crate::mods_reales::actualizar(&mut real, crate::mods_reales::Accion::ActualizarTodos);
+        let _ =
+            crate::mods_reales::actualizar(&mut real, crate::mods_reales::Accion::ActualizarTodos);
         assert!(real.servicios.mods.confirmacion.is_none());
-        crate::diseno_mods::comprobar_cesta(&mut real,version.clone());
-        real.servicios.mods.updates.insert(created.id.clone(), vec![version.clone()]);
-        let _ = crate::mods_reales::actualizar(&mut real, crate::mods_reales::Accion::ActualizarTodos);
-        assert!(real.servicios.mods.confirmacion.is_some()); assert_eq!(real.servicios.mods.busy, before);
+        crate::diseno_mods::comprobar_cesta(&mut real, version.clone());
+        real.servicios
+            .mods
+            .updates
+            .insert(created.id.clone(), vec![version.clone()]);
+        let _ =
+            crate::mods_reales::actualizar(&mut real, crate::mods_reales::Accion::ActualizarTodos);
+        assert!(real.servicios.mods.confirmacion.is_some());
+        assert_eq!(real.servicios.mods.busy, before);
         assert!(crate::hay_dialogo(&real));
         let _ = crate::vista(&real);
         let _ = crate::mods_reales::actualizar(&mut real, crate::mods_reales::Accion::Cancelar);
         assert!(real.servicios.mods.confirmacion.is_none());
         // Ver página conserva la ficha rápida; cerrarla devuelve a los mods.
-        let _=crate::actualizar_estado(&mut real,Mensaje::PanelMod(Some(original.0.id.clone())));
-        let generation=real.servicios.search_id;
-        let _=actualizar(&mut real,Accion::ProyectoRecibido(generation,Ok((original.0.clone(),vec![version.clone()]))));
-        real.servicios.ficha.tab=ficha::Pestana::Versiones;
-        let selected=real.servicios.ficha.seleccionada.clone();
-        let _=crate::diseno_mods::actualizar(&mut real,crate::diseno_mods::Accion::VerPagina);
+        let _ = crate::actualizar_estado(&mut real, Mensaje::PanelMod(Some(original.0.id.clone())));
+        let generation = real.servicios.search_id;
+        let _ = actualizar(
+            &mut real,
+            Accion::ProyectoRecibido(generation, Ok((original.0.clone(), vec![version.clone()]))),
+        );
+        real.servicios.ficha.tab = ficha::Pestana::Versiones;
+        let selected = real.servicios.ficha.seleccionada.clone();
+        // La regla de la fila compatible debe caber en contenido desplazable,
+        // también cuando su altura crece por la insignia de la instancia.
+        let _ = ficha::vista(&real, &original.0, std::slice::from_ref(&version), Kind::Mod);
+        let _ = crate::diseno_mods::actualizar(&mut real, crate::diseno_mods::Accion::VerPagina);
         assert!(real.mod_panel.is_none());
-        let _=actualizar(&mut real,Accion::Volver);
-        assert_eq!(real.mod_panel.as_deref(),Some(original.0.id.as_str()));
-        assert_eq!(real.servicios.ficha.tab,ficha::Pestana::Versiones);
-        assert_eq!(real.servicios.ficha.seleccionada,selected);
-        let _=crate::actualizar_estado(&mut real,Mensaje::PanelMod(None));
+        let _ = actualizar(&mut real, Accion::Volver);
+        assert_eq!(real.mod_panel.as_deref(), Some(original.0.id.as_str()));
+        assert_eq!(real.mods_vista, 0, "Volver desde Ver página restaura la lista instalada, no la tienda");
+        assert_eq!(real.editor, Some(2));
+        assert_eq!(real.servicios.ficha.tab, ficha::Pestana::Versiones);
+        assert_eq!(real.servicios.ficha.seleccionada, selected);
+        let _ = crate::actualizar_estado(&mut real, Mensaje::PanelMod(None));
         assert!(real.mod_panel.is_none() && real.servicios.detail.is_none());
-        assert_eq!(real.mods_vista,0);
-        assert_eq!(real.busqueda_mods,"mis mods");
+        assert_eq!(real.mods_vista, 0);
+        assert_eq!(real.busqueda_mods, "mis mods");
+        // El panel que sí se abrió desde la tienda conserva la tienda al volver.
+        real.mods_vista = 1;
+        real.mod_panel = Some(original.0.id.clone());
+        real.servicios.detail = Some((original.0.clone(), vec![version.clone()]));
+        let _ = ampliar_ficha(&mut real);
+        let _ = actualizar(&mut real, Accion::Volver);
+        assert_eq!(real.mods_vista, 1);
+        assert_eq!(real.mod_panel.as_deref(), Some(original.0.id.as_str()));
+        let _ = crate::actualizar_estado(&mut real, Mensaje::PanelMod(None));
+        real.mods_vista = 0;
+        // Cerrar una ficha con historial no reabre una dependencia anterior,
+        // y las respuestas tardías no restauran el panel cerrado.
+        real.mod_panel = Some(original.0.id.clone());
+        real.servicios.detail = Some((original.0.clone(), vec![version.clone()]));
+        real.servicios.query = "sodium".into();
+        real.servicios.results = Some(Results { hits: vec![], offset: 20, limit: 20, total_hits: 24 });
+        let _ = actualizar(&mut real, Accion::Proyecto("dependency".into()));
+        let closed_generation = real.servicios.search_id;
+        assert!(real.servicios.hay_anterior());
+        let _ = actualizar(&mut real, Accion::CerrarPanel);
+        assert!(real.mod_panel.is_none() && real.servicios.detail.is_none());
+        assert!(!real.servicios.hay_anterior());
+        assert_eq!(real.mods_vista, 0);
+        assert_eq!(real.editor, Some(2));
+        assert_eq!(real.servicios.query, "sodium");
+        assert_eq!(real.servicios.results.as_ref().unwrap().offset, 20);
+        let _ = actualizar(&mut real, Accion::ProyectoRecibido(closed_generation, Ok((original.0.clone(), vec![version.clone()]))));
+        let _ = actualizar(&mut real, Accion::MiembrosRecibidos(closed_generation, Err("Anterior".into())));
+        assert!(real.servicios.detail.is_none() && real.servicios.ficha.miembros_error.is_none());
         // Abrir un mod instalado directamente vuelve a la lista, sin buscar.
         let _ = crate::actualizar_estado(&mut real, Mensaje::AbrirModPagina("mod".into()));
-        assert_eq!(real.mods_vista,1); assert!(real.servicios.results.is_none());
+        assert_eq!(real.mods_vista, 1);
+        assert!(real.servicios.results.is_none());
         let _ = actualizar(&mut real, Accion::Volver);
-        assert_eq!(real.mods_vista,0); assert_eq!(real.editor,Some(2));
+        assert_eq!(real.mods_vista, 0);
+        assert_eq!(real.editor, Some(2));
         let _ = crate::actualizar_estado(&mut real, Mensaje::VolverEditor);
         assert!(real.editor.is_none());
         // El menú elimina su propia instancia, aunque la selección sea otra.
@@ -2078,7 +2483,10 @@ mod tests {
         real.menu = Some(1);
         let _ = crate::actualizar_estado(&mut real, Mensaje::PedirEliminar);
         assert!(real.dialogo);
-        assert_eq!(real.servicios.instancias.eliminar.as_deref(), Some(second.id.as_str()));
+        assert_eq!(
+            real.servicios.instancias.eliminar.as_deref(),
+            Some(second.id.as_str())
+        );
         let _ = crate::vista(&real);
         let _ = crate::actualizar_estado(&mut real, Mensaje::CerrarDialogo);
         assert_eq!(store.cargar().unwrap().instancias.len(), 3);
@@ -2089,12 +2497,24 @@ mod tests {
         assert!(real.servicios.instancias.operando);
         let _ = crate::actualizar_estado(&mut real, Mensaje::CerrarDialogo);
         assert!(real.dialogo);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Instancias(crate::instancias_reales::Accion::Eliminada(second.id.clone(), Err("Disco no disponible".into()))));
+        let _ = crate::actualizar_estado(
+            &mut real,
+            Mensaje::Instancias(crate::instancias_reales::Accion::Eliminada(
+                second.id.clone(),
+                Err("Disco no disponible".into()),
+            )),
+        );
         assert_eq!(crate::instancias().len(), 3);
         assert!(!real.servicios.instancias.operando && real.dialogo);
         let _ = crate::actualizar_estado(&mut real, Mensaje::Eliminar);
         store.eliminar(&second.id).unwrap();
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Instancias(crate::instancias_reales::Accion::Eliminada(second.id.clone(), Ok(()))));
+        let _ = crate::actualizar_estado(
+            &mut real,
+            Mensaje::Instancias(crate::instancias_reales::Accion::Eliminada(
+                second.id.clone(),
+                Ok(()),
+            )),
+        );
         assert!(!real.dialogo && real.menu.is_none());
         assert_eq!(crate::instancias().len(), 2);
         assert_eq!(store.cargar().unwrap().instancias.len(), 2);
@@ -2104,7 +2524,13 @@ mod tests {
         assert!(real.aviso.as_ref().unwrap().accion.is_some());
         let _ = crate::actualizar_estado(&mut real, Mensaje::DeshacerAviso);
         let restored = store.restaurar(&second.id).unwrap();
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Instancias(crate::instancias_reales::Accion::Restaurada(second.id.clone(), Ok(restored))));
+        let _ = crate::actualizar_estado(
+            &mut real,
+            Mensaje::Instancias(crate::instancias_reales::Accion::Restaurada(
+                second.id.clone(),
+                Ok(restored),
+            )),
+        );
         assert_eq!(crate::instancias().len(), 3);
         assert_eq!(real.servicios.instancias.registros[1].id, second.id);
         assert_eq!(real.configs[1].memoria_max, 4096);
@@ -2118,11 +2544,23 @@ mod tests {
         let _ = crate::actualizar_estado(&mut real, Mensaje::Cuadro(broken));
         assert!(real.picar.as_ref().unwrap().rota.is_some());
         assert!(!real.servicios.instancias.operando);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Cuadro(broken + std::time::Duration::from_secs(2)));
+        let _ = crate::actualizar_estado(
+            &mut real,
+            Mensaje::Cuadro(broken + std::time::Duration::from_secs(2)),
+        );
         assert!(real.servicios.instancias.operando);
-        assert_eq!(real.servicios.instancias.eliminar.as_deref(), Some(created.id.as_str()));
+        assert_eq!(
+            real.servicios.instancias.eliminar.as_deref(),
+            Some(created.id.as_str())
+        );
         store.eliminar(&created.id).unwrap();
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Instancias(crate::instancias_reales::Accion::Eliminada(created.id.clone(), Ok(()))));
+        let _ = crate::actualizar_estado(
+            &mut real,
+            Mensaje::Instancias(crate::instancias_reales::Accion::Eliminada(
+                created.id.clone(),
+                Ok(()),
+            )),
+        );
         assert!(real.picar.is_none() && real.seleccionada.is_none());
         assert_eq!(crate::instancias().len(), 2);
         assert_eq!(store.cargar().unwrap().instancias.len(), 2);

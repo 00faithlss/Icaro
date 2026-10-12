@@ -16,10 +16,15 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
     a.umbral = None;
     let scene = std::env::var("ICARO_VISTA_DISENO").unwrap_or_else(|_| "asistente".into());
     match scene.as_str() {
+        "actualizacion" => crate::actualizacion_real::preparar_diseno(&mut a),
+        "actualizacion-al-cerrar" => crate::actualizacion_real::preparar_diseno_al_cerrar(&mut a),
+        s if s.starts_with("recursos-") || s.starts_with("shaders-") => {
+            crate::mods_reales::preparar_diseno(&mut a, &scene)
+        }
         s if s.starts_with("juego-") => crate::juego_real::preparar_diseno(&mut a, &scene),
-        "asistente" => {
+        "asistente" | "asistente-version" | "asistente-loader" => {
             a.asistente = Some(pantallas::Asistente {
-                paso: 1,
+                paso: if scene == "asistente-version" { 0 } else { 1 },
                 tipo_version: 0,
                 busqueda: String::new(),
                 version: 0,
@@ -28,6 +33,7 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
                 portada: 0,
             })
         }
+        s if s.starts_with("cambiar-version") => preparar_cambio(&mut a, &scene),
         "exportar" => {
             a.exportar = Some(pantallas::Exportar {
                 instancia: 0,
@@ -70,6 +76,158 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
             |_| Mensaje::CapturarDiseno,
         ),
     )
+}
+
+pub(crate) fn preparar_cambio(a: &mut App, scene: &str) {
+    use icaro_core::{
+        instancias::Instancia,
+        manifest::VersionEntry,
+        modrinth::Version,
+        versiones_instancia::{Compatibilidad, Loaders, Revision},
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+    // Sólo la captura usa los datos de muestra del preview del usuario.
+    // No se escriben archivos ni se programa ninguna consulta a Modrinth.
+    a.servicios.demo = false;
+    a.servicios.restoring = false;
+    let record = Instancia {
+        id: "00000000000000000000000000000001".into(),
+        nombre: "Supervivencia".into(),
+        minecraft: "1.21.4".into(),
+        loader: "fabric".into(),
+        portada: 0,
+        creada: 0,
+    };
+    a.servicios.instancias.registros = vec![record.clone()];
+    let muestras: [(&str, &str, usize); 8] = [
+        ("26.3", "2026-10-08", 61),
+        ("26.2", "2026-08-19", 142),
+        ("26.1.2", "2026-06-24", 187),
+        ("1.21.5", "2026-03-25", 206),
+        ("1.21.4", "2025-12-03", 214),
+        ("1.21.3", "2025-10-23", 211),
+        ("1.21.1", "2025-08-08", 209),
+        ("1.20.1", "2023-06-12", 173),
+    ];
+    a.servicios.instancias.versiones = muestras
+        .iter()
+        .map(|(version, fecha, _)| VersionEntry {
+            id: (*version).into(),
+            kind: "release".into(),
+            url: String::new(),
+            sha1: String::new(),
+            release_time: format!("{fecha}T00:00:00Z"),
+        })
+        .collect();
+    let detalle: Vec<String> = [
+        "Xaero's Minimap",
+        "Replay Mod",
+        "Dynamic FPS",
+        "Chat Heads",
+        "Inventory HUD",
+        "Better Ping",
+        "Zoomify",
+        "Krypton",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let mut compatibilidades = BTreeMap::new();
+    for (mc, _, compatibles) in muestras {
+        let es_actual = mc == record.minecraft;
+        let actualizados = if es_actual {
+            0
+        } else {
+            compatibles.saturating_sub(8)
+        };
+        let actualizar: Vec<Version> = (0..actualizados).map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "id":format!("qa-{mc}-{index}"), "project_id":format!("qa-mod-{index}"),
+                "name":format!("Mod de muestra {index}"), "version_number":"1.0.0", "version_type":"release",
+                "game_versions":[mc], "loaders":["fabric"], "downloads":0, "date_published":"2026-03-25T00:00:00Z",
+                "files":[], "dependencies":[], "changelog":""
+            })).unwrap()
+        }).collect();
+        let desactivar: Vec<String> = (0..214 - compatibles)
+            .map(|i| format!("qa-incompatible-{i}.jar"))
+            .collect();
+        let nombres = (0..desactivar.len())
+            .map(|i| {
+                detalle
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Mod no compatible {}", i + 1))
+            })
+            .collect::<Vec<_>>();
+        compatibilidades.insert(
+            mc.into(),
+            Compatibilidad {
+                total: 214,
+                compatibles,
+                no_cambian: if es_actual { 214 } else { 8 },
+                actualizar,
+                desactivar_sin_actualizar: desactivar.clone(),
+                nombres_sin_actualizar: nombres.clone(),
+                desactivar,
+                nombres,
+                ..Default::default()
+            },
+        );
+        let mut loaders = Loaders::default();
+        loaders.versiones[1] = vec![if es_actual { "0.16.9" } else { "0.16.14" }.into()];
+        loaders.versiones[2] = vec!["0.27.1".into()];
+        a.servicios.instancias.loaders.insert(mc.into(), loaders);
+    }
+    let cargando = scene == "cambiar-version-carga";
+    let confirmando = scene == "cambiar-version";
+    let destino = if confirmando { "1.20.1" } else { "1.21.5" };
+    let revision = confirmando.then(|| {
+        let compatibilidad = compatibilidades.get(destino).unwrap().clone();
+        Revision {
+            mundos: 3,
+            desactivar: compatibilidad.desactivar.clone(),
+            nombres: compatibilidad.nombres.clone(),
+            baja: true,
+            loader_version: Some("0.16.14".into()),
+            loader: "fabric".into(),
+            compatibilidad,
+        }
+    });
+    let cargando_compatibilidad = if cargando {
+        compatibilidades.keys().cloned().collect()
+    } else {
+        BTreeSet::new()
+    };
+    if cargando {
+        compatibilidades.clear();
+    }
+    a.cambiar = Some(0);
+    a.servicios.instancias.cambio = Some(instancias_reales::Cambio {
+        instancia: record.id,
+        tipo: 0,
+        busqueda: String::new(),
+        destino: destino.into(),
+        revision,
+        revisando: false,
+        respaldo: true,
+        error: None,
+        compatibilidades,
+        cargando_compatibilidad,
+        errores_compatibilidad: BTreeMap::new(),
+        loader_destino: "fabric".into(),
+        loader_actual_version: Some("0.16.9".into()),
+        actualizar_mods: true,
+        copia: false,
+        detalle_desactivar: scene == "cambiar-version-detalle",
+        confirmando,
+        compat_generacion: 0,
+        mods: Some(vec![]),
+        destino_manual: true,
+        cancelar_compatibilidad: tokio_util::sync::CancellationToken::new(),
+    });
+    if scene == "cambiar-version-seleccion-angosto" {
+        a.ventana = Size::new(940., 720.);
+    }
 }
 fn preparar_mods(a: &mut App, scene: &str) {
     use icaro_core::{
@@ -188,7 +346,7 @@ fn preparar_mods(a: &mut App, scene: &str) {
             std::collections::BTreeSet::from(["sodium.jar".into(), "lithium.jar".into()]),
         );
     }
-    if scene == "tienda" || scene == "ficha" || scene == "pagina" {
+    if matches!(scene, "tienda" | "ficha" | "ficha-creadores") || scene.starts_with("pagina") {
         a.mods_vista = 1;
         a.servicios.order = icaro_core::modrinth::Order::Downloads;
         a.servicios.results = Some(icaro_core::modrinth::Results {
@@ -253,10 +411,27 @@ fn preparar_mods(a: &mut App, scene: &str) {
                 Ok(("sodium-extra".into(), "Sodium Extra".into())),
             );
             a.servicios.detail = Some((p, vv));
+            if scene == "ficha-creadores" || scene.starts_with("pagina-creadores") {
+                servicios::preparar_creadores_diseno(a);
+            }
+            if scene == "pagina-creadores-minima" {
+                // Fixture sin secciones opcionales para revisar todos los
+                // avatares sin operar ni desplazar una ventana del usuario.
+                if let Some((project, _)) = &mut a.servicios.detail {
+                    project.game_versions.clear(); project.loaders.clear(); project.categories.clear();
+                    project.client_side.clear(); project.server_side.clear();
+                    project.source_url=None; project.issues_url=None;
+                }
+            }
             if scene == "ficha" {
                 a.mod_panel = Some("sodium".into());
             } else {
-                a.servicios.ficha.tab = ficha::Pestana::Versiones;
+                a.servicios.ficha.tab = match scene {
+                    "pagina-galeria" => ficha::Pestana::Galeria,
+                    "pagina-descripcion" => ficha::Pestana::Descripcion,
+                    "pagina-dependencias" => ficha::Pestana::Dependencias,
+                    _ => ficha::Pestana::Versiones,
+                };
             }
         }
     }

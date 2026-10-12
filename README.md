@@ -24,7 +24,7 @@ Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da 
 
 El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, comprueba tamaño y SHA-1 y reutiliza la instalación guardada. La versión de Java se obtiene de esos metadatos; si no hay una compatible, descarga el runtime oficial de Mojang. Consulta [Vanilla y Java](docs/vanilla-y-java.md) para probar el recorrido.
 
-Los mods se gestionan dentro de cada instancia. La sección **Modpacks** está destinada a descubrir e instalar packs como nuevas instancias.
+Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** está destinada a descubrir packs; instalarlos como nuevas instancias sigue pendiente.
 
 ## Compilar y probar
 
@@ -54,7 +54,7 @@ La herramienta de línea de comandos consulta el manifiesto de Mojang y verifica
 
 ## Roadmap
 
-Actualizado el **11-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
+Actualizado el **12-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
 
 El avance de las pantallas y componentes originales se sigue por separado en el [Roadmap del System Design](docs/roadmap-system-design.md). Las diferencias que requieren evaluación están en la [comparación con el diseño](docs/revision-system-design.md).
 
@@ -87,6 +87,8 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 
 - [x] Consulta de versiones de Mojang con caché de 24 horas y uso de la copia válida si falla la actualización.
 - [x] Asistente de cuatro pasos que guarda versión, familia de loader, nombre y portada; cada instancia tiene identificador estable y carpeta propia.
+- [x] Selectores de versión y loader separados, con versiones oficiales seleccionables y elección persistida.
+- [x] Cambio de Minecraft y elección de loader con el nuevo `CambioVersionInstancia`: compatibilidad por lotes de todos los mods instalados, actualizaciones opcionales, respaldo obligatorio al bajar y copia independiente. Preparación aislada y recuperación de archivos/metadatos si falla; instalar el loader sigue pendiente.
 - [x] Recuperación de instancias, grupos y ajustes de Java desde disco; renombrado sin mover la carpeta de juego.
 - [x] Eliminación de instancias a la papelera local y recuperación mediante Deshacer.
 - [x] Vanilla omite la pestaña y el contador de mods; la barra inferior de Jugar se oculta sin sesión o sin instancia seleccionada.
@@ -96,14 +98,18 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Detectar Java compatible o instalar el runtime oficial requerido por los metadatos de Minecraft; reutilizarlo y permitir selección por instancia.
 - [x] Ejecutar Vanilla con la cuenta activa, memoria, Metaspace y argumentos de la instancia; capturar registros y código de salida, y detener el proceso con confirmación.
 - [x] Conectar preparación, pausa, cancelación y reintento a la cola; estados reales de Jugar, Umbral, consola e informe de fallo con las composiciones existentes.
-- [x] Primer lanzamiento real de Vanilla 26.3 en Windows confirmado por el usuario; los ajustes posteriores del Umbral requieren volver a probarse jugando.
-- [ ] Validar el recorrido completo en Arch Linux y completar la revisión manual de cierre, reutilización y transición del Umbral en Windows.
+- [x] Lanzamiento real de Vanilla 26.3 en Windows confirmado por el usuario y correcciones del Umbral probadas durante el uso; retirada con fundido al detectar la ventana de Minecraft.
+- [ ] Validar el recorrido completo en Arch Linux y completar la revisión de todas las opciones de cierre en Windows.
 - [ ] Instalar loaders compatibles y lanzar instancias con sus mods.
-- [ ] Importar y duplicar instancias reales; cambiar Minecraft o loader con copia de seguridad y revisión de compatibilidad.
+- [ ] Importar y duplicar instancias desde sus acciones generales; cambiar la familia de loader.
 - [ ] Exportar modpacks MRPACK con la versión concreta de Minecraft y loader.
-- [ ] Conectar recursos y shaders, su orden y activación a los archivos del juego.
+- [x] Instalar resourcepacks ZIP, leer su inventario y activar en `options.txt`; instalación fuera de versión con confirmación.
+- [x] Resourcepacks y shaders con las mismas filas, búsqueda, filtros y selección de mods; activar/desactivar, actualizar y quitar archivos reales.
+- [x] Pestaña Shaders e instalación ZIP; activación mediante configuración existente de Iris.
+- [ ] Ordenar resourcepacks por prioridad y admitir otros motores de shaders.
 - [ ] Leer mundos reales, crear y restaurar copias de seguridad y permitir jugar directamente a un mundo.
-- [ ] Leer y gestionar capturas reales por instancia.
+- [x] Leer capturas F2 reales por instancia; visor con controles de ventana, copiar imagen y abrir carpeta.
+- [ ] Completar eliminación reversible de capturas locales.
 - [ ] Completar las vistas previas y la recuperación de archivos eliminados en el explorador.
 
 ### Catálogo y gestión de mods
@@ -111,6 +117,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Catálogo público de Modrinth con iconos, búsqueda, filtros de Minecraft y loader, orden y paginación.
 - [x] Descripciones y changelogs formateados, galería con originales, creadores, licencias, fechas y estadísticas.
 - [x] Ficha rápida, página completa, versiones compatibles y dependencias con sus nombres.
+- [x] `PaginaMod` e `InfoProyecto` del ZIP nuevo: galería, tabla con filtros, columna de 320 px, iconos originales, avatares reales y más proyectos del creador. Los datos que la API no entrega se omiten.
 - [x] Volver conserva el catálogo, búsqueda, filtros, página y ficha anterior; la tienda permite regresar a los mods instalados.
 - [x] Tienda de mods por instancia con categorías, filtro de lado y compatibilidad fijada a Minecraft y loader.
 - [x] Lista de instalación con mods, dependencias y tamaño antes de descargar; selección de dependencias opcionales.
@@ -118,15 +125,22 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Publicación conjunta de archivos preparados; una descarga fallida conserva los mods anteriores y los archivos locales ajenos a Ícaro.
 - [x] Inventario persistente de mods, activación y desactivación, detección de actualizaciones compatibles y confirmación antes de actualizar.
 - [x] Selección múltiple para activar, desactivar, actualizar y quitar; papelera de mods con Deshacer durante diez segundos.
+- [x] Seleccionar todos los mods y panel de ficha entrando desde el borde derecho.
+- [x] Clic fuera cierra el panel; volver desde la página completa restaura la instancia o el catálogo de origen.
+- [ ] Perfil del creador dentro de la tienda: falta el componente de diseño; por ahora se abre su perfil público en Modrinth.
 - [ ] Instalar modpacks como nuevas instancias, incluidos sus archivos de configuración.
-- [ ] Conectar la instalación de paquetes de recursos y shaders del catálogo.
+
+### Actualizaciones del launcher
+
+- [x] Pantalla `ActualizacionLauncher`, comprobación de releases y descarga portable verificada con SHA-256; aplicar ahora o al cerrar en Windows x86-64.
+- [ ] Publicar releases con ejecutable y `latest.json`, y probar una actualización completa. [Contrato de publicación](docs/actualizaciones-launcher.md).
 
 ### Próximas entregas, en orden
 
-1. **Validar Vanilla con una cuenta real:** comprobar la llegada al menú del juego, su cierre y la reutilización de la instalación; repetir en Arch Linux.
-2. **Instancias con loader:** instalar Fabric, NeoForge, Forge y Quilt en versiones compatibles y comprobar el lanzamiento con los mods ya gestionados.
-3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. Completar el cambio de versión con copias de seguridad.
-4. **Editor completo:** conectar mundos, recursos, shaders, capturas, integridad y recuperación de archivos; completar historial de descargas y seguimiento de la consola, usando las vistas del System Design.
+1. **Instancias con loader:** instalar Fabric, NeoForge, Forge y Quilt en versiones compatibles y comprobar el lanzamiento con los mods ya gestionados.
+2. **Validación multiplataforma:** repetir el recorrido de Vanilla en Arch Linux y completar las opciones de cierre en Windows; el lanzamiento real en Windows ya fue confirmado.
+3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. El cambio de versión ya permite respaldo, copia y actualización de mods; falta instalar los loaders.
+4. **Editor completo:** conectar mundos, prioridad de resourcepacks, otros motores de shaders, integridad y eliminación/recuperación de archivos y capturas; completar el historial persistente y unificar los instaladores en la cola global. Recursos, shaders, capturas y consola ya tienen sus recorridos reales descritos arriba.
 5. **Cuenta y servicios adicionales:** completar Cuenta y Estudio de skin, servidores y proveedores opcionales.
 6. **Primera publicación:** validar Windows y Arch Linux, rendimiento, teclado, ventanas angostas y empaquetado.
 
@@ -134,7 +148,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 
 - [ ] Integración opcional de CurseForge, sujeta al acceso a su API y a las condiciones de distribución.
 - [ ] Conexión a servidores y sincronización de mods con un servidor.
-- [ ] Red privada, bandeja del sistema y actualización del propio launcher.
+- [ ] Red privada y bandeja del sistema; publicar los artefactos y validar la actualización del propio launcher de extremo a extremo.
 - [ ] Verificación y reparación de instancias y revisión de archivos de origen desconocido.
 - [ ] Completar adaptación a ventanas angostas, escala, foco y navegación por teclado según el diseño original.
 - [ ] Persistir las preferencias generales y conectar sus efectos reales: idioma, inicio con el sistema y comportamiento al jugar/cerrar.

@@ -666,7 +666,11 @@ fn abrir_carpeta(app: &mut App, captura: Option<usize>) {
                 })
         };
         match ruta {
-            Ok(ruta) if ruta.is_dir() => crate::pantallas::abrir_en_sistema(&ruta),
+            Ok(ruta) if ruta.is_dir() => {
+                if let Err(error) = crate::pantallas::abrir_en_sistema(&ruta) {
+                    app.capt.avisar(error, false);
+                }
+            }
             Ok(_) => app.capt.avisar(
                 "Todavía no hay capturas. Pulsa F2 dentro de Minecraft para guardar una.",
                 false,
@@ -677,7 +681,7 @@ fn abrir_carpeta(app: &mut App, captura: Option<usize>) {
     }
     let dir = std::env::temp_dir().join("icaro-demo").join("capturas");
     let _ = std::fs::create_dir_all(&dir);
-    crate::pantallas::abrir_en_sistema(&dir);
+    if let Err(error) = crate::pantallas::abrir_en_sistema(&dir) { app.capt.avisar(error, false); }
 }
 
 /// Envía capturas a la papelera; se pueden recuperar con Deshacer.
@@ -873,7 +877,7 @@ pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mens
                     aviso: String::new(),
                 };
                 let m = |a| Mensaje::Capt(a);
-                return visor_imagen(
+                return crate::con_barra_ventana(app, visor_imagen(
                     &v.estado,
                     &item,
                     app.capt.visibles(ambito).len(),
@@ -887,7 +891,7 @@ pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mens
                         carpeta: Some(m(Accion::VisorCarpeta)),
                         eliminar: Some(m(Accion::VisorEliminar)),
                     },
-                );
+                ));
             }
         }
         let (item, total, acciones) = match &v.ambito {
@@ -926,7 +930,7 @@ pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mens
             }
         };
         let m = |a: Accion| Mensaje::Capt(a);
-        resultado = visor(
+        resultado = crate::con_barra_ventana(app, visor(
             p.modo,
             &v.estado,
             app.ahora,
@@ -943,7 +947,7 @@ pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mens
                 carpeta: acciones.then(|| m(Accion::VisorCarpeta)),
                 eliminar: acciones.then(|| m(Accion::VisorEliminar)),
             },
-        );
+        ));
     }
     resultado
 }

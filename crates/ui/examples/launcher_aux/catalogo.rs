@@ -546,6 +546,21 @@ mod tests {
         assert_eq!(numero(18332198), "18.332.198");
     }
     #[test]
+    #[ignore = "Requiere fixture de avatares públicos descargado en ICARO_QA_CREATORES"]
+    fn creator_avatar_downloads_decode_to_renderable_handles() {
+        let directory = std::env::var_os("ICARO_QA_CREATORES").expect("Directorio QA");
+        let json = std::fs::read(std::path::PathBuf::from(directory).join("creadores.json")).unwrap();
+        let fixture: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let images = fixture["images"].as_array().unwrap();
+        assert!(images.len() >= 4, "Tres creadores y organización");
+        assert!(images.iter().filter(|item| item["url"].as_str().unwrap().contains("githubusercontent.com")).count() >= 2);
+        for image in images {
+            let bytes = std::fs::read(image["path"].as_str().unwrap()).unwrap();
+            let decoded = decodificar(bytes).expect("PNG/WebP público con handle de render");
+            assert!(decoded.bytes > 0 && decoded.bytes <= 512 * 512 * 4);
+        }
+    }
+    #[test]
     fn viewer_keeps_more_detail_than_thumbnails_without_upscaling_small_images() {
         fn png(w: u32, h: u32) -> Vec<u8> {
             let mut bytes = std::io::Cursor::new(Vec::new());

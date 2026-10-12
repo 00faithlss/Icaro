@@ -19,6 +19,9 @@ use iced::{Alignment, Element, Length, Padding, Task};
 
 use crate::{arrancar, config_por_defecto, instancias, lista_instancias, App, Mensaje};
 
+#[path = "selector_cambio.rs"]
+mod selector_cambio;
+
 /// Pantallas que reemplazan el contenido de la ventana.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pantalla {
@@ -95,10 +98,23 @@ pub struct Asistente {
 }
 
 pub const PASOS: [&str; 4] = ["Versión", "Loader", "Nombre e icono", "Revisar"];
-pub const LOADERS: [(&str, &str, &str); 4] = [
-    ("Vanilla", "Minecraft tal cual, sin mods.", ""),
-    ("Fabric", "Liviano y rápido. El más usado para mods de rendimiento.", "0.16.9"),
-    ("NeoForge", "Para modpacks grandes de tecnología y magia.", "21.4.38"),
+pub const LOADERS: [(&str, &str, &str); 5] = [
+    ("Vanilla", "El juego original, sin mods.", ""),
+    (
+        "Fabric",
+        "Liviano y rápido. Ideal para mods de rendimiento y mapas.",
+        "0.16.9",
+    ),
+    (
+        "Quilt",
+        "Compatible con casi todos los mods de Fabric.",
+        "0.27.1",
+    ),
+    (
+        "NeoForge",
+        "Para modpacks grandes de tecnología y magia.",
+        "21.4.38",
+    ),
     ("Forge", "El clásico de los mods grandes.", "54.0.1"),
 ];
 pub const VERSIONES: [[(&str, &str); 5]; 3] = [
@@ -159,6 +175,8 @@ pub enum Accion {
     AsistenteBuscar(String),
     AsistenteVersion(usize),
     AsistenteLoader(usize),
+    AsistenteLoaderVersion(String),
+    VersionScroll(bool, f32),
     AsistenteNombre(String),
     AsistentePortada(usize),
     AsistenteCrear,
@@ -173,8 +191,6 @@ pub enum Accion {
     ImportarConfirmar,
     // Exportar
     Exportar(usize),
-
-
 
     ExportarCarpeta(usize),
     ExportarCancelar,
@@ -197,6 +213,16 @@ pub enum Accion {
     CambiarVersion(usize),
     CambiarCancelar,
     CambiarConfirmar(usize),
+    CambiarTipo(usize),
+    CambiarBuscar(String),
+    CambiarDestino(usize),
+    CambiarRevisar,
+    CambiarRespaldo(bool),
+    CambiarActualizar(bool),
+    CambiarModo(bool),
+    CambiarDetalle,
+    CambiarLoader(String),
+    CambiarCopia,
     VerInstalados,
     Duplicar(usize),
     AbrirCarpetaInstancia(usize),
@@ -235,36 +261,62 @@ fn agregar_instancia(app: &mut App, d: DatosInstancia) {
 }
 
 pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
-    if app.servicios.instancias.creando && matches!(&a,
-        Accion::NuevaInstancia | Accion::AsistenteCancelar | Accion::AsistenteAtras
-        | Accion::AsistenteSiguiente | Accion::AsistentePaso(_) | Accion::AsistenteTipo(_)
-        | Accion::AsistenteBuscar(_) | Accion::AsistenteVersion(_) | Accion::AsistenteLoader(_)
-        | Accion::AsistenteNombre(_) | Accion::AsistentePortada(_) | Accion::AsistenteCrear) {
+    if let Some(task) = crate::instancias_reales::accion_cambio(app, &a) {
+        return task;
+    }
+    if app.servicios.instancias.creando
+        && matches!(
+            &a,
+            Accion::NuevaInstancia
+                | Accion::AsistenteCancelar
+                | Accion::AsistenteAtras
+                | Accion::AsistenteSiguiente
+                | Accion::AsistentePaso(_)
+                | Accion::AsistenteTipo(_)
+                | Accion::AsistenteBuscar(_)
+                | Accion::AsistenteVersion(_)
+                | Accion::AsistenteLoader(_)
+                | Accion::AsistenteLoaderVersion(_)
+                | Accion::AsistenteNombre(_)
+                | Accion::AsistentePortada(_)
+                | Accion::AsistenteCrear
+        )
+    {
         return Task::none();
     }
     if !app.servicios.demo {
         match &a {
-            Accion::Abrir(Pantalla::Codigo) | Accion::PedirOtroCodigo | Accion::SimularConfirmacion =>
-                return crate::servicios::actualizar(app, crate::servicios::Accion::Login),
-            Accion::AbrirPaginaMicrosoft =>
-                return crate::servicios::actualizar(app, crate::servicios::Accion::LoginBrowser),
-            Accion::Cerrar if app.pantalla == Some(Pantalla::Codigo) =>
-                return crate::servicios::actualizar(app, crate::servicios::Accion::CancelarLogin),
+            Accion::Abrir(Pantalla::Codigo)
+            | Accion::PedirOtroCodigo
+            | Accion::SimularConfirmacion => {
+                return crate::servicios::actualizar(app, crate::servicios::Accion::Login)
+            }
+            Accion::AbrirPaginaMicrosoft => {
+                return crate::servicios::actualizar(app, crate::servicios::Accion::LoginBrowser)
+            }
+            Accion::Cerrar if app.pantalla == Some(Pantalla::Codigo) => {
+                return crate::servicios::actualizar(app, crate::servicios::Accion::CancelarLogin)
+            }
             Accion::JugarComoInvitado => {
-                return crate::servicios::actualizar(app, crate::servicios::Accion::ContinuarInvitado);
+                return crate::servicios::actualizar(
+                    app,
+                    crate::servicios::Accion::ContinuarInvitado,
+                );
             }
             Accion::AsistenteCrear => return crate::instancias_reales::crear(app),
-            Accion::Importar | Accion::ImportarConfirmar | Accion::Duplicar(_)
-                | Accion::CambiarConfirmar(_) => {
-                app.avisar("La importación, duplicación y cambio de versión todavía están en preparación.".into());
+            Accion::CambiarConfirmar(_) => return crate::instancias_reales::cambiar(app, false),
+            Accion::CambiarCopia => return crate::instancias_reales::cambiar(app, true),
+            Accion::CambiarRevisar => return crate::instancias_reales::revisar_cambio(app),
+            Accion::CambiarVersion(i) => return crate::instancias_reales::abrir_cambio(app, *i),
+            Accion::Importar | Accion::ImportarConfirmar | Accion::Duplicar(_) => {
+                app.avisar("La importación y duplicación todavía están en preparación.".into());
                 return Task::none();
             }
             Accion::LimpiarCache => {
                 app.avisar("La limpieza de caché todavía está en preparación.".into());
                 return Task::none();
             }
-            Accion::CopiarCodigo =>
-                return Task::none(),
+            Accion::CopiarCodigo => return Task::none(),
             _ => {}
         }
     }
@@ -290,7 +342,9 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         Accion::Idioma(v) => app.aj.idioma = v,
         Accion::Alternar(c) => match c {
             CampoAjuste::AbrirAlIniciar => app.aj.abrir_al_iniciar = !app.aj.abrir_al_iniciar,
-            CampoAjuste::IniciarMinimizado => app.aj.iniciar_minimizado = !app.aj.iniciar_minimizado,
+            CampoAjuste::IniciarMinimizado => {
+                app.aj.iniciar_minimizado = !app.aj.iniciar_minimizado
+            }
             CampoAjuste::ConfirmarBorrar => app.aj.confirmar_borrar = !app.aj.confirmar_borrar,
             CampoAjuste::ConsolaAlJugar => app.aj.consola_al_jugar = !app.aj.consola_al_jugar,
             CampoAjuste::CopiasMundos => app.aj.copias_mundos = !app.aj.copias_mundos,
@@ -310,10 +364,14 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         Accion::AbrirCarpetaDatos => {
             let dir = crate::estado::directorio(app.servicios.demo);
             let _ = std::fs::create_dir_all(&dir);
-            abrir_en_sistema(&dir);
+            if let Err(e) = abrir_en_sistema(&dir) {
+                app.avisar(e);
+            }
         }
         // ---- Asistente
         Accion::NuevaInstancia => {
+            app.servicios.instancias.loader_elegida = None;
+            app.servicios.instancias.version_offset = 0.0;
             app.asistente = Some(Asistente {
                 paso: 0,
                 tipo_version: 0,
@@ -323,24 +381,41 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 nombre: String::new(),
                 portada: 0,
             });
-            if !app.servicios.demo { return crate::instancias_reales::abrir(app); }
+            if !app.servicios.demo {
+                return crate::instancias_reales::abrir(app);
+            }
         }
         Accion::AsistenteCancelar => {
-            if !app.servicios.instancias.creando { app.asistente = None; }
+            if !app.servicios.instancias.creando {
+                app.asistente = None;
+            }
         }
         Accion::AsistenteAtras => {
             if let Some(s) = app.asistente.as_mut() {
                 s.paso = s.paso.saturating_sub(1);
             }
+            if app.asistente.as_ref().is_some_and(|s| s.paso == 1) {
+                return crate::instancias_reales::cargar_loaders(app);
+            }
         }
         Accion::AsistenteSiguiente => {
             let version = crate::instancias_reales::elegida(app);
-            if !app.servicios.demo && version.is_none() { return Task::none(); }
+            if !app.servicios.demo && version.is_none() {
+                return Task::none();
+            }
+            if !app.servicios.demo&&app.asistente.as_ref().is_some_and(|s|s.paso==1&&s.loader>0&&!app.servicios.instancias.loaders.get(version.as_deref().unwrap_or("")).is_some_and(|l|!l.versiones[s.loader.min(4)].is_empty())){return Task::none();}
             if let Some(s) = app.asistente.as_mut() {
                 s.paso = (s.paso + 1).min(3);
                 if s.paso == 2 && s.nombre.is_empty() {
-                    s.nombre = format!("{} {}", LOADERS[s.loader].0, version.as_deref().unwrap_or(""));
+                    s.nombre = format!(
+                        "{} {}",
+                        LOADERS[s.loader].0,
+                        version.as_deref().unwrap_or("")
+                    );
                 }
+            }
+            if app.asistente.as_ref().is_some_and(|s| s.paso == 1) {
+                return crate::instancias_reales::cargar_loaders(app);
             }
         }
         Accion::AsistentePaso(i) => {
@@ -351,25 +426,50 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             }
         }
         Accion::AsistenteTipo(i) => {
+            app.servicios.instancias.loader_elegida = None;
+            app.servicios.instancias.version_offset = 0.0;
             if let Some(s) = app.asistente.as_mut() {
                 s.tipo_version = i.min(2);
                 s.version = 0;
             }
+            return iced::widget::scrollable::snap_to(
+                iced::widget::scrollable::Id::new("version-asistente"),
+                iced::widget::scrollable::RelativeOffset::START,
+            );
         }
         Accion::AsistenteBuscar(t) => {
+            app.servicios.instancias.version_offset = 0.0;
             if let Some(s) = app.asistente.as_mut() {
                 s.busqueda = t;
             }
+            return iced::widget::scrollable::snap_to(
+                iced::widget::scrollable::Id::new("version-asistente"),
+                iced::widget::scrollable::RelativeOffset::START,
+            );
         }
         Accion::AsistenteVersion(i) => {
-            let valid = app.asistente.as_ref().is_some_and(|s| i < crate::instancias_reales::versiones(app, s.tipo_version).len());
+            app.servicios.instancias.loader_elegida = None;
+            let valid = app.asistente.as_ref().is_some_and(|s| {
+                i < crate::instancias_reales::versiones(app, s.tipo_version).len()
+            });
             if let Some(s) = app.asistente.as_mut() {
-                if valid { s.version = i; }
+                if valid {
+                    s.version = i;
+                }
             }
         }
         Accion::AsistenteLoader(i) => {
+            app.servicios.instancias.loader_elegida = None;
             if let Some(s) = app.asistente.as_mut() {
-                s.loader = i.min(3);
+                s.loader = i.min(4);
+            }
+        }
+        Accion::AsistenteLoaderVersion(v) => app.servicios.instancias.loader_elegida = Some(v),
+        Accion::VersionScroll(cambio, offset) => {
+            if cambio {
+                app.servicios.instancias.cambio_offset = offset
+            } else {
+                app.servicios.instancias.version_offset = offset
             }
         }
         Accion::AsistenteNombre(t) => {
@@ -384,9 +484,19 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::AsistenteCrear => {
             if let Some(s) = app.asistente.take() {
-                let nombre = nombre_unico(if s.nombre.trim().is_empty() { "Nueva instancia" } else { s.nombre.trim() });
-                let version = format!("{} · {}", VERSIONES[s.tipo_version][s.version].0, LOADERS[s.loader].0);
-                agregar_instancia(app, nueva_instancia(&nombre, version, PORTADAS[s.portada].1));
+                let nombre = nombre_unico(if s.nombre.trim().is_empty() {
+                    "Nueva instancia"
+                } else {
+                    s.nombre.trim()
+                });
+                let version = format!(
+                    "{} · {}",
+                    VERSIONES[s.tipo_version][s.version].0, LOADERS[s.loader].0
+                );
+                agregar_instancia(
+                    app,
+                    nueva_instancia(&nombre, version, PORTADAS[s.portada].1),
+                );
                 app.avisar(format!("Instancia {nombre} creada."));
                 arrancar(app);
             }
@@ -420,7 +530,10 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::ImportarClon(nombre) => {
             if let Some(s) = app.importar.as_mut() {
-                s.clon_origen = instancias().iter().position(|d| d.nombre == nombre).unwrap_or(0);
+                s.clon_origen = instancias()
+                    .iter()
+                    .position(|d| d.nombre == nombre)
+                    .unwrap_or(0);
             }
         }
         Accion::ImportarMundos(v) => {
@@ -452,7 +565,11 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                         .enumerate()
                         {
                             if s.launchers[i] {
-                                creadas.push(nueva_instancia(&nombre_unico(nombre), (*version).into(), Lamina::ValleRocas));
+                                creadas.push(nueva_instancia(
+                                    &nombre_unico(nombre),
+                                    (*version).into(),
+                                    Lamina::ValleRocas,
+                                ));
                             }
                         }
                     }
@@ -472,7 +589,11 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 for d in creadas {
                     agregar_instancia(app, d);
                 }
-                app.avisar(if n == 0 { "No se importó nada.".into() } else { format!("{n} instancia(s) importada(s).") });
+                app.avisar(if n == 0 {
+                    "No se importó nada.".into()
+                } else {
+                    format!("{n} instancia(s) importada(s).")
+                });
                 arrancar(app);
             }
         }
@@ -483,49 +604,146 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 instancia: i,
                 nombre: d.nombre.clone(),
 
-
-                carpetas: [true, true, false, false], formato:0, destino:std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).map(|p| p.join("Downloads")).unwrap_or_else(std::env::temp_dir).to_string_lossy().into_owned(), medidas:None,error:None,guardando:false,
+                carpetas: [true, true, false, false],
+                formato: 0,
+                destino: std::env::var_os("USERPROFILE")
+                    .map(std::path::PathBuf::from)
+                    .map(|p| p.join("Downloads"))
+                    .unwrap_or_else(std::env::temp_dir)
+                    .to_string_lossy()
+                    .into_owned(),
+                medidas: None,
+                error: None,
+                guardando: false,
             });
             app.menu = None;
             if !app.servicios.demo {
                 if let Some(i) = app.servicios.instancias.registros.get(i).cloned() {
-                    let store = app.servicios.instancias.almacen.clone(); let id = i.id.clone();
-                    return Task::perform(async move { tokio::task::spawn_blocking(move || icaro_core::exportar::medir(&store,&i.id)).await.unwrap_or_else(|_| Err("No se pudo calcular el tamaño de la instancia.".into())) },move |r| m(Accion::ExportarMedidas(id.clone(),r)));
+                    let store = app.servicios.instancias.almacen.clone();
+                    let id = i.id.clone();
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || {
+                                icaro_core::exportar::medir(&store, &i.id)
+                            })
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err("No se pudo calcular el tamaño de la instancia.".into())
+                            })
+                        },
+                        move |r| m(Accion::ExportarMedidas(id.clone(), r)),
+                    );
                 }
             }
         }
-        Accion::ExportarFormato(f) => if let Some(s) = app.exportar.as_mut().filter(|s| !s.guardando) { s.formato = f.min(1); },
-        Accion::ExportarDestino(path) => if let Some(s) = app.exportar.as_mut().filter(|s| !s.guardando) { s.destino=path; },
-        Accion::ExportarCambiar => {
-            if let Some(s) = app.exportar.as_ref().filter(|s| !s.guardando) {
-                let path=s.destino.clone();
-                return Task::perform(async move { rfd::AsyncFileDialog::new().set_directory(path).pick_folder().await.map(|f| f.path().to_string_lossy().into_owned()) }, |p| p.map_or(Mensaje::Nada,|p| m(Accion::ExportarDestino(p))));
+        Accion::ExportarFormato(f) => {
+            if let Some(s) = app.exportar.as_mut().filter(|s| !s.guardando) {
+                s.formato = f.min(1);
             }
         }
-        Accion::ExportarMedidas(id,result) => if let Some(s) = app.exportar.as_mut() {
-            if app.servicios.instancias.registros.get(s.instancia).is_some_and(|i| i.id==id) { match result { Ok(m)=>s.medidas=Some(m),Err(e)=>s.error=Some(e) } }
+        Accion::ExportarDestino(path) => {
+            if let Some(s) = app.exportar.as_mut().filter(|s| !s.guardando) {
+                s.destino = path;
+            }
+        }
+        Accion::ExportarCambiar => {
+            if let Some(s) = app.exportar.as_ref().filter(|s| !s.guardando) {
+                let path = s.destino.clone();
+                return Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_directory(path)
+                            .pick_folder()
+                            .await
+                            .map(|f| f.path().to_string_lossy().into_owned())
+                    },
+                    |p| p.map_or(Mensaje::Nada, |p| m(Accion::ExportarDestino(p))),
+                );
+            }
+        }
+        Accion::ExportarMedidas(id, result) => {
+            if let Some(s) = app.exportar.as_mut() {
+                if app
+                    .servicios
+                    .instancias
+                    .registros
+                    .get(s.instancia)
+                    .is_some_and(|i| i.id == id)
+                {
+                    match result {
+                        Ok(m) => s.medidas = Some(m),
+                        Err(e) => s.error = Some(e),
+                    }
+                }
+            }
+        }
+        Accion::Exportada(result) => match result {
+            Ok(path) => {
+                app.exportar = None;
+                app.avisar(format!("Instancia exportada: {}", path.display()));
+            }
+            Err(e) => {
+                if let Some(s) = app.exportar.as_mut() {
+                    s.guardando = false;
+                    s.error = Some(e);
+                }
+            }
         },
-        Accion::Exportada(result) => match result { Ok(path)=> { app.exportar=None; app.avisar(format!("Instancia exportada: {}",path.display())); },Err(e)=> if let Some(s)=app.exportar.as_mut() { s.guardando=false; s.error=Some(e); } },
         Accion::ExportarCarpeta(i) => {
             if let Some(s) = app.exportar.as_mut() {
-                if s.guardando { return Task::none(); }
+                if s.guardando {
+                    return Task::none();
+                }
                 if let Some(c) = s.carpetas.get_mut(i) {
                     *c = !*c;
                 }
             }
         }
-        Accion::ExportarCancelar => if !app.exportar.as_ref().is_some_and(|s| s.guardando) { app.exportar = None; },
+        Accion::ExportarCancelar => {
+            if !app.exportar.as_ref().is_some_and(|s| s.guardando) {
+                app.exportar = None;
+            }
+        }
         Accion::ExportarConfirmar => {
             if !app.servicios.demo {
-                if app.servicios.mods.busy.is_some() || app.servicios.instancias.operando { return Task::none(); }
-                let Some(s)=app.exportar.as_mut().filter(|s| !s.guardando && s.formato==0) else { return Task::none(); };
-                let Some(i)=app.servicios.instancias.registros.get(s.instancia).cloned() else { return Task::none(); };
-                if app.servicios.juego.ocupada(&i.id) { s.error=Some("Espera a que termine la instalación o cierra el juego antes de exportar.".into()); return Task::none(); }
-                let store=app.servicios.instancias.almacen.clone(); let options=s.carpetas; let target=std::path::PathBuf::from(&s.destino);
-                s.guardando=true; s.error=None;
-                return Task::perform(async move { tokio::task::spawn_blocking(move || icaro_core::exportar::zip(&store,&i,options,&target)).await.unwrap_or_else(|_| Err("No se pudo exportar la instancia.".into())) }, |r| m(Accion::Exportada(r)));
+                if app.servicios.mods.busy.is_some() || app.servicios.instancias.operando {
+                    return Task::none();
+                }
+                let Some(s) = app
+                    .exportar
+                    .as_mut()
+                    .filter(|s| !s.guardando && s.formato == 0)
+                else {
+                    return Task::none();
+                };
+                let Some(i) = app.servicios.instancias.registros.get(s.instancia).cloned() else {
+                    return Task::none();
+                };
+                if app.servicios.juego.ocupada(&i.id) {
+                    s.error = Some(
+                        "Espera a que termine la instalación o cierra el juego antes de exportar."
+                            .into(),
+                    );
+                    return Task::none();
+                }
+                let store = app.servicios.instancias.almacen.clone();
+                let options = s.carpetas;
+                let target = std::path::PathBuf::from(&s.destino);
+                s.guardando = true;
+                s.error = None;
+                return Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || {
+                            icaro_core::exportar::zip(&store, &i, options, &target)
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("No se pudo exportar la instancia.".into()))
+                    },
+                    |r| m(Accion::Exportada(r)),
+                );
             }
-            app.exportar=None; app.avisar("Modo demostración: no se exportaron archivos.".into());
+            app.exportar = None;
+            app.avisar("Modo demostración: no se exportaron archivos.".into());
         }
         // ---- Cuenta y errores
         Accion::CopiarCodigo => return iced::clipboard::write("F7K2-9QXM".to_owned()),
@@ -565,14 +783,73 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             app.menu = None;
             app.cambiar = Some(i);
         }
-        Accion::CambiarCancelar => app.cambiar = None,
+        Accion::CambiarCancelar => {
+            if !app.servicios.instancias.operando {
+                app.cambiar = None;
+                app.servicios.instancias.cambio = None;
+            }
+        }
+        Accion::CambiarTipo(t) => {
+            if let Some(c) = &mut app.servicios.instancias.cambio {
+                c.tipo = t.min(2);
+                c.destino.clear();
+                c.revision = None;
+            }
+            app.servicios.instancias.cambio_offset = 0.;
+            return iced::widget::scrollable::snap_to(
+                iced::widget::scrollable::Id::new("version-cambio"),
+                iced::widget::scrollable::RelativeOffset::START,
+            );
+        }
+        Accion::CambiarBuscar(t) => {
+            if let Some(c) = &mut app.servicios.instancias.cambio {
+                c.busqueda = t;
+            }
+            app.servicios.instancias.cambio_offset = 0.;
+            return iced::widget::scrollable::snap_to(
+                iced::widget::scrollable::Id::new("version-cambio"),
+                iced::widget::scrollable::RelativeOffset::START,
+            );
+        }
+        Accion::CambiarDestino(index) => {
+            let kind = app
+                .servicios
+                .instancias
+                .cambio
+                .as_ref()
+                .map_or(0, |c| c.tipo);
+            let destination = crate::instancias_reales::versiones(app, kind)
+                .get(index)
+                .map(|v| v.0.clone());
+            if let Some(c) = &mut app.servicios.instancias.cambio {
+                c.destino = destination.unwrap_or_default();
+                c.revision = None;
+                c.error = None;
+            }
+        }
+        Accion::CambiarRespaldo(b) => {
+            if let Some(c) = &mut app.servicios.instancias.cambio {
+                c.respaldo = b;
+            }
+        }
+        Accion::CambiarRevisar | Accion::CambiarCopia
+        | Accion::CambiarActualizar(_) | Accion::CambiarModo(_)
+        | Accion::CambiarDetalle | Accion::CambiarLoader(_) => {}
         Accion::CambiarConfirmar(i) => {
             app.cambiar = None;
             let nombre = instancias()[i].nombre.clone();
+            let destino = app
+                .servicios
+                .instancias
+                .cambio
+                .as_ref()
+                .map(|c| c.destino.clone())
+                .unwrap_or_default();
             if let Some(d) = lista_instancias().lock().unwrap().get_mut(i) {
-                d.version = "1.20.1 · Fabric".into();
+                let loader = d.version.split('·').nth(1).unwrap_or("Vanilla").trim();
+                d.version = format!("{destino} · {loader}");
             }
-            app.avisar(format!("{nombre} ahora usa 1.20.1. Se guardó una copia de los mundos."));
+            app.avisar(format!("Vista de diseño: {nombre} ahora usa {destino}."));
         }
         Accion::DetalleTecnico => app.detalle_fallo = !app.detalle_fallo,
         Accion::Duplicar(i) => {
@@ -594,7 +871,11 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             if !app.servicios.demo {
                 if let Some(record) = app.servicios.instancias.registros.get(i) {
                     match app.servicios.instancias.almacen.juego(&record.id) {
-                        Ok(dir) => abrir_en_sistema(&dir),
+                        Ok(dir) => {
+                            if let Err(e) = abrir_en_sistema(&dir) {
+                                app.avisar(e);
+                            }
+                        }
                         Err(e) => app.avisar(e.to_string()),
                     }
                 }
@@ -603,7 +884,9 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             if let Some(d) = instancias().get(i) {
                 let dir = std::env::temp_dir().join("icaro-demo").join(&d.nombre);
                 let _ = std::fs::create_dir_all(&dir);
-                abrir_en_sistema(&dir);
+                if let Err(e) = abrir_en_sistema(&dir) {
+                    app.avisar(e);
+                }
             }
         }
         Accion::VerInstalados => {
@@ -615,15 +898,22 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     Task::none()
 }
 
-pub fn abrir_en_sistema(ruta: &std::path::Path) {
+pub fn abrir_en_sistema(ruta: &std::path::Path) -> Result<(), String> {
+    if !ruta.is_dir() {
+        return Err("La carpeta de la instancia no está disponible.".into());
+    }
     let programa = if cfg!(target_os = "windows") {
-        "explorer"
+        "explorer.exe"
     } else if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
     };
-    let _ = std::process::Command::new(programa).arg(ruta).spawn();
+    std::process::Command::new(programa)
+        .arg(ruta)
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "No se pudo abrir la carpeta en el explorador del sistema.".into())
 }
 
 fn m(a: Accion) -> Mensaje {
@@ -670,13 +960,27 @@ pub fn vista_pantalla<'a>(app: &'a App, pantalla: Pantalla) -> Element<'a, Mensa
         Pantalla::Codigo => codigo(app, p),
         Pantalla::Fallo => fallo(app, p),
         Pantalla::ErrorTienda => error_tienda(app, p),
-        Pantalla::NoVerificados => con_lamina(p, Lamina::TorreReja, crate::desplazable_pub(no_verificados(p))),
-        Pantalla::Sincronizar => con_lamina(p, Lamina::Hidra, crate::desplazable_pub(sincronizar(p))),
-        Pantalla::Integridad => con_lamina(p, Lamina::Minerva, crate::desplazable_pub(integridad(app, p))),
-        Pantalla::Actualizacion => con_lamina(p, Lamina::Saturno, crate::desplazable_pub(actualizacion(p))),
+        Pantalla::NoVerificados => con_lamina(
+            p,
+            Lamina::TorreReja,
+            crate::desplazable_pub(no_verificados(p)),
+        ),
+        Pantalla::Sincronizar => {
+            con_lamina(p, Lamina::Hidra, crate::desplazable_pub(sincronizar(p)))
+        }
+        Pantalla::Integridad => con_lamina(
+            p,
+            Lamina::Minerva,
+            crate::desplazable_pub(integridad(app, p)),
+        ),
+        Pantalla::Actualizacion => crate::actualizacion_real::vista(app),
         Pantalla::Cuenta => crate::desplazable_pub(crate::sesion::vista_cuenta(app)),
         Pantalla::Estudio => crate::sesion::vista_estudio(app),
-        Pantalla::Red => con_lamina(p, Lamina::HermesHilos, crate::desplazable_pub(red_privada(p))),
+        Pantalla::Red => con_lamina(
+            p,
+            Lamina::HermesHilos,
+            crate::desplazable_pub(red_privada(p)),
+        ),
     }
 }
 
@@ -926,106 +1230,305 @@ fn formulario<'a>(p: Paleta, titulo: &str, cuerpo: Element<'a, Mensaje>, pie: El
     container(container(column![container(cabeza).padding(Padding::from([espacio::S4, espacio::S6])), container(cuerpo).padding(Padding::from([espacio::S2, espacio::S6])).height(Length::Fill), container(Space::new(Length::Fill, 1)).style(icaro_ui::estilo::bloque(p.border)), container(pie).padding(Padding::from([espacio::S4, espacio::S6]))]).padding(2)).width(ancho).height(alto).style(icaro_ui::estilo::flotante(p)).into()
 }
 
+fn selector_version_completo<'a>(
+    app: &'a App,
+    tipo: usize,
+    busqueda: &'a str,
+    seleccion: &str,
+    cambio: bool,
+) -> Element<'a, Mensaje> {
+    let p = app.modo.paleta();
+    let versiones = crate::instancias_reales::versiones(app, tipo);
+    // Las tarjetas ya guardan el estado tras instalar. Leer y comprobar todos
+    // los archivos de Minecraft durante cada frame bloqueaba el selector.
+    let tarjetas = crate::instancias();
+    let instaladas: std::collections::BTreeSet<&str> = app.servicios.instancias.registros
+        .iter().zip(tarjetas.iter())
+        .filter(|(_, card)| matches!(card.estado,
+            icaro_ui::instancias::EstadoInstancia::Lista |
+            icaro_ui::instancias::EstadoInstancia::Jugando |
+            icaro_ui::instancias::EstadoInstancia::Desactualizada))
+        .map(|(instance, _)| instance.minecraft.as_str()).collect();
+    let total = versiones.len();
+    let consulta = busqueda.trim().to_lowercase();
+    let filtradas: Vec<_> = versiones
+        .into_iter()
+        .enumerate()
+        .filter(|(_, v)| consulta.is_empty() || v.0.to_lowercase().contains(&consulta))
+        .collect();
+    let cantidad = filtradas.len();
+    let offset = if cambio {
+        app.servicios.instancias.cambio_offset
+    } else {
+        app.servicios.instancias.version_offset
+    };
+    let first = ((offset / 36.0) as usize)
+        .saturating_sub(2)
+        .min(cantidad.saturating_sub(1));
+    let end = (first + 14).min(cantidad);
+    let mut rows = column![Space::with_height(first as f32 * 36.0)];
+    for (pos, (index, (version, fecha))) in filtradas
+        .into_iter()
+        .enumerate()
+        .skip(first)
+        .take(end - first)
+    {
+        let selected = version == seleccion;
+        let installed = instaladas.contains(version.as_str());
+        let badge = if tipo == 0 && index == 0 {
+            Some("Recomendada")
+        } else if installed {
+            Some("Instalada")
+        } else if tipo == 1 {
+            Some("Snapshot")
+        } else if tipo == 2 {
+            Some(if version.starts_with('a') {
+                "Alpha"
+            } else {
+                "Beta"
+            })
+        } else {
+            None
+        };
+        let color = if selected { p.bg } else { p.text };
+        let mut row = row![text(version)
+            .font(fuentes::MONO)
+            .size(texto::MONO.0)
+            .color(color)]
+        .spacing(espacio::S3)
+        .align_y(Alignment::Center);
+        if let Some(label) = badge {
+            row = row.push(
+                container(
+                    text(label.to_uppercase())
+                        .font(fuentes::TITULO)
+                        .size(texto::LABEL.0)
+                        .color(if selected { p.text } else { p.text }),
+                )
+                .padding([2., 6.])
+                .style(move |_| iced::widget::container::Style {
+                    background: selected.then_some(iced::Background::Color(p.bg)),
+                    border: iced::Border {
+                        color: if selected { p.bg } else { p.border },
+                        width: 1.,
+                        radius: 0.into(),
+                    },
+                    ..Default::default()
+                }),
+            );
+        }
+        row = row.push(Space::with_width(Length::Fill)).push(
+            text(fecha)
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .color(if selected { p.bg } else { p.text_muted }),
+        );
+        let _ = pos;
+        rows = rows.push(
+            iced::widget::button(container(row).center_y(Length::Fill))
+                .height(36)
+                .width(Length::Fill)
+                .padding([0., espacio::S3])
+                .on_press(m(if cambio {
+                    Accion::CambiarDestino(index)
+                } else {
+                    Accion::AsistenteVersion(index)
+                }))
+                .style(move |_, status| iced::widget::button::Style {
+                    background: (selected
+                        || matches!(status, iced::widget::button::Status::Hovered))
+                    .then_some(iced::Background::Color(if selected {
+                        p.text
+                    } else {
+                        p.surface_hover
+                    })),
+                    text_color: color,
+                    ..Default::default()
+                }),
+        );
+    }
+    rows = rows.push(Space::with_height((cantidad - end) as f32 * 36.0));
+    let lista = iced::widget::scrollable(rows)
+        .id(iced::widget::scrollable::Id::new(if cambio {
+            "version-cambio"
+        } else {
+            "version-asistente"
+        }))
+        .height(252)
+        .on_scroll(move |v| m(Accion::VersionScroll(cambio, v.absolute_offset().y)));
+    let filtros = row![
+        componentes::segmentado_compacto(
+            p,
+            &["Estables", "Snapshots", "Antiguas"],
+            tipo,
+            move |i| m(if cambio {
+                Accion::CambiarTipo(i)
+            } else {
+                Accion::AsistenteTipo(i)
+            })
+        ),
+        Space::with_width(Length::Fill),
+        container(componentes::campo_con_icono(
+            p,
+            Icono::Buscar,
+            "Buscar versión",
+            busqueda,
+            move |s| m(if cambio {
+                Accion::CambiarBuscar(s)
+            } else {
+                Accion::AsistenteBuscar(s)
+            })
+        ))
+        .width(240)
+    ]
+    .spacing(espacio::S3)
+    .align_y(Alignment::Center);
+    let status = if app.servicios.instancias.cargando {
+        "Obteniendo versiones de Minecraft…".into()
+    } else if let Some(e) = &app.servicios.instancias.error {
+        e.clone()
+    } else {
+        format!(
+            "{total} {} · manifiesto guardado en caché",
+            ["estables", "snapshots", "antiguas"][tipo.min(2)]
+        )
+    };
+    column![
+        filtros,
+        container(lista)
+            .padding(2)
+            .width(Length::Fill)
+            .style(icaro_ui::estilo::marco(p)),
+        text(status)
+            .font(fuentes::MONO)
+            .size(texto::MONO_SM.0)
+            .color(p.text_muted)
+    ]
+    .spacing(espacio::S4)
+    .into()
+}
+
+fn selector_loader_completo<'a>(
+    app: &'a App,
+    s: &Asistente,
+    minecraft: &str,
+) -> Element<'a, Mensaje> {
+    let p = app.modo.paleta();
+    let catalog = app.servicios.instancias.loaders.get(minecraft);
+    let tarjeta = |index: usize| -> Element<'a, Mensaje> {
+        let (nombre, ayuda, muestra) = LOADERS[index];
+        let versions = if app.servicios.demo {
+            if index == 4 {
+                vec![]
+            } else if index == 0 {
+                vec![]
+            } else {
+                vec![muestra.to_owned()]
+            }
+        } else {
+            catalog.map_or(vec![], |c| c.versiones[index].clone())
+        };
+        let error = catalog.and_then(|c| c.errores[index].as_ref());
+        let busy = app.servicios.instancias.cargando_loaders.as_deref() == Some(minecraft);
+        let disabled = index > 0 && versions.is_empty();
+        let selected = s.loader == index;
+        let ayuda = if disabled {
+            if busy {
+                "Comprobando versiones disponibles…".into()
+            } else if let Some(e) = error {
+                e.clone()
+            } else {
+                format!("Aún no disponible para {minecraft}.")
+            }
+        } else {
+            ayuda.to_owned()
+        };
+        let mut contenido = column![
+            text(nombre)
+                .font(fuentes::TITULO)
+                .size(texto::BODY.0 + 1.)
+                .color(if disabled { p.text_disabled } else { p.text }),
+            text(ayuda).size(texto::BODY_SM.0).color(p.text_muted)
+        ]
+        .spacing(espacio::S1)
+        .width(Length::Fill);
+        if selected && index > 0 && !disabled {
+            let version = app
+                .servicios
+                .instancias
+                .loader_elegida
+                .clone()
+                .filter(|v| versions.contains(v))
+                .or_else(|| versions.first().cloned());
+            let selector = iced::widget::pick_list(versions.clone(), version, |v| {
+                m(Accion::AsistenteLoaderVersion(v))
+            })
+            .font(fuentes::MONO)
+            .text_size(texto::MONO_SM.0)
+            .padding([4., 8.])
+            .style(icaro_ui::estilo::selector(p))
+            .menu_style(icaro_ui::estilo::menu_selector(p));
+            contenido = contenido.push(
+                row![etiqueta(p, "Versión"), selector]
+                    .spacing(espacio::S2)
+                    .align_y(Alignment::Center),
+            );
+        }
+        let version = if !selected && index > 0 {
+            versions.first().cloned().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let row = row![
+            componentes::rombo(p, selected, disabled),
+            contenido,
+            text(version)
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .color(p.text_muted)
+        ]
+        .spacing(espacio::S4)
+        .align_y(Alignment::Center);
+        let button = iced::widget::button(container(row).padding([espacio::S4, espacio::S5]))
+            .width(Length::Fill)
+            .padding(0)
+            .on_press_maybe((!disabled).then(|| m(Accion::AsistenteLoader(index))))
+            .style(icaro_ui::estilo::sin_estilo(p.text));
+        container(button)
+            .width(Length::Fill)
+            .style(icaro_ui::estilo::tarjeta(p, selected))
+            .into()
+    };
+    column![
+        row![tarjeta(0), tarjeta(1)].spacing(espacio::S3),
+        row![tarjeta(2), tarjeta(3)].spacing(espacio::S3),
+        tarjeta(4)
+    ]
+    .spacing(espacio::S3)
+    .into()
+}
+
 pub fn asistente<'a>(app: &'a App, s: &'a Asistente) -> Element<'a, Mensaje> {
     let p = app.modo.paleta();
     let versiones = crate::instancias_reales::versiones(app, s.tipo_version);
     let version = versiones.get(s.version).cloned().unwrap_or_default();
-    let selector_version = || -> Element<Mensaje> {            let consulta = s.busqueda.trim().to_lowercase();
-            let mut lista = column![].spacing(espacio::S1);
-            for (i, (v, fecha)) in versiones.iter().enumerate() {
-                if !consulta.is_empty() && !v.contains(&consulta) {
-                    continue;
-                }
-                let elegida = s.version == i;
-                lista = lista.push(
-                    iced::widget::button(
-                        container(
-                            row![
-                                text(v.clone()).font(fuentes::MONO).size(texto::MONO.0).color(if elegida { p.bg } else { p.text }).width(Length::Fill),
-                                text(fecha.clone()).font(fuentes::MONO).size(texto::MONO_SM.0).color(if elegida { p.bg } else { p.text_muted }),
-                            ]
-                            .align_y(Alignment::Center),
-                        )
-                        .center_y(Length::Fill),
-                    )
-                    .width(Length::Fill)
-                    .height(36)
-                    .padding(Padding::from([0.0, espacio::S3]))
-                    .on_press(m(Accion::AsistenteVersion(i)))
-                    .style(move |_, estado| iced::widget::button::Style {
-                        background: (elegida || matches!(estado, iced::widget::button::Status::Hovered))
-                            .then_some(iced::Background::Color(if elegida { p.text } else { p.surface_hover })),
-                        text_color: if elegida { p.bg } else { p.text },
-                        ..Default::default()
-                    }),
-                );
-            }
-            let aviso: Element<Mensaje> = if !app.servicios.demo && app.servicios.instancias.cargando {
-                text("Obteniendo versiones de Minecraft…").size(texto::BODY_SM.0).color(p.text_muted).into()
-            } else if !app.servicios.demo && app.servicios.instancias.error.is_some() {
-                text(app.servicios.instancias.error.clone().unwrap_or_default()).size(texto::BODY_SM.0).color(p.warning).into()
-            } else if s.tipo_version == 1 {
-                row![insignia(p, Estado::Aviso, "Beta"), text("Las snapshots pueden fallar y corromper mundos.").size(texto::BODY_SM.0).color(p.text_muted)]
-                    .spacing(espacio::S2)
-                    .align_y(Alignment::Center)
-                    .into()
-            } else {
-                text("La última estable viene elegida.").size(texto::BODY_SM.0).color(p.text_muted).into()
-            };
-            let lista: Element<Mensaje> = if app.servicios.demo {
-                lista.into()
-            } else {
-                container(crate::desplazable_pub(lista.into()))
-                    .height(36.0 * 5.0 + espacio::S1 * 4.0)
-                    .into()
-            };
-            column![
-                componentes::segmentado_compacto(p, &["Estables", "Snapshots", "Antiguas"], s.tipo_version, |i| m(Accion::AsistenteTipo(i))),
-                componentes::campo_con_icono(p, Icono::Buscar, "Buscar versión", &s.busqueda, |t| m(Accion::AsistenteBuscar(t))),
-                container(lista).padding(espacio::S2).width(Length::Fill).style(icaro_ui::estilo::marco(p)),
-                aviso,
-            ]
-            .spacing(espacio::S3)
-            .into()
-    };
-    let selector_loader = || -> Element<Mensaje> {            let mut tarjetas = column![].spacing(espacio::S2);
-            for (i, (nombre, ayuda, rec)) in LOADERS.iter().enumerate() {
-                let elegido = s.loader == i;
-                // Forge todavía no soporta las versiones más nuevas.
-                let bloqueado = app.servicios.demo && *nombre == "Forge" && s.tipo_version == 0 && s.version < 3;
-                let cuerpo = row![
-                    componentes::rombo(p, elegido, bloqueado),
-                    column![
-                        text((*nombre).to_owned()).font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(if bloqueado { p.text_disabled } else { p.text }),
-                        text(if bloqueado && !app.servicios.demo { "La instalación de este loader todavía está en preparación.".into() } else if bloqueado { format!("Aún no disponible para {}.", version.0) } else { (*ayuda).to_owned() })
-                            .size(texto::BODY_SM.0)
-                            .color(p.text_muted),
-                    ]
-                    .spacing(espacio::S1)
-                    .width(Length::Fill),
-                    text(if app.servicios.demo && !bloqueado { (*rec).to_owned() } else { String::new() }).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
-                ]
-                .spacing(espacio::S4)
-                .align_y(Alignment::Center);
-                let b = iced::widget::button(container(cuerpo).padding(Padding::from([espacio::S4, espacio::S5])))
-                    .width(Length::Fill)
-                    .padding(0)
-                    .on_press_maybe((!bloqueado).then(|| m(Accion::AsistenteLoader(i))))
-                    .style(icaro_ui::estilo::sin_estilo(p.text));
-                tarjetas = tarjetas.push(container(b).style(icaro_ui::estilo::tarjeta(p, elegido)));
-            }
-            tarjetas.into()
-    };
+    let selector_version =
+        || selector_version_completo(app, s.tipo_version, &s.busqueda, &version.0, false);
+    let selector_loader = || selector_loader_completo(app, s, &version.0);
     let cuerpo: Element<Mensaje> = match s.paso {
-        0 | 1 => row![container(selector_version()).width(280), container(selector_loader()).width(Length::Fill)].spacing(espacio::S8).into(),
+        0 => selector_version(),
+        1 => selector_loader(),
         2 => {
             let mut portadas = row![].spacing(espacio::S3);
             for (i, (nombre, lamina)) in PORTADAS.iter().enumerate() {
                 portadas = portadas.push(
                     iced::widget::button(
                         column![
-                            container(grabado(p, *lamina, Length::Fill, 70)).style(icaro_ui::estilo::marco(p)),
-                            text((*nombre).to_owned()).size(texto::BODY_SM.0).color(if s.portada == i { p.text } else { p.text_muted }),
+                            container(grabado(p, *lamina, Length::Fill, 70))
+                                .style(icaro_ui::estilo::marco(p)),
+                            text((*nombre).to_owned())
+                                .size(texto::BODY_SM.0)
+                                .color(if s.portada == i { p.text } else { p.text_muted }),
                         ]
                         .spacing(espacio::S1),
                     )
@@ -1037,7 +1540,9 @@ pub fn asistente<'a>(app: &'a App, s: &'a Asistente) -> Element<'a, Mensaje> {
             }
             column![
                 etiqueta(p, "Nombre de la instancia"),
-                componentes::campo(p, "Mi instancia", &s.nombre, |t| m(Accion::AsistenteNombre(t))),
+                componentes::campo(p, "Mi instancia", &s.nombre, |t| m(
+                    Accion::AsistenteNombre(t)
+                )),
                 etiqueta(p, "Portada"),
                 portadas,
             ]
@@ -1047,18 +1552,33 @@ pub fn asistente<'a>(app: &'a App, s: &'a Asistente) -> Element<'a, Mensaje> {
         _ => {
             let fila = |k: &str, v: String| -> Element<'a, Mensaje> {
                 row![
-                    text(k.to_owned()).size(texto::BODY.0).color(p.text_muted).width(160),
-                    text(v).font(fuentes::MONO).size(texto::MONO.0).color(p.text),
+                    text(k.to_owned())
+                        .size(texto::BODY.0)
+                        .color(p.text_muted)
+                        .width(160),
+                    text(v)
+                        .font(fuentes::MONO)
+                        .size(texto::MONO.0)
+                        .color(p.text),
                 ]
                 .into()
             };
             column![
-                fila("Nombre", if s.nombre.trim().is_empty() { "Nueva instancia".into() } else { s.nombre.trim().to_owned() }),
+                fila(
+                    "Nombre",
+                    if s.nombre.trim().is_empty() {
+                        "Nueva instancia".into()
+                    } else {
+                        s.nombre.trim().to_owned()
+                    }
+                ),
                 fila("Minecraft", version.0.to_owned()),
                 fila("Loader", LOADERS[s.loader].0.to_owned()),
                 fila("Java", "Automático".into()),
                 fila("Memoria", "2.048 a 6.144 MB".into()),
-                text("Todo esto se puede cambiar después desde el editor de la instancia.").size(texto::BODY_SM.0).color(p.text_muted),
+                text("Todo esto se puede cambiar después desde el editor de la instancia.")
+                    .size(texto::BODY_SM.0)
+                    .color(p.text_muted),
             ]
             .spacing(espacio::S3)
             .into()
@@ -1066,16 +1586,56 @@ pub fn asistente<'a>(app: &'a App, s: &'a Asistente) -> Element<'a, Mensaje> {
     };
     let cuerpo = column![cabecera_pasos(p, s.paso), cuerpo].spacing(espacio::S4);
     let ocupado = !app.servicios.demo && app.servicios.instancias.creando;
-    let mut acciones: Vec<Element<Mensaje>> = vec![container(componentes::boton(p, "Cancelar", Variante::Fantasma, (!ocupado).then(|| m(Accion::AsistenteCancelar)))).width(Length::Fill).into()];
+    let loader_disponible=app.servicios.demo||s.paso!=1||s.loader==0||app.servicios.instancias.loaders.get(&version.0).is_some_and(|l|!l.versiones[s.loader.min(4)].is_empty());
+    let mut acciones: Vec<Element<Mensaje>> = vec![container(componentes::boton(
+        p,
+        "Cancelar",
+        Variante::Fantasma,
+        (!ocupado).then(|| m(Accion::AsistenteCancelar)),
+    ))
+    .width(Length::Fill)
+    .into()];
     if s.paso > 0 {
-        acciones.push(componentes::boton_con_icono(p, Icono::Atras, "Atrás", Variante::Secundario, (!ocupado).then(|| m(Accion::AsistenteAtras)), false));
+        acciones.push(componentes::boton_con_icono(
+            p,
+            Icono::Atras,
+            "Atrás",
+            Variante::Secundario,
+            (!ocupado).then(|| m(Accion::AsistenteAtras)),
+            false,
+        ));
     }
     acciones.push(if s.paso == 3 {
-        componentes::boton(p, if ocupado { "Guardando instancia…" } else { "Crear instancia" }, Variante::Primario, (!ocupado).then(|| m(Accion::AsistenteCrear)))
+        componentes::boton(
+            p,
+            if ocupado {
+                "Guardando instancia…"
+            } else {
+                "Crear instancia"
+            },
+            Variante::Primario,
+            (!ocupado).then(|| m(Accion::AsistenteCrear)),
+        )
     } else {
-        componentes::boton_con_icono(p, Icono::Adelante, "Siguiente", Variante::Primario, (!ocupado && (app.servicios.demo || !version.0.is_empty())).then(|| m(Accion::AsistenteSiguiente)), false)
+        componentes::boton_con_icono(
+            p,
+            Icono::Adelante,
+            "Siguiente",
+            Variante::Primario,
+            (!ocupado && loader_disponible && (app.servicios.demo || !version.0.is_empty()))
+                .then(|| m(Accion::AsistenteSiguiente)),
+            false,
+        )
     });
-    formulario(p, "Crear instancia", crate::desplazable_pub(cuerpo.into()), row(acciones).spacing(espacio::S2).into(), 880.0, 610.0_f32.min(app.ventana.height - 48.), m(Accion::AsistenteCancelar))
+    formulario(
+        p,
+        "Crear instancia",
+        crate::desplazable_pub(cuerpo.into()),
+        row(acciones).spacing(espacio::S2).into(),
+        880.0,
+        610.0_f32.min(app.ventana.height - 48.),
+        m(Accion::AsistenteCancelar),
+    )
 }
 
 pub fn importar<'a>(app: &'a App, s: &'a Importar) -> Element<'a, Mensaje> {
@@ -1146,20 +1706,140 @@ pub fn importar<'a>(app: &'a App, s: &'a Importar) -> Element<'a, Mensaje> {
 }
 
 pub fn exportar<'a>(app: &'a App, s: &'a Exportar) -> Element<'a, Mensaje> {
-    let p=app.modo.paleta();
-    let size=|n:usize| s.medidas.as_ref().map_or("—".into(),|m| tam_exportado(m.bytes[n]));
-    let mut rows=column![row![iced::widget::checkbox("Mods y configuración",true).icon(componentes::icono_casilla()).size(20).style(icaro_ui::estilo::casilla(p)).width(Length::Fill),text(size(0)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted)].align_y(Alignment::Center)].spacing(12);
-    let worlds=s.medidas.as_ref().map_or("Mundos".into(),|m| format!("Mundos ({})",m.mundos));
-    let captures=s.medidas.as_ref().map_or("Capturas".into(),|m| format!("Capturas ({})",m.capturas));
-    for (n,label) in [worlds,"Opciones del juego y atajos".into(),captures,"Registros".into()].iter().enumerate() {
-        rows=rows.push(row![container(casilla(p,label,s.carpetas[n],move |_| m(Accion::ExportarCarpeta(n)))).width(Length::Fill),text(size(n+1)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted)].align_y(Alignment::Center));
+    let p = app.modo.paleta();
+    let size = |n: usize| {
+        s.medidas
+            .as_ref()
+            .map_or("—".into(), |m| tam_exportado(m.bytes[n]))
+    };
+    let mut rows = column![row![
+        iced::widget::checkbox("Mods y configuración", true)
+            .icon(componentes::icono_casilla())
+            .size(20)
+            .style(icaro_ui::estilo::casilla(p))
+            .width(Length::Fill),
+        text(size(0))
+            .font(fuentes::MONO)
+            .size(texto::MONO_SM.0)
+            .color(p.text_muted)
+    ]
+    .align_y(Alignment::Center)]
+    .spacing(12);
+    let worlds = s
+        .medidas
+        .as_ref()
+        .map_or("Mundos".into(), |m| format!("Mundos ({})", m.mundos));
+    let captures = s
+        .medidas
+        .as_ref()
+        .map_or("Capturas".into(), |m| format!("Capturas ({})", m.capturas));
+    for (n, label) in [
+        worlds,
+        "Opciones del juego y atajos".into(),
+        captures,
+        "Registros".into(),
+    ]
+    .iter()
+    .enumerate()
+    {
+        rows = rows.push(
+            row![
+                container(casilla(p, label, s.carpetas[n], move |_| m(
+                    Accion::ExportarCarpeta(n)
+                )))
+                .width(Length::Fill),
+                text(size(n + 1))
+                    .font(fuentes::MONO)
+                    .size(texto::MONO_SM.0)
+                    .color(p.text_muted)
+            ]
+            .align_y(Alignment::Center),
+        );
     }
-    let total=s.medidas.as_ref().map_or("Calculando…".into(),|m| tam_exportado(m.bytes[0]+s.carpetas.iter().enumerate().filter(|(_,b)| **b).map(|(n,_)| m.bytes[n+1]).sum::<u64>()));
-    let mut body=column![componentes::segmentado(p,&["Instancia .zip","Modpack .mrpack"],s.formato,|f| m(Accion::ExportarFormato(f))),rows,etiqueta(p,"Guardar en"),row![container(componentes::campo_con_icono(p,Icono::Carpeta,"Carpeta de destino",&s.destino,|p| m(Accion::ExportarDestino(p)))).width(Length::Fill),componentes::boton(p,"Cambiar",Variante::Secundario,(!s.guardando).then(|| m(Accion::ExportarCambiar)))].spacing(8).align_y(Alignment::Center)].spacing(20);
-    if s.formato==1 { body=body.push(text("La exportación .mrpack estará disponible cuando se pueda instalar Minecraft y su loader.").size(texto::BODY_SM.0).color(p.text_muted)); }
-    if let Some(e)=&s.error { body=body.push(text(e).size(texto::BODY_SM.0).color(p.warning)); }
-    let pie=row![text(format!("Tamaño estimado · {total}")).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(Length::Fill),componentes::boton(p,"Cancelar",Variante::Secundario,(!s.guardando).then(|| m(Accion::ExportarCancelar))),componentes::boton_con_icono(p,Icono::Subir,if s.guardando { "Exportando…" } else { "Exportar" },Variante::Primario,(!s.guardando && s.formato==0 && app.servicios.mods.busy.is_none()).then(|| m(Accion::ExportarConfirmar)),false)].spacing(8).align_y(Alignment::Center);
-    formulario(p,&format!("Exportar {}",s.nombre),body.into(),pie.into(),560.,if s.formato==1 || s.error.is_some() { 490. } else { 450. },m(Accion::ExportarCancelar))
+    let total = s.medidas.as_ref().map_or("Calculando…".into(), |m| {
+        tam_exportado(
+            m.bytes[0]
+                + s.carpetas
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| **b)
+                    .map(|(n, _)| m.bytes[n + 1])
+                    .sum::<u64>(),
+        )
+    });
+    let mut body = column![
+        componentes::segmentado(p, &["Instancia .zip", "Modpack .mrpack"], s.formato, |f| m(
+            Accion::ExportarFormato(f)
+        )),
+        rows,
+        etiqueta(p, "Guardar en"),
+        row![
+            container(componentes::campo_con_icono(
+                p,
+                Icono::Carpeta,
+                "Carpeta de destino",
+                &s.destino,
+                |p| m(Accion::ExportarDestino(p))
+            ))
+            .width(Length::Fill),
+            componentes::boton(
+                p,
+                "Cambiar",
+                Variante::Secundario,
+                (!s.guardando).then(|| m(Accion::ExportarCambiar))
+            )
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+    ]
+    .spacing(20);
+    if s.formato == 1 {
+        body=body.push(text("La exportación .mrpack estará disponible cuando se pueda instalar Minecraft y su loader.").size(texto::BODY_SM.0).color(p.text_muted));
+    }
+    if let Some(e) = &s.error {
+        body = body.push(text(e).size(texto::BODY_SM.0).color(p.warning));
+    }
+    let pie = row![
+        text(format!("Tamaño estimado · {total}"))
+            .font(fuentes::MONO)
+            .size(texto::MONO_SM.0)
+            .color(p.text_muted)
+            .width(Length::Fill),
+        componentes::boton(
+            p,
+            "Cancelar",
+            Variante::Secundario,
+            (!s.guardando).then(|| m(Accion::ExportarCancelar))
+        ),
+        componentes::boton_con_icono(
+            p,
+            Icono::Subir,
+            if s.guardando {
+                "Exportando…"
+            } else {
+                "Exportar"
+            },
+            Variante::Primario,
+            (!s.guardando && s.formato == 0 && app.servicios.mods.busy.is_none())
+                .then(|| m(Accion::ExportarConfirmar)),
+            false
+        )
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+    formulario(
+        p,
+        &format!("Exportar {}", s.nombre),
+        body.into(),
+        pie.into(),
+        560.,
+        if s.formato == 1 || s.error.is_some() {
+            490.
+        } else {
+            450.
+        },
+        m(Accion::ExportarCancelar),
+    )
 }
 fn tam_exportado(n:u64) -> String {
     if n>=1_073_741_824 { format!("{:.1} GB",n as f64/1_073_741_824.) } else if n>=1_048_576 { format!("{:.1} MB",n as f64/1_048_576.) } else { format!("{} KB",n.div_ceil(1024)) }
@@ -1367,43 +2047,110 @@ fn no_verificados<'a>(p: Paleta) -> Element<'a, Mensaje> {
 }
 
 fn sincronizar<'a>(p: Paleta) -> Element<'a, Mensaje> {
-    let fila = |signo: &str, tono: iced::Color, nombre: &str, accion: &str, version: &str, tam: &str| {
-        column![
-            row![
-                container(text(signo.to_owned()).font(fuentes::MONO).size(texto::MONO.0).color(tono))
+    let fila =
+        |signo: &str, tono: iced::Color, nombre: &str, accion: &str, version: &str, tam: &str| {
+            column![
+                row![
+                    container(
+                        text(signo.to_owned())
+                            .font(fuentes::MONO)
+                            .size(texto::MONO.0)
+                            .color(tono)
+                    )
                     .padding(Padding::from([espacio::S1, espacio::S2]))
-                    .style(move |_: &iced::Theme| iced::widget::container::Style {
-                        border: iced::Border { color: tono, width: 2.0, radius: 0.0.into() },
-                        ..Default::default()
+                    .style(move |_: &iced::Theme| {
+                        iced::widget::container::Style {
+                            border: iced::Border {
+                                color: tono,
+                                width: 2.0,
+                                radius: 0.0.into(),
+                            },
+                            ..Default::default()
+                        }
                     }),
-                column![
-                    text(nombre.to_owned()).font(fuentes::TITULO).size(texto::BODY.0).color(p.text),
-                    text(accion.to_owned()).size(texto::BODY_SM.0).color(p.text_muted),
+                    column![
+                        text(nombre.to_owned())
+                            .font(fuentes::TITULO)
+                            .size(texto::BODY.0)
+                            .color(p.text),
+                        text(accion.to_owned())
+                            .size(texto::BODY_SM.0)
+                            .color(p.text_muted),
+                    ]
+                    .spacing(espacio::S1)
+                    .width(Length::Fill),
+                    text(version.to_owned())
+                        .font(fuentes::MONO)
+                        .size(texto::MONO_SM.0)
+                        .color(p.text_muted),
+                    text(tam.to_owned())
+                        .font(fuentes::MONO)
+                        .size(texto::MONO_SM.0)
+                        .color(p.text_muted)
+                        .width(70),
                 ]
-                .spacing(espacio::S1)
-                .width(Length::Fill),
-                text(version.to_owned()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
-                text(tam.to_owned()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(70),
+                .spacing(espacio::S3)
+                .align_y(Alignment::Center),
+                regla(p),
             ]
-            .spacing(espacio::S3)
-            .align_y(Alignment::Center),
-            regla(p),
-        ]
-        .spacing(espacio::S2)
-    };
+            .spacing(espacio::S2)
+        };
     let derecha = column![
-        text("SINCRONIZAR\nCON AMIGOS").font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
-        text("3 por agregar · 2 por actualizar · 1 por quitar · 412 MB por descargar").size(texto::BODY_SM.0).color(p.text_muted),
+        text("SINCRONIZAR\nCON AMIGOS")
+            .font(fuentes::DISPLAY)
+            .size(texto::DISPLAY.0)
+            .color(p.text),
+        text("3 por agregar · 2 por actualizar · 1 por quitar · 412 MB por descargar")
+            .size(texto::BODY_SM.0)
+            .color(p.text_muted),
         regla(p),
         fila("+", p.success, "Create", "Agregar", "0.5.1j", "18,2 MB"),
-        fila("+", p.success, "Farmer's Delight", "Agregar", "1.2.6", "3,1 MB"),
-        fila("~", p.info, "Lithium", "Actualizar", "0.14.3 → 0.14.5", "720 KB"),
-        fila("−", p.error, "Better Combat", "Quitar: el servidor ya no lo usa", "1.8.6", ""),
-        text("Se mantienen 4 mods solo de cliente: Sodium, Iris, Xaero's Minimap, Mod Menu.").size(texto::BODY_SM.0).color(p.text_muted),
+        fila(
+            "+",
+            p.success,
+            "Farmer's Delight",
+            "Agregar",
+            "1.2.6",
+            "3,1 MB"
+        ),
+        fila(
+            "~",
+            p.info,
+            "Lithium",
+            "Actualizar",
+            "0.14.3 → 0.14.5",
+            "720 KB"
+        ),
+        fila(
+            "−",
+            p.error,
+            "Better Combat",
+            "Quitar: el servidor ya no lo usa",
+            "1.8.6",
+            ""
+        ),
+        text("Se mantienen 4 mods solo de cliente: Sodium, Iris, Xaero's Minimap, Mod Menu.")
+            .size(texto::BODY_SM.0)
+            .color(p.text_muted),
         row![
-            componentes::boton(p, "Sincronizar y jugar", Variante::Primario, Some(m(Accion::Cerrar))),
-            componentes::boton(p, "Solo sincronizar", Variante::Secundario, Some(m(Accion::Cerrar))),
-            componentes::boton(p, "Jugar sin sincronizar", Variante::Fantasma, Some(m(Accion::Cerrar))),
+            componentes::boton(
+                p,
+                "Sincronizar y jugar",
+                Variante::Primario,
+                Some(m(Accion::Cerrar))
+            ),
+            componentes::boton(
+                p,
+                "Solo sincronizar",
+                Variante::Secundario,
+                Some(m(Accion::Cerrar))
+            ),
+            componentes::boton(
+                p,
+                "Jugar sin sincronizar",
+                Variante::Fantasma,
+                Some(m(Accion::Cerrar))
+            ),
         ]
         .spacing(espacio::S3),
     ]
@@ -1473,81 +2220,182 @@ fn integridad<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
     col.into()
 }
 
-fn actualizacion<'a>(p: Paleta) -> Element<'a, Mensaje> {
-    let nota = |tono: Estado, etiqueta_: &str, texto_: &str| -> Element<'a, Mensaje> {
-        row![
-            container(insignia(p, tono, etiqueta_)).width(140),
-            text(texto_.to_owned()).size(texto::BODY_SM.0).color(p.text),
-        ]
-        .spacing(espacio::S3)
-        .align_y(Alignment::Center)
-        .into()
-    };
-    column![
-        text("ÍCARO 1.3").font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
-        text("Tienes 1.2.4 · descarga de 14,2 MB").font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
-        nota(Estado::Exito, "Nuevo", "Sincroniza mods con un servidor antes de unirte."),
-        nota(Estado::Exito, "Nuevo", "Estudio de skin con vista de frente y de espalda."),
-        nota(Estado::Info, "Mejora", "La consola maneja 200.000 líneas sin trabarse."),
-        nota(Estado::Aviso, "Corrección", "Las descargas pausadas ya no se reinician al abrir."),
-        row![
-            componentes::boton(p, "Actualizar ahora", Variante::Primario, Some(m(Accion::Cerrar))),
-            componentes::boton(p, "Al cerrar el juego", Variante::Secundario, Some(m(Accion::Cerrar))),
-            componentes::boton(p, "Más tarde", Variante::Fantasma, Some(m(Accion::Cerrar))),
-        ]
-        .spacing(espacio::S3),
-    ]
-    .spacing(espacio::S4)
-    .into()
-}
-
 /// Diálogo para cambiar la versión de una instancia, con aviso de riesgo.
 pub fn cambiar_version<'a>(app: &'a App, i: usize) -> Element<'a, Mensaje> {
     let p = app.modo.paleta();
-    let d = &instancias()[i];
-    let cuerpo = column![
+    let Some(c) = app.servicios.instancias.cambio.as_ref() else {
+        return Space::new(0, 0).into();
+    };
+    let Some(record) = app
+        .servicios
+        .instancias
+        .registros
+        .iter()
+        .find(|r| r.id == c.instancia)
+    else {
+        return Space::new(0, 0).into();
+    };
+    let occupied = app.servicios.instancias.operando;
+    if !c.confirmando || c.revision.is_none() {
+        return selector_cambio::vista(app);
+    }
+    let revision = c.revision.as_ref().unwrap();
+    let down = icaro_core::versiones_instancia::baja(
+        &app.servicios.instancias.versiones,
+        &record.minecraft,
+        &c.destino,
+    );
+    let mods = revision.desactivar.len();
+    let risk = if down {
+        p.error
+    } else if mods > 0 {
+        p.warning
+    } else {
+        p.info
+    };
+    let soft = if down {
+        p.error_soft
+    } else if mods > 0 {
+        p.warning_soft
+    } else {
+        p.info_soft
+    };
+    let heading = if down {
+        "Bajar de versión puede dañar tus mundos"
+    } else if mods > 0 {
+        "Algunos mods se desactivarán"
+    } else {
+        "Cambiar versión de Minecraft"
+    };
+    let mut detail = if down {
+        format!(
+            "{} mundos pueden haberse abierto en {}. Minecraft no garantiza que funcionen en {}.",
+            revision.mundos, record.minecraft, c.destino
+        )
+    } else {
+        format!("La instancia usará Minecraft {}. Tus archivos se conservarán y el juego se preparará al instalarlo.",c.destino)
+    };
+    if mods > 0 {
+        detail.push_str(&format!(
+            " {mods} mods instalados no declaran compatibilidad con {} y se desactivarán: {}.",
+            c.destino,
+            revision.nombres.join(", ")
+        ));
+    }
+    let current = format!(
+        "{} · {}",
+        record.minecraft,
+        crate::ficha::loader(&record.loader)
+    );
+    let target = format!("{} · {}", c.destino, crate::ficha::loader(&revision.loader));
+    let mut body = column![
         row![
-            column![etiqueta(p, "Ahora"), text(d.version.clone()).font(fuentes::MONO).size(texto::MONO.0).color(p.text)].spacing(espacio::S1).width(Length::Fill),
-            icono(Icono::ChevronDerecha, Tam::Base, p.text_muted),
-            column![etiqueta(p, "Después"), text("1.20.1 · Fabric").font(fuentes::MONO).size(texto::MONO.0).color(p.text)].spacing(espacio::S1).width(Length::Fill),
+            column![
+                etiqueta(p, "Ahora"),
+                text(current)
+                    .font(fuentes::MONO)
+                    .size(texto::MONO.0)
+                    .color(p.text)
+            ]
+            .spacing(espacio::S1),
+            icono(Icono::Adelante, Tam::Base, p.text_muted),
+            column![
+                etiqueta(p, "Después"),
+                text(target)
+                    .font(fuentes::MONO)
+                    .size(texto::MONO.0)
+                    .color(p.text)
+            ]
+            .spacing(espacio::S1)
         ]
+        .spacing(espacio::S4)
         .align_y(Alignment::Center),
         container(
             row![
-                icono(Icono::Alerta, Tam::Base, p.error),
+                icono(Icono::Alerta, Tam::Base, risk),
                 column![
-                    text("Bajar de versión puede dañar tus mundos").font(fuentes::TITULO).size(texto::BODY.0).color(p.text),
-                    text("Los 3 mundos se crearon en 1.21.4. Minecraft no garantiza que funcionen en 1.20.1, y el mod de este tamaño no se puede desactivar.")
-                        .size(texto::BODY_SM.0)
-                        .color(p.text_muted),
+                    text(heading)
+                        .font(fuentes::TITULO)
+                        .size(texto::BODY.0)
+                        .color(p.text),
+                    text(detail).size(texto::BODY_SM.0).color(p.text_muted)
                 ]
-                .spacing(espacio::S1),
+                .spacing(espacio::S1)
             ]
-            .spacing(espacio::S3),
+            .spacing(espacio::S3)
         )
         .padding(espacio::S4)
-        .style(move |_: &iced::Theme| iced::widget::container::Style {
-            background: Some(iced::Background::Color(p.error_soft)),
-            border: iced::Border { color: p.error, width: 2.0, radius: 0.0.into() },
+        .style(move |_| iced::widget::container::Style {
+            background: Some(iced::Background::Color(soft)),
+            border: iced::Border {
+                color: risk,
+                width: 2.,
+                radius: 0.into()
+            },
             ..Default::default()
         }),
-        casilla(p, "Hacer copia de seguridad de los mundos (obligatorio)", true, |_| Mensaje::Nada),
+        if down {
+            iced::widget::checkbox("Hacer copia de seguridad de los mundos antes (obligatorio)", true)
+                .icon(componentes::icono_casilla()).font(fuentes::CUERPO)
+                .size(20).text_size(texto::BODY.0).spacing(espacio::S2)
+                .style(icaro_ui::estilo::casilla(p)).into()
+        } else {
+            casilla(p, "Hacer copia de seguridad de la instancia antes", c.respaldo,
+                |b| m(Accion::CambiarRespaldo(b)))
+        },
     ]
     .spacing(espacio::S4);
-    icaro_ui::superficies::dialogo(
-        p,
-        "Cambiar versión",
-        cuerpo.into(),
-        vec![
-            componentes::boton(p, "Crear una copia en su lugar", Variante::Fantasma, Some(m(Accion::Duplicar(i)))),
-            componentes::boton(p, "Cancelar", Variante::Secundario, Some(m(Accion::CambiarCancelar))),
-            componentes::boton(p, "Cambiar a 1.20.1", Variante::Peligro, Some(m(Accion::CambiarConfirmar(i)))),
-        ],
-        Some(Lamina::CaidaDeFaeton),
-        640.0,
-        420.0,
-        m(Accion::CambiarCancelar),
-    )
+    if let Some(e) = &c.error {
+        body = body.push(text(e).size(texto::BODY_SM.0).color(p.error));
+    }
+    let label = if occupied {
+        "Guardando…".into()
+    } else {
+        format!("Cambiar a {}", c.destino)
+    };
+    let enabled = !occupied && (!down || c.respaldo);
+    let pie = row![
+            componentes::boton_con_icono(
+                p,
+                Icono::Rama,
+                "Crear una copia en su lugar",
+                Variante::Fantasma,
+                (!occupied).then(|| m(Accion::CambiarCopia)),
+                false,
+            ),
+            Space::with_width(Length::Fill),
+            column![componentes::boton(
+                p,
+                "Cancelar",
+                Variante::Secundario,
+                (!occupied).then(|| m(Accion::CambiarCancelar)),
+            ),
+            componentes::boton(
+                p,
+                &label,
+                if down {
+                    Variante::Peligro
+                } else {
+                    Variante::Primario
+                },
+                enabled.then(|| m(Accion::CambiarConfirmar(i))),
+            )].spacing(espacio::S2).align_x(Alignment::End),
+        ].spacing(espacio::S2).align_y(Alignment::Center);
+    let derecha = column![
+        container(text("Cambiar versión").font(fuentes::TITULO).size(26).color(p.text))
+            .padding([espacio::S4, espacio::S6]),
+        container(crate::desplazable_pub(body.into()))
+            .padding([espacio::S2, espacio::S6]).height(Length::Fill),
+        regla(p),
+        container(pie).padding([espacio::S4, espacio::S6]),
+    ].width(Length::Fill).height(Length::Fill);
+    container(row![
+        icaro_ui::laminas::grabado_posicion(p, Lamina::CaidaDeFaeton, 200, Length::Fill, (0.6, 0.4)),
+        container(Space::new(2, Length::Fill)).style(icaro_ui::estilo::bloque(p.text)),
+        derecha,
+    ])
+    .padding(2).width(820).height(440)
+    .style(icaro_ui::estilo::flotante(p)).into()
 }
 
 // ------------------------------------------------- red privada

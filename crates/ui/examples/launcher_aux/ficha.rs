@@ -7,13 +7,13 @@ use crate::catalogo::texto_publico as text;
 use crate::{catalogo, servicios::Accion, App, Mensaje};
 use icaro_core::{
     auth::CancellationToken,
-    modrinth::{Kind, Member, Organization, Project, Search, Version},
+    modrinth::{Kind, Member, Organization, Project, RelatedProject, Search, Version},
 };
 use icaro_ui::{
     componentes::{self, Variante},
     fuentes,
     iconos::Icono,
-    tema::{espacio, texto, Paleta},
+    tema::{espacio, texto},
 };
 use iced::{
     widget::{button, column, container, keyed_column, row, Space},
@@ -47,7 +47,11 @@ impl Pestana {
 pub struct Estado {
     pub tab: Pestana,
     pub galeria: usize,
-    pub compatibilidad_ampliada: bool,
+    pub info_snapshots: bool,
+    pub mostrar_todas: bool,
+    pub relacionados: Vec<RelatedProject>,
+    pub relacionados_busy: bool,
+    pub relacionados_error: Option<String>,
     pub miembros: Vec<Member>,
     pub miembros_busy: bool,
     pub miembros_error: Option<String>,
@@ -81,7 +85,11 @@ impl Default for Estado {
         Self {
             tab: Pestana::Descripcion,
             galeria: 0,
-            compatibilidad_ampliada: false,
+            info_snapshots: false,
+            mostrar_todas: false,
+            relacionados: vec![],
+            relacionados_busy: false,
+            relacionados_error: None,
             miembros: Vec::new(),
             miembros_busy: false,
             miembros_error: None,
@@ -225,6 +233,8 @@ pub fn loader(value: &str) -> String {
         "neoforge" => "NeoForge".into(),
         "quilt" => "Quilt".into(),
         "minecraft" => "Minecraft".into(),
+        "iris" => "Iris".into(),
+        "optifine" => "OptiFine".into(),
         _ => value.to_owned(),
     }
 }
@@ -249,252 +259,30 @@ fn canal(value: &str) -> &str {
 fn m(action: Accion) -> Mensaje {
     Mensaje::Servicio(action)
 }
-fn enlace<'a>(p: Paleta, titulo: &str, url: &str) -> Element<'a, Mensaje> {
-    componentes::boton_con_icono(
-        p,
-        Icono::Externo,
-        titulo,
-        Variante::Fantasma,
-        Some(m(Accion::Enlace(url.into()))),
-        false,
-    )
-}
-fn compatibilidad<'a>(p: Paleta, project: &Project, ampliada: bool) -> Element<'a, Mensaje> {
-    let juegos = row(project
-        .game_versions
-        .iter()
-        .rev()
-        .take(if ampliada { usize::MAX } else { 12 })
-        .map(|v| componentes::insignia_contorno(p, v))
-        .collect::<Vec<_>>())
-    .spacing(espacio::S2)
-    .wrap();
-    let loaders = row(project
-        .loaders
-        .iter()
-        .map(|v| componentes::insignia_contorno(p, &loader(v)))
-        .collect::<Vec<_>>())
-    .spacing(espacio::S2)
-    .wrap();
-    let mut body = column![
-        text("Minecraft").color(p.text_muted),
-        juegos,
-        text("Loaders").color(p.text_muted),
-        loaders
-    ]
-    .spacing(espacio::S2);
-    if project.game_versions.len() > 12 {
-        body = body.push(componentes::boton_compacto(
-            p,
-            if ampliada {
-                "Ver menos"
-            } else {
-                "Ver todas las versiones"
-            },
-            Variante::Secundario,
-            Some(m(Accion::CompatibilidadAmpliada)),
-        ));
-    }
-    body.into()
-}
 fn lateral<'a>(app: &'a App, project: &'a Project) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
-    let s = &app.servicios.ficha;
-    let mut miembros = column![].spacing(espacio::S3);
-    if let Some(org) = &s.organizacion {
-        miembros = miembros.push(
-            column![
-                text(&org.name).font(fuentes::TITULO).color(p.text),
-                text("Organización propietaria")
-                    .size(13)
-                    .color(p.text_muted),
-                enlace(
-                    p,
-                    "Ver organización",
-                    &format!("https://modrinth.com/organization/{}", org.id)
-                )
-            ]
-            .spacing(espacio::S1),
-        );
-    } else if s.organizacion_busy {
-        miembros = miembros.push(text("Cargando organización…").color(p.text_muted));
-    } else if let Some(error) = &s.organizacion_error {
-        miembros = miembros
-            .push(text(error).color(p.warning))
-            .push(componentes::boton(
-                p,
-                "Reintentar creadores",
-                Variante::Secundario,
-                Some(m(Accion::CargarMiembros)),
-            ));
-    }
-    if s.miembros_busy {
-        miembros = miembros.push(text("Cargando creadores…").color(p.text_muted));
-    }
-    if let Some(error) = &s.miembros_error {
-        miembros = miembros
-            .push(text(error).color(p.warning))
-            .push(componentes::boton(
-                p,
-                "Reintentar",
-                Variante::Secundario,
-                Some(m(Accion::CargarMiembros)),
-            ));
-    } else if !s.miembros_busy && s.miembros.is_empty() {
-        miembros = miembros.push(text("Sin creadores publicados.").color(p.text_muted));
-    }
-    for member in &s.miembros {
-        miembros = miembros.push(
-            column![
-                row![
-                    app.servicios
-                        .images
-                        .vista(p, member.user.avatar_url.as_deref(), 40.),
-                    text(member.user.name.as_deref().unwrap_or(&member.user.username))
-                        .font(fuentes::TITULO)
-                        .color(p.text)
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
-                text(
-                    if member.is_owner && member.role.eq_ignore_ascii_case("owner") {
-                        "Propietario".into()
-                    } else if member.is_owner {
-                        format!("Propietario · {}", member.role)
-                    } else if member.role.eq_ignore_ascii_case("member") {
-                        "Miembro".into()
-                    } else {
-                        member.role.clone()
-                    }
-                )
-                .size(13)
-                .color(p.text_muted),
-                enlace(
-                    p,
-                    "Ver perfil",
-                    &format!("https://modrinth.com/user/{}", member.user.id)
-                ),
-            ]
-            .spacing(espacio::S1),
-        );
-    }
-    let mut enlaces = column![enlace(
-        p,
-        "Ver en Modrinth",
-        &format!("https://modrinth.com/project/{}", project.id)
-    )]
-    .spacing(espacio::S2);
-    for (label, url) in [
-        ("Reportar problemas", &project.issues_url),
-        ("Código fuente", &project.source_url),
-        ("Wiki", &project.wiki_url),
-        ("Discord", &project.discord_url),
-    ] {
-        if let Some(url) = url {
-            enlaces = enlaces.push(enlace(p, label, url));
+    column![crate::info_proyecto::vista(app, project, 287.),crate::info_proyecto::mas_creador(app)].spacing(28).width(Length::Fill).into()
+}
+fn filtros<'a>(app: &'a App, project: &Project) -> Element<'a, Mensaje> {
+    let p=app.modo.paleta(); let s=&app.servicios.ficha;
+    let bound=app.editor.is_some() && !s.mostrar_todas;
+    let (mc,current_loader)=if app.editor.is_some() {crate::mods_reales::instancia(app).map(|i|(i.minecraft.clone(),i.loader.clone())).unwrap_or_else(||crate::juego_de_instancia(app))}else{(s.minecraft.clone(),s.loader.clone())};
+    let mut games=if bound {vec![mc.clone()]} else {vec!["Todas las versiones".to_owned()]};
+    if !bound {games.extend(project.game_versions.iter().rev().cloned());}
+    let game=if bound {mc} else {s.minecraft.clone()};
+    if !games.contains(&game){games.push(game.clone());}
+    let mut loaders=row![].spacing(6);
+    if !matches!(project.project_type.as_str(),"resourcepack"|"shader") {
+        for id in ["fabric","quilt","neoforge","forge"] {
+            if project.loaders.iter().any(|l|l==id) {
+                let selected=if bound {current_loader.eq_ignore_ascii_case(id)} else {s.loader.eq_ignore_ascii_case(id)};
+                loaders=loaders.push(componentes::boton_compacto(p,&loader(id),if selected{Variante::Primario}else{Variante::Secundario},(!bound).then(||m(Accion::VersionLoader(loader(id))))));
+            }
         }
     }
-    for donation in project.donation_urls.iter().flatten() {
-        enlaces = enlaces.push(enlace(
-            p,
-            &format!("Donar · {}", donation.platform),
-            &donation.url,
-        ));
-    }
-    let lado = |value: &str| match value {
-        "required" => "Requerido",
-        "optional" => "Opcional",
-        "unsupported" => "No compatible",
-        _ => "No especificado",
-    };
-    let mut detalles = column![].spacing(10);
-    for (label, value) in [
-        ("Descargas", catalogo::numero(project.downloads)),
-        ("Seguidores", catalogo::numero(project.followers)),
-        ("Licencia", project.license.name.clone()),
-        ("Publicado", fecha(&project.published)),
-        ("Actualizado", fecha(&project.updated)),
-        ("Cliente", lado(&project.client_side).into()),
-        ("Servidor", lado(&project.server_side).into()),
-    ] {
-        detalles = detalles.push(
-            row![
-                text(label)
-                    .size(texto::BODY_SM.0)
-                    .color(p.text_muted)
-                    .width(90),
-                text(value)
-                    .font(fuentes::MONO)
-                    .size(texto::MONO_SM.0)
-                    .color(p.text)
-                    .width(Length::Fill)
-            ]
-            .spacing(8),
-        );
-    }
-    let bloques = column![
-        componentes::etiqueta(p, "Funciona en"),
-        compatibilidad(p, project, s.compatibilidad_ampliada),
-        detalles,
-        crate::diseno_mods::regla(p),
-        componentes::etiqueta(p, "Creador"),
-        miembros,
-        crate::diseno_mods::regla(p),
-        enlaces,
-    ]
-    .spacing(espacio::S4)
-    .width(Length::Fill);
-    bloques.into()
-}
-
-fn filtros<'a>(app: &'a App, project: &Project) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
-    let s = &app.servicios.ficha;
-    if app.editor.is_some() {
-        let (mc, loader) = crate::juego_de_instancia(app);
-        return row![
-            text(format!("Minecraft {mc}")).color(p.text_muted),
-            catalogo::insignia_loader(p, &loader),
-            componentes::casilla(p, "Mostrar betas y alphas", s.pruebas, |b| m(
-                Accion::VersionPruebas(b)
-            ))
-        ]
-        .spacing(espacio::S3)
-        .wrap()
-        .into();
-    }
-    let mut juegos = vec!["Todas las versiones".to_owned()];
-    juegos.extend(project.game_versions.iter().rev().cloned());
-    if !juegos.contains(&s.minecraft) {
-        juegos.push(s.minecraft.clone());
-    }
-    let mut loaders = vec!["Todos los loaders".to_owned()];
-    loaders.extend(project.loaders.iter().map(|l| loader(l)));
-    if !loaders.contains(&s.loader) {
-        loaders.push(s.loader.clone());
-    }
-    row![
-        column![
-            text("Minecraft").color(p.text_muted),
-            componentes::selector(p, juegos, Some(s.minecraft.clone()), |v| m(
-                Accion::VersionMinecraft(v)
-            ))
-        ]
-        .spacing(espacio::S2),
-        column![
-            text("Loader").color(p.text_muted),
-            componentes::selector(p, loaders, Some(s.loader.clone()), |v| m(
-                Accion::VersionLoader(v)
-            ))
-        ]
-        .spacing(espacio::S2),
-        componentes::casilla(p, "Mostrar betas y alphas", s.pruebas, |b| m(
-            Accion::VersionPruebas(b)
-        )),
-    ]
-    .spacing(espacio::S3)
-    .wrap()
-    .into()
+    let filters=row![container(componentes::selector(p,games,Some(game),|v|m(Accion::VersionMinecraft(v)))).width(170),loaders.wrap(),Space::with_width(Length::Fill),componentes::casilla(p,"Mostrar beta y alpha",s.pruebas,|b|m(Accion::VersionPruebas(b)))].spacing(12).align_y(iced::Alignment::Center).wrap();
+    let mut body=column![filters].spacing(16);
+    if app.editor.is_some() { body=body.push(componentes::boton_compacto(p,if s.mostrar_todas{"Filtrar para mi instancia"}else{"Mostrar todas"},Variante::Fantasma,Some(m(Accion::MostrarTodas(!s.mostrar_todas))))); }
+    body.into()
 }
 fn versiones<'a>(app: &'a App, project: &Project, versions: &'a [Version]) -> Element<'a, Mensaje> {
     versiones_tabla(app, project, versions)
@@ -507,22 +295,20 @@ fn versiones_tabla<'a>(
     let p = app.modo.paleta();
     let s = &app.servicios.ficha;
     let visible = s.visibles(versions);
+    let cabecera = |label: &str| text(label.to_uppercase()).font(fuentes::ETIQUETA)
+        .size(texto::LABEL.0).color(p.text_muted).wrapping(iced::widget::text::Wrapping::None);
     let headings = row![
-        container(componentes::etiqueta(p, "Versión")).width(Length::FillPortion(4)),
-        container(componentes::etiqueta(p, "Minecraft")).width(Length::FillPortion(2)),
-        container(componentes::etiqueta(p, "Loader")).width(Length::FillPortion(2)),
-        container(componentes::etiqueta(p, "Fecha")).width(Length::FillPortion(2)),
-        container(componentes::etiqueta(p, "Descargas")).width(Length::FillPortion(2)),
+        container(cabecera("Versión")).width(Length::FillPortion(11)),
+        container(cabecera("Minecraft")).width(Length::FillPortion(6)),
+        container(cabecera("Loader")).width(Length::FillPortion(4)),
+        container(cabecera("Fecha")).width(Length::FillPortion(7)),
+        container(cabecera("Descargas")).width(Length::FillPortion(6)),
         Space::with_width(128)
     ]
-    .spacing(12)
+    .spacing(8)
     .padding(8);
-    let mut body = column![
-        filtros(app, project),
-        headings,
-        crate::diseno_mods::regla(p)
-    ]
-    .spacing(12);
+    let mut body = column![filtros(app, project)].spacing(12);
+    let mut tabla = column![headings,crate::diseno_mods::regla(p)].spacing(0);
     if s.versiones_busy {
         return body
             .push(text("Obteniendo versiones…").color(p.text_muted))
@@ -539,13 +325,12 @@ fn versiones_tabla<'a>(
             ))
             .into();
     }
-    for (index, v) in visible
+    for v in visible
         .iter()
         .skip(s.pagina * PAGE_SIZE)
         .take(PAGE_SIZE)
-        .enumerate()
     {
-        let instance = app.editor == Some(2) && index == 0 && s.pagina == 0;
+        let instance=crate::mods_reales::instancia(app).is_some_and(|i|v.game_versions.contains(&i.minecraft)&&(matches!(project.project_type.as_str(),"resourcepack"|"shader")||v.loaders.contains(&i.loader)));
         let mut version = column![button(
             text(&v.version_number)
                 .font(fuentes::MONO)
@@ -566,12 +351,16 @@ fn versiones_tabla<'a>(
         if v.version_type != "release" {
             version = version.push(componentes::insignia(
                 p,
-                componentes::Estado::Aviso,
+                if v.version_type=="alpha" {componentes::Estado::Error} else {componentes::Estado::Aviso},
                 canal(&v.version_type),
             ));
         }
         let action = if app.editor == Some(2) {
             crate::diseno_mods::accion(app, &project.id, Some(&v.id), false)
+        } else if app.editor == Some(3) && project.project_type == "resourcepack" {
+            crate::mods_reales::accion_recurso(app, &project.id, Some(&v.id))
+        } else if app.editor == Some(8) && project.project_type == "shader" {
+            crate::mods_reales::packs::accion_instalar(app, icaro_core::mods::TipoPack::Shaders, &project.id, Some(&v.id))
         } else {
             componentes::boton_con_icono(
                 p,
@@ -587,7 +376,7 @@ fn versiones_tabla<'a>(
             )
         };
         let row = row![
-            container(version).width(Length::FillPortion(4)),
+            container(version).width(Length::FillPortion(11)),
             text(
                 v.game_versions
                     .iter()
@@ -600,7 +389,7 @@ fn versiones_tabla<'a>(
             .font(fuentes::MONO)
             .size(texto::MONO_SM.0)
             .color(p.text_muted)
-            .width(Length::FillPortion(2)),
+            .width(Length::FillPortion(6)),
             text(
                 v.loaders
                     .iter()
@@ -611,38 +400,41 @@ fn versiones_tabla<'a>(
             .font(fuentes::MONO)
             .size(texto::MONO_SM.0)
             .color(p.text_muted)
-            .width(Length::FillPortion(2)),
+            .width(Length::FillPortion(4)),
             text(fecha(&v.date_published))
                 .font(fuentes::MONO)
                 .size(texto::MONO_SM.0)
                 .color(p.text_muted)
-                .width(Length::FillPortion(2)),
-            text(catalogo::numero(v.downloads))
+                .width(Length::FillPortion(7)),
+            text(if v.downloads>=1_000_000 {format!("{:.1} M",v.downloads as f64/1_000_000.).replace('.',",")}else if v.downloads>=1_000 {format!("{:.0} k",v.downloads as f64/1_000.)}else{catalogo::numero(v.downloads)})
                 .font(fuentes::MONO)
                 .size(texto::MONO_SM.0)
                 .color(p.text_muted)
-                .width(Length::FillPortion(2)),
+                .width(Length::FillPortion(6)),
             container(action)
                 .width(128)
                 .align_x(iced::alignment::Horizontal::Right)
         ]
-        .spacing(12)
+        .spacing(8)
         .align_y(iced::Alignment::Center)
         .padding(8);
-        body = body
-            .push(container(row).width(Length::Fill).style(move |_| {
+        let decorated=container(row).width(Length::Fill).style(move |_| {
                 iced::widget::container::Style {
-                    background: instance.then_some(iced::Background::Color(p.surface_hover)),
+                    background: instance.then_some(iced::Background::Color(p.accent_soft)),
                     border: iced::Border {
-                        width: if instance { 1. } else { 0. },
+                        width: 0.,
                         color: p.border_strong,
                         ..Default::default()
                     },
                     ..Default::default()
                 }
-            }))
+            });
+        let decorated: Element<Mensaje> = if instance { iced::widget::stack![decorated,container(Space::new(3,Length::Fill)).style(icaro_ui::estilo::bloque(p.text))].into() }else{decorated.into()};
+        tabla = tabla
+            .push(decorated)
             .push(crate::diseno_mods::regla(p));
     }
+    body=body.push(tabla);
     if visible.is_empty() {
         body = body.push(text("No hay versiones para estos filtros.").color(p.text_muted));
     }
@@ -671,6 +463,34 @@ fn versiones_tabla<'a>(
         .align_y(iced::Alignment::Center),
     )
     .into()
+}
+fn dependencias<'a>(app:&'a App,versions:&'a [Version])->Element<'a,Mensaje>{
+    let p=app.modo.paleta();let s=&app.servicios.ficha;
+    let pack=app.servicios.detail.as_ref().is_some_and(|(p,_)|matches!(p.project_type.as_str(),"resourcepack"|"shader"));
+    let Some(version)=versions.iter().find(|v|Some(&v.id)==s.seleccionada.as_ref())else{return text("No hay una versión seleccionada.").color(p.text_muted).into();};
+    if version.dependencies.is_empty(){return text("Esta versión no declara dependencias en Modrinth.").color(p.text_muted).into();}
+    let mut body=column![].spacing(24).max_width(680);
+    for (kind,title) in [("required","Obligatorias"),("optional","Opcionales"),("incompatible","Incompatibles"),("embedded","Incluidas")]{
+        let deps:Vec<_>=version.dependencies.iter().filter(|d|d.dependency_type==kind).collect();if deps.is_empty(){continue;}
+        let mut group=column![componentes::etiqueta(p,title),crate::diseno_mods::regla(p)].spacing(0);
+        for dep in deps{
+            let resolved=app.servicios.dependencias.get(&crate::servicios::clave_dependencia(dep)).and_then(|r|r.as_ref().ok());
+            let id=resolved.map(|(id,_)|id).or(dep.project_id.as_ref());
+            let name=resolved.map(|(_,name)|name.as_str()).or(dep.file_name.as_deref()).unwrap_or("Obteniendo nombre…");
+            let metadata=id.and_then(|id|app.servicios.mods.diseno.proyectos.get(id));
+            let installed=id.is_some_and(|id|crate::mods_reales::lista(app).iter().any(|m|m.project_id==*id&&m.activo));
+            let en_lista=id.is_some_and(|id|crate::diseno_mods::cesta(app).is_some_and(|c|c.plan.iter().any(|(v,_)|v.project_id==*id)));
+            let mut label=column![button(text(name).font(fuentes::TITULO).size(14).color(p.text)).padding(0).on_press_maybe(id.map(|id|m(Accion::Proyecto(id.clone())))).style(icaro_ui::estilo::sin_estilo(p.text))].spacing(2).width(Length::Fill);
+            if let Some((_,author))=metadata{if !author.is_empty(){label=label.push(text(author).size(13).color(p.text_muted));}}
+            let state=if kind=="optional"&&!installed&&!pack {
+                if let Some(id)=id {let id=id.clone();let v=dep.version_id.clone();componentes::casilla(p,"",en_lista,move|selected|Mensaje::DisenoMods(if selected{crate::diseno_mods::Accion::Agregar(id.clone(),v.clone())}else{crate::diseno_mods::Accion::Quitar(id.clone())}))}else{componentes::insignia_contorno(p,"Opcional")}
+            }else{componentes::insignia(p,if kind=="incompatible"{componentes::Estado::Error}else if installed{componentes::Estado::Exito}else{componentes::Estado::Info},if kind=="incompatible"{"No juntos"}else if kind=="embedded"{"Incluida"}else if installed{"Instalada"}else if kind=="optional"{"Opcional"}else if pack{"Obligatoria"}else{"Se instalará"})};
+            group=group.push(row![app.servicios.images.vista(p,metadata.and_then(|(p,_)|p.icon_url.as_deref()),32.),label,state].spacing(12).align_y(iced::Alignment::Center).padding([12,0])).push(crate::diseno_mods::regla(p));
+        }
+        body=body.push(group);
+    }
+    if app.servicios.dependencias.values().any(|d|d.is_err()){body=body.push(componentes::boton_compacto(p,"Reintentar nombres",Variante::Fantasma,Some(m(Accion::ReintentarDependencias))));}
+    body.into()
 }
 fn cambios<'a>(
     app: &'a App,
@@ -809,101 +629,24 @@ fn cambios<'a>(
     body.into()
 }
 fn galeria<'a>(app: &'a App, project: &'a Project) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
-    let s = &app.servicios.ficha;
-    let images = &app.servicios.images;
-    if project.gallery.is_empty() {
-        return text("El creador no ha publicado imágenes en la galería.")
-            .color(p.text_muted)
-            .into();
+    let p=app.modo.paleta(); let s=&app.servicios.ficha;
+    let start=s.galeria/GALLERY_PAGE*GALLERY_PAGE;
+    let cell_width=((app.ventana.width-220.-96.-320.-48.).max(240.)-32.)/3.;
+    let mut body=column![].spacing(16).width(Length::Fill);
+    let mut line=row![].spacing(16);let mut units=0;
+    for (i,image) in project.gallery.iter().enumerate().skip(start).take(GALLERY_PAGE) {
+        let span=if image.featured{2}else{1};
+        if units+span>3 {if units<3{line=line.push(Space::with_width(Length::FillPortion(3-units)));} body=body.push(line);line=row![].spacing(16);units=0;}
+        let height=(cell_width*span as f32+16.*(span-1) as f32)*9./16.;
+        let preview=app.servicios.images.portada_alta(&image.url,height).unwrap_or_else(||container(text(if app.servicios.images.pendiente(&image.url){"Cargando imagen…"}else{"Imagen no disponible"}).size(13).color(p.text_muted)).width(Length::Fill).height(height).center_x(Length::Fill).center_y(height).into());
+        let mut card=column![button(container(preview).width(Length::Fill).height(height).padding(1).style(icaro_ui::estilo::marco(p))).padding(0).width(Length::Fill).on_press(m(Accion::VisorAbrir(i))).style(icaro_ui::estilo::sin_estilo(p.text))].spacing(8);
+        if let Some(title)=&image.title{card=card.push(text(title).size(13).color(p.text_muted));}
+        line=line.push(card.width(Length::FillPortion(span)));units+=span;
     }
-    let sel = s.galeria.min(project.gallery.len() - 1);
-    let g = &project.gallery[sel];
-    let principal = images.portada_alta(&g.url, 340.).unwrap_or_else(|| {
-        container(
-            text(if images.pendiente(&g.url) {
-                "Cargando imagen…"
-            } else {
-                "Esta imagen no está disponible."
-            })
-            .color(p.text_muted),
-        )
-        .width(Length::Fill)
-        .height(340)
-        .center_x(Length::Fill)
-        .center_y(340)
-        .style(icaro_ui::estilo::marco(p))
-        .into()
-    });
-    let principal = button(principal)
-        .padding(0)
-        .width(Length::Fill)
-        .on_press(m(Accion::VisorAbrir(sel)))
-        .style(icaro_ui::estilo::sin_estilo(p.text));
-    let inicio = sel / GALLERY_PAGE * GALLERY_PAGE;
-    let mut thumbs = row![].spacing(espacio::S3);
-    for (i, g) in project
-        .gallery
-        .iter()
-        .enumerate()
-        .skip(inicio)
-        .take(GALLERY_PAGE)
-    {
-        thumbs = thumbs.push(
-            button(
-                column![
-                    images.vista(p, Some(&g.url), 80.),
-                    text(format!("{}", i + 1)).size(13)
-                ]
-                .spacing(espacio::S1),
-            )
-            .padding(espacio::S2)
-            .on_press(m(Accion::VisorAbrir(i)))
-            .style(move |theme, status| {
-                if i == sel {
-                    icaro_ui::estilo::boton_primario(p)(theme, status)
-                } else {
-                    icaro_ui::estilo::boton_secundario(p)(theme, status)
-                }
-            }),
-        );
-    }
-    let mut body = column![
-        principal,
-        text(g.title.as_deref().unwrap_or("Imagen del proyecto"))
-            .font(fuentes::TITULO)
-            .color(p.text)
-    ]
-    .spacing(espacio::S3)
-    .width(Length::Fill);
-    if let Some(description) = &g.description {
-        body = body.push(text(description).color(p.text_muted));
-    }
-    body.push(
-        row![
-            componentes::boton(
-                p,
-                "Anterior",
-                Variante::Secundario,
-                (sel > 0).then(|| m(Accion::Galeria(sel - 1)))
-            ),
-            container(text(format!("{} / {}", sel + 1, project.gallery.len())).color(p.text_muted))
-                .center_x(56),
-            componentes::boton(
-                p,
-                "Siguiente",
-                Variante::Secundario,
-                (sel + 1 < project.gallery.len()).then(|| m(Accion::Galeria(sel + 1)))
-            ),
-        ]
-        .spacing(espacio::S3)
-        .align_y(iced::Alignment::Center),
-    )
-    .push(enlace(p, "Abrir original", g.original_url()))
-    .push(thumbs.wrap())
-    .into()
+    if units>0{if units<3{line=line.push(Space::with_width(Length::FillPortion(3-units)));}body=body.push(line);}
+    if project.gallery.len()>GALLERY_PAGE {body=body.push(row![componentes::boton_compacto(p,"Anterior",Variante::Secundario,(start>0).then(||m(Accion::Galeria(start.saturating_sub(GALLERY_PAGE))))),Space::with_width(Length::Fill),componentes::boton_compacto(p,"Siguiente",Variante::Secundario,(start+GALLERY_PAGE<project.gallery.len()).then(||m(Accion::Galeria(start+GALLERY_PAGE))))].spacing(16));}
+    body.into()
 }
-
 pub fn visor<'a>(app: &'a App, project: &Project) -> Option<Element<'a, Mensaje>> {
     let s = &app.servicios.ficha;
     let state = s.visor.as_ref()?;
@@ -962,14 +705,14 @@ pub fn vista<'a>(
     let s = &app.servicios.ficha;
     let mut tabs = vec![
         Pestana::Descripcion,
-        Pestana::Galeria,
         Pestana::Versiones,
         Pestana::Cambios,
     ];
+    if !project.gallery.is_empty() { tabs.insert(1, Pestana::Galeria); }
     if kind != Kind::Modpack {
         tabs.push(Pestana::Dependencias);
     }
-    let dependencias = versions
+    let numero_dependencias = versions
         .iter()
         .find(|v| Some(&v.id) == s.seleccionada.as_ref())
         .map_or(0, |v| v.dependencies.len());
@@ -981,7 +724,7 @@ pub fn vista<'a>(
                 match t {
                     Pestana::Galeria => Some(project.gallery.len()),
                     Pestana::Versiones => Some(versions.len()),
-                    Pestana::Dependencias => Some(dependencias),
+                    Pestana::Dependencias => Some(numero_dependencias),
                     _ => None,
                 },
             )
@@ -996,34 +739,21 @@ pub fn vista<'a>(
         Pestana::Galeria => galeria(app, project),
         Pestana::Versiones => versiones(app, project, versions),
         Pestana::Cambios => cambios(app, project, versions, false),
-        Pestana::Dependencias => cambios(app, project, versions, true),
+        Pestana::Dependencias => dependencias(app, versions),
     };
-    let main = container(crate::con_entrada(app, body)).width(Length::Fill);
+    let main = container(crate::con_entrada(app, body)).width(Length::Fill).max_width(if s.tab==Pestana::Descripcion { 680 } else { 10000 });
     let side = lateral(app, project);
-    let creators = s
-        .miembros
-        .iter()
-        .map(|m| m.user.username.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let metadata = text(format!(
-        "{}{}{}",
-        creators,
-        if creators.is_empty() { "" } else { " · " },
-        project
-            .categories
-            .iter()
-            .take(3)
-            .map(|c| crate::diseno_mods::categoria(c).to_owned())
-            .collect::<Vec<_>>()
-            .join(" · ")
-    ))
-    .size(texto::BODY_SM.0)
-    .color(p.text_muted);
+    let mut metadata=row![].spacing(6).align_y(iced::Alignment::Center);
+    let creator=s.organizacion.as_ref().map(|o|(o.name.as_str(),format!("https://modrinth.com/organization/{}",o.id))).or_else(||s.miembros.iter().find(|m|m.is_owner).or_else(||s.miembros.first()).map(|m|(m.user.name.as_deref().unwrap_or(&m.user.username),format!("https://modrinth.com/user/{}",m.user.id))));
+    if let Some((name,url))=creator {metadata=metadata.push(text("por").size(13).color(p.text_muted)).push(button(text(name.to_owned()).size(13).color(p.text)).padding(0).on_press(m(Accion::Enlace(url))).style(icaro_ui::estilo::sin_estilo(p.text)));}
+    for category in project.categories.iter().take(3){metadata=metadata.push(text(format!("· {}",crate::diseno_mods::categoria(category))).size(13).color(p.text_muted));}
+    let lado=match (project.client_side.as_str(),project.server_side.as_str()) {("required","required")=>Some("Ambos"),("unsupported","required")=>Some("Servidor"),("required","unsupported")=>Some("Cliente"),_=>None};
+    if let Some(lado)=lado {metadata=metadata.push(text(format!("· {lado}")).size(13).color(p.text_muted));}
+    let metadata=metadata.wrap();
     let header = row![
         app.servicios
             .images
-            .vista(p, project.icon_url.as_deref(), 48.),
+            .vista(p, project.icon_url.as_deref(), 64.),
         column![
             text(project.title.to_uppercase())
                 .font(fuentes::DISPLAY)
@@ -1034,7 +764,8 @@ pub fn vista<'a>(
         .spacing(espacio::S3)
         .width(Length::Fill)
     ]
-    .spacing(espacio::S5);
+    .spacing(20)
+    .align_y(iced::Alignment::End);
     let cabecera = container(
         column![
             componentes::boton_con_icono(
@@ -1043,7 +774,11 @@ pub fn vista<'a>(
                 if app.servicios.hay_anterior() {
                     "Volver"
                 } else if app.editor.is_some() && !app.servicios.hay_catalogo() {
-                    "Volver a mis mods"
+                    match app.editor {
+                        Some(3) => "Volver a mis recursos",
+                        Some(8) => "Volver a mis shaders",
+                        _ => "Volver a mis mods",
+                    }
                 } else {
                     "Volver al catálogo"
                 },
@@ -1052,37 +787,41 @@ pub fn vista<'a>(
                 false,
             ),
             header,
+            text(&project.description).size(texto::BODY.0).color(p.text_muted),
             barra,
         ]
         .spacing(espacio::S6)
         .width(Length::Fill),
     )
     .padding(Padding {
-        top: espacio::S6,
-        right: espacio::S6,
+        top: 0.,
+        right: 0.,
         bottom: 0.0,
-        left: espacio::S6,
+        left: 0.,
     })
     .width(Length::Fill);
     // La navegación queda fuera del área desplazable. Al cambiar de pestaña,
     // una clave nueva reinicia también el desplazamiento suave de su contenido.
-    let contenido = keyed_column([(
-        s.tab,
-        crate::desplazable_pub(
-            container(main)
-                .padding(espacio::S6)
-                .width(Length::Fill)
-                .into(),
-        ),
-    )])
+    let ancho = app.ventana.width - if app.colapsada {64.} else {232.} - 96. - 320. - 48.;
+    let contenido_principal = if s.tab==Pestana::Versiones && ancho<680. {
+        // Una sola área de desplazamiento conserva la medida mínima de las
+        // columnas sin partir encabezados, fechas o acciones en dos líneas.
+        iced::widget::scrollable(container(main).padding(Padding {top:28.,..Padding::ZERO}).width(680))
+            .direction(iced::widget::scrollable::Direction::Both {
+                vertical:iced::widget::scrollable::Scrollbar::new().width(0).scroller_width(0),
+                horizontal:iced::widget::scrollable::Scrollbar::new().width(8).scroller_width(8),
+            }).width(Length::Fill).height(Length::Fill).into()
+    }else{crate::desplazable_pub(container(main).padding(Padding {top:28.,..Padding::ZERO}).width(Length::Fill).into())};
+    let contenido = keyed_column([(s.tab,contenido_principal)])
     .width(Length::Fill)
     .height(Length::Fill);
     let left = column![cabecera, contenido]
         .width(Length::Fill)
         .height(Length::Fill);
     let compatible: Element<Mensaje> = if let Some(i) = crate::mods_reales::instancia(app) {
-        let ok =
-            project.game_versions.contains(&i.minecraft) && project.loaders.contains(&i.loader);
+        let resource = matches!(project.project_type.as_str(), "resourcepack" | "shader");
+        let ok = project.game_versions.contains(&i.minecraft)
+            && (resource || project.loaders.contains(&i.loader));
         componentes::aviso(
             p,
             if ok {
@@ -1090,18 +829,32 @@ pub fn vista<'a>(
             } else {
                 componentes::Estado::Aviso
             },
-            &format!(
-                "{} con {} ({}, {}).",
-                if ok { "Compatible" } else { "No compatible" },
-                i.nombre,
-                i.minecraft,
-                loader(&i.loader)
-            ),
+            &if resource {
+                if ok {
+                    format!(
+                        "Compatible con Minecraft {}. No requiere un loader específico.",
+                        i.minecraft
+                    )
+                } else {
+                    format!(
+                        "No declara Minecraft {}. Puedes instalarlo y probarlo igualmente.",
+                        i.minecraft
+                    )
+                }
+            } else {
+                format!(
+                    "{} con {} ({}, {}).",
+                    if ok { "Compatible" } else { "No compatible" },
+                    i.nombre,
+                    i.minecraft,
+                    loader(&i.loader)
+                )
+            },
         )
     } else {
         Space::with_height(0).into()
     };
-    row![
+    container(row![
         left,
         container(row![
             container(Space::new(1, Length::Fill)).style(icaro_ui::estilo::bloque(p.border)),
@@ -1109,6 +862,10 @@ pub fn vista<'a>(
                 column![
                     if app.editor == Some(2) {
                         crate::diseno_mods::accion(app, &project.id, None, true)
+                    } else if app.editor == Some(3) && project.project_type == "resourcepack" {
+                        crate::mods_reales::accion_recurso(app, &project.id, None)
+                    } else if app.editor == Some(8) && project.project_type == "shader" {
+                        crate::mods_reales::packs::accion_instalar(app, icaro_core::mods::TipoPack::Shaders, &project.id, None)
                     } else {
                         componentes::boton_con_icono(
                             p,
@@ -1128,23 +885,24 @@ pub fn vista<'a>(
                 .spacing(20)
             )
             .padding(Padding {
-                left: 24.,
+                left: 32.,
                 ..Padding::ZERO
             })
             .width(Length::Fill)
         ])
         .padding(Padding {
-            top: 24.,
-            right: 24.,
-            bottom: 24.,
+            top: 0.,
+            right: 0.,
+            bottom: 0.,
             left: 0.
         })
-        .width(300)
+        .width(320)
         .height(Length::Fill)
     ]
-    .spacing(16)
+    .spacing(48)
     .width(Length::Fill)
-    .height(Length::Fill)
+    .height(Length::Fill))
+    .padding([40,48])
     .into()
 }
 

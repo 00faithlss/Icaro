@@ -48,6 +48,7 @@ pub enum Kind {
     Mod,
     Modpack,
     Resourcepack,
+    Shader,
 }
 impl Kind {
     pub fn as_str(self) -> &'static str {
@@ -55,6 +56,7 @@ impl Kind {
             Self::Mod => "mod",
             Self::Modpack => "modpack",
             Self::Resourcepack => "resourcepack",
+            Self::Shader => "shader",
         }
     }
 }
@@ -133,6 +135,8 @@ pub struct Hit {
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Project {
+    #[serde(default)]
+    pub project_type: String,
     pub id: String,
     pub slug: String,
     pub title: String,
@@ -212,6 +216,22 @@ pub struct User {
 pub struct Organization {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub members: Vec<Member>,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelatedProject {
+    pub id: String,
+    #[serde(alias="name")]
+    pub title: String,
+    pub downloads: u64,
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub project_type: String,
+    #[serde(default)]
+    pub project_types: Vec<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct GameVersion {
@@ -229,17 +249,26 @@ pub struct Tags {
     pub loaders: Vec<Loader>,
 }
 
-/// Solo imágenes públicas de Modrinth; sin redirecciones, credenciales ni URLs locales.
+/// Imágenes públicas del catálogo y avatares que Modrinth publica desde GitHub.
+/// El cliente no sigue redirecciones ni admite credenciales o destinos locales.
 fn image_url(value: &str) -> Result<Url, Error> {
     let url = Url::parse(value).map_err(|_| Error::Response("la imagen"))?;
+    let modrinth = url.host_str() == Some("cdn.modrinth.com")
+        && url.query().is_none()
+        && (url.path().starts_with("/data/") || url.path().starts_with("/user/"));
+    let github_avatar = matches!(url.host_str(),
+        Some("avatars.githubusercontent.com" | "avatars0.githubusercontent.com"
+            | "avatars1.githubusercontent.com" | "avatars2.githubusercontent.com"
+            | "avatars3.githubusercontent.com"))
+        && url.path().strip_prefix("/u/").is_some_and(|id|
+            !id.is_empty() && id.bytes().all(|c| c.is_ascii_digit()))
+        && url.query().is_none_or(|query| query == "v=4");
     if url.scheme() != "https"
-        || url.host_str() != Some("cdn.modrinth.com")
+        || !(modrinth || github_avatar)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
-        || url.query().is_some()
         || url.fragment().is_some()
-        || !(url.path().starts_with("/data/") || url.path().starts_with("/user/"))
     {
         return Err(Error::Response("la imagen"));
     }
@@ -252,6 +281,8 @@ pub fn supported_image(value: &str) -> bool {
 pub struct License {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct Version {
@@ -311,6 +342,34 @@ pub struct Catalog {
     cooldown: Arc<Mutex<Option<Instant>>>,
 }
 impl Catalog {
+    pub async fn creator_projects(&self, id: &str, organization: bool) -> Result<Vec<RelatedProject>, Error> {
+        let mut url=project_url(id)?;
+        url.set_path(&if organization {format!("/v3/organization/{id}/projects")}else{format!("/v2/user/{id}/projects")});
+        let mut projects:Vec<RelatedProject>=self.json(self.client.get(url)).await?;
+        projects.sort_by(|a,b|b.downloads.cmp(&a.downloads));
+        Ok(projects)
+    }
+    pub async fn versions_from_hashes(&self, hashes: &[String]) -> Result<std::collections::BTreeMap<String, Version>, Error> {
+        self.versions_hashes(hashes, None).await
+    }
+    pub async fn latest_from_hashes(&self, hashes: &[String], minecraft: &str, loader: &str) -> Result<std::collections::BTreeMap<String, Version>, Error> {
+        self.versions_hashes(hashes, Some((minecraft, loader))).await
+    }
+    async fn versions_hashes(&self, hashes: &[String], target: Option<(&str, &str)>) -> Result<std::collections::BTreeMap<String, Version>, Error> {
+        if hashes.len() > 512 || hashes.iter().any(|hash| hash.len() != 128 || !hash.bytes().all(|c| c.is_ascii_hexdigit())) {
+            return Err(Error::Response("los hashes de Modrinth"));
+        }
+        if hashes.is_empty() { return Ok(Default::default()); }
+        let mut body = serde_json::json!({"hashes":hashes, "algorithm":"sha512"});
+        let endpoint = if let Some((minecraft, loader)) = target {
+            body["game_versions"] = serde_json::json!([minecraft]);
+            body["loaders"] = serde_json::json!([loader]);
+            "version_files/update"
+        } else { "version_files" };
+        let result: std::collections::BTreeMap<String, Version> = self.json(self.client.post(format!("{API}{endpoint}")).json(&body)).await?;
+        if result.keys().any(|hash| !hashes.contains(hash)) { return Err(Error::Response("los hashes de Modrinth")); }
+        Ok(result)
+    }
     pub async fn download_mod(&self, file: &File) -> Result<Vec<u8>, Error> {
         let url = image_url(&file.url)?;
         if !url.path().starts_with("/data/") {
@@ -558,6 +617,48 @@ mod tests {
         ] {
             assert!(!supported_image(url));
         }
+    }
+    #[test]
+    fn creator_avatars_accept_modrinth_and_exact_github_endpoints() {
+        for url in [
+            "https://avatars3.githubusercontent.com/u/31803019?v=4",
+            "https://avatars.githubusercontent.com/u/17120022?v=4",
+            "https://avatars.githubusercontent.com/u/17120022",
+        ] {
+            assert!(supported_image(url), "El avatar publicado por Modrinth debe cargar: {url}");
+        }
+        for url in [
+            "https://avatars.githubusercontent.com.attacker.example/u/17120022?v=4",
+            "https://avatars.githubusercontent.com/u/17120022?token=PRIVATE",
+            "https://avatars.githubusercontent.com/u/17120022?v=4&redirect=http://localhost",
+            "https://avatars.githubusercontent.com/private.png?v=4",
+            "https://avatars.githubusercontent.com/u/not-a-user?v=4",
+            "http://avatars.githubusercontent.com/u/17120022?v=4",
+            "https://avatars.githubusercontent.com:8443/u/17120022?v=4",
+        ] {
+            assert!(!supported_image(url), "No es un endpoint de avatar permitido: {url}");
+        }
+        let organization: Organization = serde_json::from_value(serde_json::json!({
+            "id":"LjcZDkRW", "name":"CaffeineMC",
+            "icon_url":"https://cdn.modrinth.com/data/LjcZDkRW/icon.webp"
+        })).unwrap();
+        assert!(supported_image(organization.icon_url.as_deref().unwrap()));
+        assert!(serde_json::from_value::<Organization>(serde_json::json!({
+            "id":"old", "name":"Sin imagen"
+        })).unwrap().icon_url.is_none());
+    }
+    #[test]
+    fn shaders_search_uses_own_project_type_and_no_loader() {
+        let url = search_url(&Search {
+            query: "complementary".into(), kind: Kind::Shader,
+            minecraft: Some("1.21.4".into()), loader: None,
+            offset: 0, order: Order::Relevance,
+        });
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        let facets: Vec<Vec<String>> = serde_json::from_str(&query["facets"]).unwrap();
+        assert!(facets.contains(&vec!["project_type:shader".into()]));
+        assert!(facets.contains(&vec!["versions:1.21.4".into()]));
+        assert!(!facets.iter().flatten().any(|f| f.contains("fabric") || f.contains("iris")));
     }
     #[tokio::test]
     async fn cooldown_blocks_queries_before_a_network_request() {

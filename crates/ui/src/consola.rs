@@ -234,6 +234,7 @@ fn barra_consola<'a, M: Clone + 'a>(
     )
     .width(200)
     .height(28)
+    .align_y(iced::alignment::Vertical::Center)
     .padding(Padding::from([0., 8.]))
     .style(move |_| container::Style {
         background: Some(p.surface_sunken.into()),
@@ -294,7 +295,7 @@ fn accion_icono<'a, M: Clone + 'a>(
     msg: M,
 ) -> Element<'a, M> {
     tooltip(
-        button(iconos::icono_texto(icono, Tam::Base))
+        button(container(iconos::icono_texto(icono, Tam::Base)).center_x(Length::Fill).center_y(Length::Fill))
             .width(28)
             .height(28)
             .padding(2)

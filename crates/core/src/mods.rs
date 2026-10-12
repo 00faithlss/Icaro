@@ -258,6 +258,611 @@ pub fn compatible(v: &Version, mc: &str, loader: &str) -> bool {
         && v.game_versions.iter().any(|x| x == mc)
         && v.loaders.iter().any(|x| x.eq_ignore_ascii_case(loader))
 }
+/// Los resourcepacks no dependen del loader. Su versión declarada es orientativa.
+pub fn recurso_compatible(v: &Version, mc: &str) -> bool {
+    v.game_versions.iter().any(|x| x == mc)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TipoPack {
+    Recursos,
+    Shaders,
+}
+impl TipoPack {
+    pub fn carpeta(self) -> &'static str {
+        match self {
+            Self::Recursos => "resourcepacks",
+            Self::Shaders => "shaderpacks",
+        }
+    }
+    fn meta(self) -> &'static str {
+        match self {
+            Self::Recursos => ".icaro-resourcepacks.json",
+            Self::Shaders => ".icaro-shaderpacks.json",
+        }
+    }
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            Self::Recursos => "resourcepacks",
+            Self::Shaders => "shaders",
+        }
+    }
+}
+
+fn recuperar_packs(game: &Path, tipo: TipoPack) -> Result<(), Error> {
+    let dir = game.join(tipo.carpeta());
+    let backup = game.join(format!(".icaro-mods-{}-backup", tipo.carpeta()));
+    if !dir.exists() && backup.exists() {
+        regular(&backup, true)?;
+        fs::rename(backup, dir).map_err(|_| Error::Disco)?;
+    }
+    Ok(())
+}
+
+fn registros_packs(game: &Path, tipo: TipoPack) -> Result<Vec<Instalado>, Error> {
+    let dir = game.join(tipo.carpeta());
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    regular(&dir, true)?;
+    let path = dir.join(tipo.meta());
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    if regular(&path, false)?.len() > 2 * 1024 * 1024 {
+        return Err(Error::Datos);
+    }
+    let list: Vec<Instalado> = serde_json::from_slice(&fs::read(path).map_err(|_| Error::Disco)?)
+        .map_err(|_| Error::Datos)?;
+    let mut names = BTreeSet::new();
+    let mut projects = BTreeSet::new();
+    if list.len() > 512
+        || list.iter().any(|r| {
+            !nombre_valido(&r.archivo)
+                || !r.archivo.ends_with(".zip")
+                || !names.insert(r.archivo.to_lowercase())
+                || !projects.insert(r.project_id.clone())
+        })
+    {
+        return Err(Error::Datos);
+    }
+    Ok(list)
+}
+
+/// Incluye los ZIP locales sin confundirlos con los JAR de mods.
+pub fn inventario_packs(
+    store: &Almacen,
+    id: &str,
+    tipo: TipoPack,
+) -> Result<Vec<Instalado>, Error> {
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let _lock = guardia(&game)?;
+    recuperar_packs(&game, tipo)?;
+    let dir = game.join(tipo.carpeta());
+    let mut list = registros_packs(&game, tipo)?;
+    for item in &list {
+        regular(&dir.join(&item.archivo), false)?;
+    }
+    if dir.exists() {
+        for entry in fs::read_dir(&dir).map_err(|_| Error::Disco)? {
+            let entry = entry.map_err(|_| Error::Disco)?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".zip") && !list.iter().any(|r| r.archivo == name) {
+                regular(&entry.path(), false)?;
+                if !nombre_valido(&name) {
+                    return Err(Error::Datos);
+                }
+                list.push(Instalado {
+                    project_id: String::new(),
+                    nombre: name.clone(),
+                    version_id: String::new(),
+                    version: "Archivo local".into(),
+                    publicada: String::new(),
+                    archivo: name,
+                    sha512: String::new(),
+                    activo: true,
+                    dependencias: vec![],
+                });
+            }
+        }
+    }
+    let active = packs_activos(store, id, tipo)?;
+    for item in &mut list {
+        item.activo = active.contains(&item.archivo);
+    }
+    Ok(list)
+}
+
+pub fn inventario_recursos(store: &Almacen, id: &str) -> Result<Vec<Instalado>, Error> {
+    inventario_packs(store, id, TipoPack::Recursos)
+}
+pub async fn instalar_recursos(
+    source: &impl Fuente,
+    store: &Almacen,
+    id: &str,
+    roots: Vec<Version>,
+    progress: impl Fn(&str) + Send,
+) -> Result<Vec<Instalado>, Error> {
+    instalar_packs(source, store, id, roots, TipoPack::Recursos, progress).await
+}
+
+pub fn recursos_activos(store: &Almacen, id: &str) -> Result<Vec<String>, Error> {
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let path = game.join("options.txt");
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    if regular(&path, false)?.len() > 4 * 1024 * 1024 {
+        return Err(Error::Datos);
+    }
+    let text = fs::read_to_string(path).map_err(|_| Error::Disco)?;
+    let value = text
+        .lines()
+        .find_map(|line| line.strip_prefix("resourcePacks:"));
+    value.map_or(Ok(vec![]), |json| {
+        serde_json::from_str(json).map_err(|_| Error::Datos)
+    })
+}
+
+/// Cambia únicamente resourcePacks y conserva las demás opciones del juego.
+pub fn alternar_recurso(store: &Almacen, id: &str, filename: &str) -> Result<(), Error> {
+    let tipo = TipoPack::Recursos;
+    if !nombre_valido(filename) || !filename.ends_with(".zip") {
+        return Err(Error::Datos);
+    }
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let _lock = guardia(&game)?;
+    regular(&game.join(tipo.carpeta()), true)?;
+    regular(&game.join(tipo.carpeta()).join(filename), false)?;
+    let path = game.join("options.txt");
+    if path.exists() && regular(&path, false)?.len() > 4 * 1024 * 1024 {
+        return Err(Error::Datos);
+    }
+    let text = if path.exists() {
+        fs::read_to_string(&path).map_err(|_| Error::Disco)?
+    } else {
+        String::new()
+    };
+    let mut active = recursos_activos(store, id)?;
+    let key = format!("file/{filename}");
+    if active.contains(&key) {
+        active.retain(|s| s != &key);
+    } else {
+        active.push(key);
+    }
+    let replacement = format!(
+        "resourcePacks:{}",
+        serde_json::to_string(&active).map_err(|_| Error::Datos)?
+    );
+    let mut replaced = false;
+    let mut lines: Vec<String> = text
+        .lines()
+        .map(|line| {
+            if line.starts_with("resourcePacks:") {
+                replaced = true;
+                replacement.clone()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect();
+    if !replaced {
+        lines.push(replacement);
+    }
+    let next = game.join(".icaro-resource-options-next");
+    if next.exists() {
+        regular(&next, false)?;
+    }
+    guardar_archivo(&next, format!("{}\n", lines.join("\n")).as_bytes())?;
+    let backup = game.join(".icaro-resource-options-backup");
+    if backup.exists() {
+        regular(&backup, false)?;
+        fs::remove_file(&backup).map_err(|_| Error::Disco)?;
+    }
+    if path.exists() {
+        fs::rename(&path, &backup).map_err(|_| Error::Disco)?;
+    }
+    if fs::rename(&next, &path).is_err() {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &path);
+        }
+        return Err(Error::Disco);
+    }
+    Ok(())
+}
+
+/// Conserva el ZIP original: Minecraft lo lee directamente desde resourcepacks.
+/// No exige loader ni bloquea versiones de Minecraft fuera de las declaradas.
+pub async fn instalar_packs(
+    source: &impl Fuente,
+    store: &Almacen,
+    id: &str,
+    roots: Vec<Version>,
+    tipo: TipoPack,
+    progress: impl Fn(&str) + Send,
+) -> Result<Vec<Instalado>, Error> {
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let _lock = guardia(&game)?;
+    recuperar_packs(&game, tipo)?;
+    let dir = game.join(tipo.carpeta());
+    let mut installed = registros_packs(&game, tipo)?;
+    let mut renombres = vec![];
+    for item in &installed {
+        comprobar_actual(&dir, item)?;
+    }
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|_| Error::Disco)?;
+    let stage = game.join(format!(
+        ".icaro-mods-{}-next-{}",
+        tipo.carpeta(),
+        hash(&random)
+    ));
+    fs::create_dir(&stage).map_err(|_| Error::Disco)?;
+    let result = async {
+        if dir.exists() {
+            copiar(&dir, &stage, 0, &mut 0, &mut 0)?;
+        }
+        for version in roots {
+            if installed
+                .iter()
+                .any(|r| r.project_id == version.project_id && r.version_id == version.id)
+            {
+                continue;
+            }
+            let file = version
+                .files
+                .iter()
+                .find(|f| f.primary)
+                .or(version.files.first())
+                .ok_or(Error::Datos)?;
+            if !nombre_valido(&file.filename)
+                || !file.filename.ends_with(".zip")
+                || file.size == 0
+                || file.size > MAX_FILE
+                || file.hashes.sha512.len() != 128
+                || !file.hashes.sha512.bytes().all(|b| b.is_ascii_hexdigit())
+                || !crate::modrinth::supported_image(&file.url)
+            {
+                return Err(Error::Datos);
+            }
+            let old = installed
+                .iter()
+                .position(|r| r.project_id == version.project_id);
+            let target = stage.join(&file.filename);
+            if target.exists() && old.is_none_or(|n| installed[n].archivo != file.filename) {
+                return Err(Error::Archivo(file.filename.clone()));
+            }
+            progress(&format!("Descargando {}…", version.name));
+            let bytes = source.archivo(file).await?;
+            if bytes.len() as u64 != file.size || hash(&bytes) != file.hashes.sha512.to_lowercase()
+            {
+                return Err(Error::Hash);
+            }
+            // Validar el contenedor y la metadata sin extraer ni ejecutar su contenido.
+            let mut archive =
+                zip::ZipArchive::new(std::io::Cursor::new(&bytes)).map_err(|_| Error::Datos)?;
+            if tipo == TipoPack::Recursos {
+                let mut metadata = archive.by_name("pack.mcmeta").map_err(|_| Error::Datos)?;
+                if metadata.size() > 1024 * 1024 {
+                    return Err(Error::Datos);
+                }
+                let mut data = Vec::new();
+                std::io::Read::read_to_end(&mut metadata, &mut data).map_err(|_| Error::Datos)?;
+                let value: serde_json::Value =
+                    serde_json::from_slice(&data).map_err(|_| Error::Datos)?;
+                if !value.get("pack").is_some_and(|p| p.is_object()) {
+                    return Err(Error::Datos);
+                }
+            } else if !archive.file_names().any(|name| {
+                name.is_ok_and(|name| name.starts_with("shaders/") && !name.ends_with('/'))
+            }) {
+                return Err(Error::Datos);
+            }
+            let name = source.nombre(&version.project_id).await?;
+            if let Some(n) = old {
+                renombres.push((installed[n].archivo.clone(), file.filename.clone()));
+                fs::remove_file(stage.join(&installed[n].archivo)).map_err(|_| Error::Disco)?;
+                installed.remove(n);
+            }
+            guardar_archivo(&target, &bytes)?;
+            installed.push(Instalado {
+                project_id: version.project_id,
+                nombre: name,
+                version_id: version.id,
+                version: version.version_number,
+                publicada: version.date_published,
+                archivo: file.filename.clone(),
+                sha512: file.hashes.sha512.clone(),
+                activo: true,
+                dependencias: version.dependencies,
+            });
+        }
+        guardar_archivo(
+            &stage.join(tipo.meta()),
+            &serde_json::to_vec_pretty(&installed).map_err(|_| Error::Datos)?,
+        )?;
+        let backup = game.join(format!(".icaro-mods-{}-backup", tipo.carpeta()));
+        if backup.exists() {
+            borrar_preparacion(&game, &backup)?;
+        }
+        if dir.exists() {
+            regular(&dir, true)?;
+            fs::rename(&dir, &backup).map_err(|_| Error::Disco)?;
+        }
+        if fs::rename(&stage, &dir).is_err() {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &dir);
+            }
+            return Err(Error::Disco);
+        }
+        // Si una actualización cambia el nombre del ZIP, preservar activación y prioridad.
+        let config_result = (|| -> Result<(), Error> {
+            if renombres.is_empty() {
+                Ok(())
+            } else if tipo == TipoPack::Recursos {
+                let mut active = recursos_activos(store, id)?;
+                for name in &mut active {
+                    for (old, new) in &renombres {
+                        if *name == format!("file/{old}") {
+                            *name = format!("file/{new}");
+                            break;
+                        }
+                    }
+                }
+                escribir_config(
+                    &game,
+                    &game.join("options.txt"),
+                    &[(
+                        "resourcePacks:",
+                        serde_json::to_string(&active).map_err(|_| Error::Datos)?,
+                    )],
+                )
+            } else {
+                let active = packs_activos(store, id, tipo)?;
+                if let Some((_, new)) = renombres.iter().find(|(old, _)| active.contains(old)) {
+                    escribir_config(
+                        &game,
+                        &game.join("config/iris.properties"),
+                        &[("shaderPack=", new.clone())],
+                    )
+                } else {
+                    Ok(())
+                }
+            }
+        })();
+        if let Err(e) = config_result {
+            let _ = fs::rename(&dir, &stage);
+            if backup.exists() {
+                let _ = fs::rename(&backup, &dir);
+            }
+            return Err(e);
+        }
+        Ok(installed)
+    }
+    .await;
+    if stage.exists() {
+        let _ = borrar_preparacion(&game, &stage);
+    }
+    result
+}
+/// Iris usa un solo shader activo; los resourcepacks conservan su orden de prioridad.
+pub fn packs_activos(store: &Almacen, id: &str, tipo: TipoPack) -> Result<Vec<String>, Error> {
+    if tipo == TipoPack::Recursos {
+        return Ok(recursos_activos(store, id)?
+            .into_iter()
+            .filter_map(|x| x.strip_prefix("file/").map(str::to_owned))
+            .collect());
+    }
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let path = game.join("config/iris.properties");
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let text = leer_config(&path)?;
+    if text.lines().any(|l| l.trim() == "enableShaders=false") {
+        return Ok(vec![]);
+    }
+    Ok(text
+        .lines()
+        .find_map(|l| l.strip_prefix("shaderPack="))
+        .filter(|s| nombre_valido(s))
+        .map(str::to_owned)
+        .into_iter()
+        .collect())
+}
+fn leer_config(path: &Path) -> Result<String, Error> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    if regular(path, false)?.len() > 4 * 1024 * 1024 {
+        return Err(Error::Datos);
+    }
+    fs::read_to_string(path).map_err(|_| Error::Disco)
+}
+fn escribir_config(game: &Path, path: &Path, values: &[(&str, String)]) -> Result<(), Error> {
+    let text = leer_config(path)?;
+    let mut lines: Vec<String> = text
+        .lines()
+        .filter(|line| !values.iter().any(|(key, _)| line.starts_with(key)))
+        .map(str::to_owned)
+        .collect();
+    lines.extend(values.iter().map(|(k, v)| format!("{k}{v}")));
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir(parent).map_err(|_| Error::Disco)?;
+        }
+        regular(parent, true)?;
+    }
+    let next = game.join(".icaro-pack-options-next");
+    if next.exists() {
+        regular(&next, false)?;
+    }
+    guardar_archivo(&next, format!("{}\n", lines.join("\n")).as_bytes())?;
+    let backup = game.join(".icaro-pack-options-backup");
+    if backup.exists() {
+        regular(&backup, false)?;
+        fs::remove_file(&backup).map_err(|_| Error::Disco)?;
+    }
+    if path.exists() {
+        fs::rename(path, &backup).map_err(|_| Error::Disco)?;
+    }
+    if fs::rename(&next, path).is_err() {
+        if backup.exists() {
+            let _ = fs::rename(&backup, path);
+        }
+        return Err(Error::Disco);
+    }
+    Ok(())
+}
+pub fn activar_packs(
+    store: &Almacen,
+    id: &str,
+    tipo: TipoPack,
+    files: &BTreeSet<String>,
+    activo: bool,
+) -> Result<(), Error> {
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let _lock = guardia(&game)?;
+    regular(&game.join(tipo.carpeta()), true)?;
+    for name in files {
+        if !nombre_valido(name) || !name.ends_with(".zip") {
+            return Err(Error::Datos);
+        }
+        regular(&game.join(tipo.carpeta()).join(name), false)?;
+    }
+    if tipo == TipoPack::Recursos {
+        let mut names = recursos_activos(store, id)?;
+        for name in files {
+            let key = format!("file/{name}");
+            names.retain(|n| n != &key);
+            if activo {
+                names.push(key);
+            }
+        }
+        escribir_config(
+            &game,
+            &game.join("options.txt"),
+            &[(
+                "resourcePacks:",
+                serde_json::to_string(&names).map_err(|_| Error::Datos)?,
+            )],
+        )
+    } else {
+        let path = game.join("config/iris.properties");
+        // No inventar soporte de shaders: el archivo lo crea Iris cuando está instalado.
+        if !path.exists() {
+            return Err(Error::Compatible(
+                "shaders: instala e inicia Iris antes de activarlos".into(),
+            ));
+        }
+        if activo && files.len() != 1 {
+            return Err(Error::Compatible(
+                "shaders: solo puede estar activo un paquete a la vez".into(),
+            ));
+        }
+        if let Some(name) = files.first().filter(|_| activo) {
+            escribir_config(
+                &game,
+                &path,
+                &[
+                    ("shaderPack=", name.clone()),
+                    ("enableShaders=", "true".into()),
+                ],
+            )
+        } else if packs_activos(store, id, tipo)?
+            .iter()
+            .any(|n| files.contains(n))
+        {
+            escribir_config(&game, &path, &[("enableShaders=", "false".into())])
+        } else {
+            Ok(())
+        }
+    }
+}
+/// Retira solo ZIP seleccionados; el conjunto previo queda recuperable en backup.
+pub fn quitar_packs(
+    store: &Almacen,
+    id: &str,
+    tipo: TipoPack,
+    files: &BTreeSet<String>,
+) -> Result<(), Error> {
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let _lock = guardia(&game)?;
+    recuperar_packs(&game, tipo)?;
+    let dir = game.join(tipo.carpeta());
+    regular(&dir, true)?;
+    let mut records = registros_packs(&game, tipo)?;
+    for name in files {
+        if !nombre_valido(name) || !name.ends_with(".zip") {
+            return Err(Error::Datos);
+        }
+        regular(&dir.join(name), false)?;
+    }
+    let mut nonce = [0; 16];
+    getrandom::fill(&mut nonce).map_err(|_| Error::Disco)?;
+    let stage = game.join(format!(
+        ".icaro-mods-{}-next-{}",
+        tipo.carpeta(),
+        hash(&nonce)
+    ));
+    fs::create_dir(&stage).map_err(|_| Error::Disco)?;
+    let result = (|| {
+        copiar(&dir, &stage, 0, &mut 0, &mut 0)?;
+        for name in files {
+            fs::remove_file(stage.join(name)).map_err(|_| Error::Disco)?;
+        }
+        records.retain(|r| !files.contains(&r.archivo));
+        guardar_archivo(
+            &stage.join(tipo.meta()),
+            &serde_json::to_vec_pretty(&records).map_err(|_| Error::Datos)?,
+        )?;
+        let backup = game.join(format!(".icaro-mods-{}-backup", tipo.carpeta()));
+        if backup.exists() {
+            borrar_preparacion(&game, &backup)?;
+        }
+        fs::rename(&dir, &backup).map_err(|_| Error::Disco)?;
+        if fs::rename(&stage, &dir).is_err() {
+            let _ = fs::rename(&backup, &dir);
+            return Err(Error::Disco);
+        }
+        let cfg = (|| -> Result<(), Error> {
+            if tipo == TipoPack::Recursos {
+                let mut active = recursos_activos(store, id)?;
+                active.retain(|x| !files.iter().any(|n| x == &format!("file/{n}")));
+                escribir_config(
+                    &game,
+                    &game.join("options.txt"),
+                    &[(
+                        "resourcePacks:",
+                        serde_json::to_string(&active).map_err(|_| Error::Datos)?,
+                    )],
+                )
+            } else if packs_activos(store, id, tipo)?
+                .iter()
+                .any(|n| files.contains(n))
+            {
+                escribir_config(
+                    &game,
+                    &game.join("config/iris.properties"),
+                    &[("enableShaders=", "false".into())],
+                )
+            } else {
+                Ok(())
+            }
+        })();
+        if let Err(e) = cfg {
+            let _ = fs::rename(&dir, &stage);
+            let _ = fs::rename(&backup, &dir);
+            return Err(e);
+        }
+        Ok(())
+    })();
+    if stage.exists() {
+        let _ = borrar_preparacion(&game, &stage);
+    }
+    result
+}
+
 fn principal(v: &Version) -> Result<&ModFile, Error> {
     let f = v
         .files
@@ -422,7 +1027,8 @@ pub async fn resolver(
                 .values()
                 .any(|other| matches(&other.project_id, &other.id))
                 || installed.iter().any(|other| {
-                    !selected.contains_key(&other.project_id)
+                    other.activo
+                        && !selected.contains_key(&other.project_id)
                         && matches(&other.project_id, &other.version_id)
                 });
             if conflict {
@@ -432,7 +1038,7 @@ pub async fn resolver(
     }
     for old in installed
         .iter()
-        .filter(|m| !selected.contains_key(&m.project_id))
+        .filter(|m| m.activo && !selected.contains_key(&m.project_id))
     {
         for dep in &old.dependencias {
             let project = if dep.dependency_type == "required" && dep.project_id.is_none() {
@@ -464,7 +1070,7 @@ pub async fn resolver(
     }
     Ok(selected.into_values().collect())
 }
-fn borrar_preparacion(game: &Path, path: &Path) -> Result<(), Error> {
+pub(crate) fn borrar_preparacion(game: &Path, path: &Path) -> Result<(), Error> {
     regular(path, true)?;
     let root = fs::canonicalize(game).map_err(|_| Error::Disco)?;
     let resolved = fs::canonicalize(path).map_err(|_| Error::Disco)?;
@@ -695,6 +1301,39 @@ pub async fn instalar(
         let _ = borrar_preparacion(&game, &stage);
     }
     result
+}
+
+/// Metadata preparada para una migración; se valida cada JAR antes de publicarla.
+pub(crate) fn registrar_inventario(
+    store: &Almacen,
+    id: &str,
+    list: &[Instalado],
+) -> Result<(), Error> {
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let _lock = guardia(&game)?;
+    let dir = game.join("mods");
+    regular(&dir, true)?;
+    let mut projects = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    if list.len() > 512 {
+        return Err(Error::Datos);
+    }
+    let records = list
+        .iter()
+        .filter(|m| !m.project_id.is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    for m in &records {
+        if !nombre_valido(&m.archivo)
+            || !m.archivo.ends_with(".jar")
+            || !projects.insert(m.project_id.clone())
+            || !names.insert(m.archivo.to_lowercase())
+        {
+            return Err(Error::Datos);
+        }
+        comprobar_actual(&dir, m)?;
+    }
+    guardar_registros(&game, &records)
 }
 
 pub fn alternar(store: &Almacen, id: &str, filename: &str) -> Result<(), Error> {
@@ -929,6 +1568,297 @@ mod tests {
             bad: false,
             downloads: AtomicUsize::new(0),
         }
+    }
+    struct RecursoFake {
+        version: Version,
+        bytes: Vec<u8>,
+        corrupto: bool,
+    }
+    impl Fuente for RecursoFake {
+        async fn version(&self, _: &str) -> Result<Version, Error> {
+            Ok(self.version.clone())
+        }
+        async fn versiones(&self, _: &str, _: &str, _: &str) -> Result<Vec<Version>, Error> {
+            Ok(vec![self.version.clone()])
+        }
+        async fn nombre(&self, _: &str) -> Result<String, Error> {
+            Ok("Fresh Animations".into())
+        }
+        async fn archivo(&self, _: &ModFile) -> Result<Vec<u8>, Error> {
+            Ok(if self.corrupto {
+                b"incorrecto".to_vec()
+            } else {
+                self.bytes.clone()
+            })
+        }
+    }
+    fn recurso_fake() -> RecursoFake {
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .start_file("pack.mcmeta", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive
+            .write_all(br#"{"pack":{"pack_format":46,"description":"Prueba"}}"#)
+            .unwrap();
+        let bytes = archive.finish().unwrap().into_inner();
+        let mut v = version("resource", "01", vec![]);
+        v.loaders = vec!["minecraft".into()];
+        v.game_versions = vec!["26.3".into()];
+        v.files[0].filename = "fresh-animations.zip".into();
+        v.files[0].size = bytes.len() as u64;
+        v.files[0].hashes.sha512 = hash(&bytes);
+        RecursoFake {
+            version: v,
+            bytes,
+            corrupto: false,
+        }
+    }
+    #[tokio::test]
+    async fn resourcepack_zip_no_exige_loader_y_permite_otro_minecraft() {
+        let p = Prueba::nueva();
+        let (store, i) = p.instancia();
+        let source = recurso_fake();
+        assert!(recurso_compatible(&source.version, "26.3"));
+        assert!(!recurso_compatible(&source.version, "1.21.1"));
+        let list = instalar_recursos(&source, &store, &i.id, vec![source.version.clone()], |_| {})
+            .await
+            .unwrap();
+        let game = store.juego(&i.id).unwrap();
+        assert_eq!(
+            fs::read(game.join("resourcepacks/fresh-animations.zip")).unwrap(),
+            source.bytes
+        );
+        assert!(!game.join("mods/fresh-animations.zip").exists());
+        assert!(!game.join("resourcepacks/pack.mcmeta").exists());
+        assert_eq!(list[0].nombre, "Fresh Animations");
+        assert_eq!(inventario_recursos(&store, &i.id).unwrap().len(), 1);
+        fs::write(game.join("resourcepacks/local.zip"), &source.bytes).unwrap();
+        assert_eq!(inventario_recursos(&store, &i.id).unwrap().len(), 2);
+        fs::write(
+            game.join("options.txt"),
+            "lang:es_es\nresourcePacks:[\"vanilla\",\"file/local.zip\"]\ngamma:0.8\n",
+        )
+        .unwrap();
+        alternar_recurso(&store, &i.id, "fresh-animations.zip").unwrap();
+        assert_eq!(
+            recursos_activos(&store, &i.id).unwrap(),
+            ["vanilla", "file/local.zip", "file/fresh-animations.zip"]
+        );
+        let options = fs::read_to_string(game.join("options.txt")).unwrap();
+        assert!(options.contains("lang:es_es\n") && options.contains("gamma:0.8\n"));
+        alternar_recurso(&store, &i.id, "fresh-animations.zip").unwrap();
+        assert_eq!(
+            recursos_activos(&store, &i.id).unwrap(),
+            ["vanilla", "file/local.zip"]
+        );
+        assert!(matches!(
+            alternar_recurso(&store, &i.id, "../options.txt"),
+            Err(Error::Datos)
+        ));
+    }
+    #[tokio::test]
+    async fn resourcepack_hash_incorrecto_conserva_zip_anterior() {
+        let p = Prueba::nueva();
+        let (store, i) = p.instancia();
+        let mut source = recurso_fake();
+        instalar_recursos(&source, &store, &i.id, vec![source.version.clone()], |_| {})
+            .await
+            .unwrap();
+        source.corrupto = true;
+        source.version.id = "nueva".into();
+        let result =
+            instalar_recursos(&source, &store, &i.id, vec![source.version.clone()], |_| {}).await;
+        assert!(matches!(result, Err(Error::Hash)));
+        assert_eq!(
+            fs::read(
+                store
+                    .juego(&i.id)
+                    .unwrap()
+                    .join("resourcepacks/fresh-animations.zip")
+            )
+            .unwrap(),
+            source.bytes
+        );
+        assert_eq!(
+            inventario_recursos(&store, &i.id).unwrap()[0].version_id,
+            "resource01"
+        );
+    }
+    #[tokio::test]
+    async fn shaders_zip_iris_activation_preserves_configuration_and_rejects_resourcepack() {
+        let p = Prueba::nueva();
+        let (store, i) = p.instancia();
+        let mut source = recurso_fake();
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive
+            .start_file(
+                "shaders/shaders.properties",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive.write_all(b"clouds=off").unwrap();
+        source.bytes = archive.finish().unwrap().into_inner();
+        source.version.files[0].size = source.bytes.len() as u64;
+        source.version.files[0].hashes.sha512 = hash(&source.bytes);
+        source.version.files[0].filename = "shader.zip".into();
+        instalar_packs(
+            &source,
+            &store,
+            &i.id,
+            vec![source.version.clone()],
+            TipoPack::Shaders,
+            |_| {},
+        )
+        .await
+        .unwrap();
+        let game = store.juego(&i.id).unwrap();
+        let files = BTreeSet::from(["shader.zip".into()]);
+        assert!(!game.join("resourcepacks/shader.zip").exists());
+        assert!(matches!(
+            activar_packs(&store, &i.id, TipoPack::Shaders, &files, true),
+            Err(Error::Compatible(_))
+        ));
+        fs::create_dir_all(game.join("config")).unwrap();
+        fs::write(
+            game.join("config/iris.properties"),
+            "# Iris\nmaxShadowRenderDistance=32\nenableShaders=false\n",
+        )
+        .unwrap();
+        activar_packs(&store, &i.id, TipoPack::Shaders, &files, true).unwrap();
+        assert!(inventario_packs(&store, &i.id, TipoPack::Shaders).unwrap()[0].activo);
+        assert!(fs::read_to_string(game.join("config/iris.properties"))
+            .unwrap()
+            .contains("maxShadowRenderDistance=32"));
+        source.version.id = "shader02".into();
+        source.version.files[0].filename = "shader-new.zip".into();
+        instalar_packs(
+            &source,
+            &store,
+            &i.id,
+            vec![source.version.clone()],
+            TipoPack::Shaders,
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            packs_activos(&store, &i.id, TipoPack::Shaders).unwrap(),
+            ["shader-new.zip"]
+        );
+        quitar_packs(
+            &store,
+            &i.id,
+            TipoPack::Shaders,
+            &BTreeSet::from(["shader-new.zip".into()]),
+        )
+        .unwrap();
+        assert!(inventario_packs(&store, &i.id, TipoPack::Shaders)
+            .unwrap()
+            .is_empty());
+        assert!(packs_activos(&store, &i.id, TipoPack::Shaders)
+            .unwrap()
+            .is_empty());
+        let invalid = recurso_fake();
+        assert!(matches!(
+            instalar_packs(
+                &invalid,
+                &store,
+                &i.id,
+                vec![invalid.version.clone()],
+                TipoPack::Shaders,
+                |_| {}
+            )
+            .await,
+            Err(Error::Datos)
+        ));
+    }
+    #[tokio::test]
+    async fn resourcepacks_bulk_activation_removal_preserves_unselected_and_renamed_update() {
+        let p = Prueba::nueva();
+        let (store, i) = p.instancia();
+        let mut source = recurso_fake();
+        instalar_recursos(&source, &store, &i.id, vec![source.version.clone()], |_| {})
+            .await
+            .unwrap();
+        let game = store.juego(&i.id).unwrap();
+        fs::write(game.join("resourcepacks/local.zip"), &source.bytes).unwrap();
+        fs::write(
+            game.join("options.txt"),
+            "lang:es_es\nresourcePacks:[\"vanilla\"]\n",
+        )
+        .unwrap();
+        let files = BTreeSet::from(["fresh-animations.zip".into(), "local.zip".into()]);
+        activar_packs(&store, &i.id, TipoPack::Recursos, &files, true).unwrap();
+        assert_eq!(
+            inventario_recursos(&store, &i.id)
+                .unwrap()
+                .iter()
+                .filter(|m| m.activo)
+                .count(),
+            2
+        );
+        source.version.id = "resource02".into();
+        source.version.files[0].filename = "fresh-new.zip".into();
+        instalar_recursos(&source, &store, &i.id, vec![source.version.clone()], |_| {})
+            .await
+            .unwrap();
+        assert_eq!(
+            recursos_activos(&store, &i.id).unwrap(),
+            ["vanilla", "file/fresh-new.zip", "file/local.zip"]
+        );
+        let options_before = fs::read(game.join("options.txt")).unwrap();
+        fs::write(game.join("options.txt"), "resourcePacks:INVALID\n").unwrap();
+        source.version.id = "resource03".into();
+        source.version.files[0].filename = "fresh-latest.zip".into();
+        assert!(matches!(
+            instalar_recursos(&source, &store, &i.id, vec![source.version.clone()], |_| {}).await,
+            Err(Error::Datos)
+        ));
+        assert!(game.join("resourcepacks/fresh-new.zip").exists());
+        assert!(!game.join("resourcepacks/fresh-latest.zip").exists());
+        let manifest: Vec<Instalado> = serde_json::from_slice(
+            &fs::read(game.join("resourcepacks/.icaro-resourcepacks.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest[0].version_id, "resource02");
+        assert!(matches!(
+            quitar_packs(
+                &store,
+                &i.id,
+                TipoPack::Recursos,
+                &BTreeSet::from(["fresh-new.zip".into()])
+            ),
+            Err(Error::Datos)
+        ));
+        assert!(game.join("resourcepacks/fresh-new.zip").exists());
+        fs::write(game.join("options.txt"), options_before).unwrap();
+        quitar_packs(
+            &store,
+            &i.id,
+            TipoPack::Recursos,
+            &BTreeSet::from(["fresh-new.zip".into()]),
+        )
+        .unwrap();
+        assert_eq!(
+            inventario_recursos(&store, &i.id).unwrap()[0].archivo,
+            "local.zip"
+        );
+        assert_eq!(
+            recursos_activos(&store, &i.id).unwrap(),
+            ["vanilla", "file/local.zip"]
+        );
+        assert!(fs::read_to_string(game.join("options.txt"))
+            .unwrap()
+            .contains("lang:es_es"));
+        assert!(matches!(
+            quitar_packs(
+                &store,
+                &i.id,
+                TipoPack::Recursos,
+                &BTreeSet::from(["../options.txt".into()])
+            ),
+            Err(Error::Datos)
+        ));
     }
     #[tokio::test]
     async fn retirar_y_deshacer_preserva_mods_manuales_y_no_pisa_archivos_nuevos() {

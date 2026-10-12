@@ -54,6 +54,7 @@ pub fn boton<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let contenido = text(etiqueta.to_uppercase())
         .font(fuentes::ETIQUETA)
+        .wrapping(iced::widget::text::Wrapping::None)
         .size(texto::LABEL.0);
     let b = button(
         container(contenido)
@@ -81,6 +82,7 @@ pub fn boton_compacto<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let contenido = text(etiqueta.to_uppercase())
         .font(fuentes::ETIQUETA)
+        .wrapping(iced::widget::text::Wrapping::None)
         .size(texto::LABEL.0);
     let b = button(
         container(contenido)
@@ -113,6 +115,7 @@ pub fn boton_con_icono<'a, M: Clone + 'a>(
     let deshabilitado = al_pulsar.is_none();
     let rotulo = text(etiqueta.to_uppercase())
         .font(fuentes::ETIQUETA)
+        .wrapping(iced::widget::text::Wrapping::None)
         .size(texto::LABEL.0);
     let contenido = if glifo == Icono::Adelante {
         row![rotulo, crate::iconos::icono_texto(glifo, Tam::Base)]
@@ -202,7 +205,8 @@ pub fn campo<'a, M: Clone + 'a>(
         .on_input(al_cambiar)
         .font(fuentes::CUERPO)
         .size(texto::BODY.0)
-        .padding(Padding::from([10.0, espacio::S4]))
+        .line_height(iced::widget::text::LineHeight::Absolute(20.0.into()))
+        .padding(Padding::from([8.0, espacio::S4]))
         .style(estilo::campo(p))
         .into()
 }
@@ -219,7 +223,8 @@ pub fn campo_con_icono<'a, M: Clone + 'a>(
         .on_input(al_cambiar)
         .font(fuentes::CUERPO)
         .size(texto::BODY.0)
-        .padding(Padding::from([8., 0.]))
+        .line_height(iced::widget::text::LineHeight::Absolute(20.0.into()))
+        .padding(0)
         .style(move |theme, status| {
             let mut s = estilo::campo(p)(theme, status);
             s.border.width = 0.;
@@ -233,7 +238,9 @@ pub fn campo_con_icono<'a, M: Clone + 'a>(
         .spacing(8)
         .align_y(iced::Alignment::Center),
     )
-    .padding(Padding::from([2., 12.]))
+    .height(medida::CONTROL)
+    .align_y(iced::alignment::Vertical::Center)
+    .padding(Padding::from([0., 12.]))
     .style(move |_| iced::widget::container::Style {
         background: Some(iced::Background::Color(p.surface_sunken)),
         border: iced::Border {
@@ -305,9 +312,13 @@ pub fn insignia<'a, M: 'a>(p: Paleta, estado: Estado, palabra: &str) -> Element<
     container(
         text(palabra.to_uppercase())
             .font(fuentes::ETIQUETA)
-            .size(texto::LABEL.0),
+            .size(10)
+            .line_height(iced::widget::text::LineHeight::Relative(1.0))
+            .wrapping(iced::widget::text::Wrapping::None),
     )
-    .padding(Padding::from([espacio::S1 + 2.0, espacio::S3]))
+    .height(20)
+    .align_y(iced::alignment::Vertical::Center)
+    .padding(Padding::from([0., 6.]))
     .style(estilo::insignia(fondo, tinta))
     .into()
 }
@@ -317,9 +328,13 @@ pub fn insignia_contorno<'a, M: 'a>(p: Paleta, palabra: &str) -> Element<'a, M> 
     container(
         text(palabra.to_uppercase())
             .font(fuentes::ETIQUETA)
-            .size(texto::LABEL.0),
+            .size(10)
+            .line_height(iced::widget::text::LineHeight::Relative(1.0))
+            .wrapping(iced::widget::text::Wrapping::None),
     )
-    .padding(Padding::from([espacio::S1 + 2.0, espacio::S3]))
+    .height(20)
+    .align_y(iced::alignment::Vertical::Center)
+    .padding(Padding::from([0., 6.]))
     .style(estilo::insignia(iced::Color::TRANSPARENT, p.text))
     .into()
 }
@@ -752,6 +767,7 @@ pub fn boton_jugar<'a, M: Clone + 'a>(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EstadoJugar {
     Listo,
+    PorInstalar,
     Instalando(f32),
     Preparando,
     Ejecutando,
@@ -828,6 +844,7 @@ pub fn boton_jugar_estado_animado<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let (label, icono) = match estado {
         EstadoJugar::Listo => ("Jugar", crate::iconos::Icono::Jugar),
+        EstadoJugar::PorInstalar => ("Instalar", crate::iconos::Icono::Descargas),
         EstadoJugar::Instalando(_) => ("Instalando", crate::iconos::Icono::Descargas),
         EstadoJugar::Preparando => ("Preparando", crate::iconos::Icono::Espera),
         EstadoJugar::Ejecutando => ("En ejecución", crate::iconos::Icono::Check),
@@ -899,7 +916,7 @@ pub fn boton_jugar_estado_animado<'a, M: Clone + 'a>(
         // La referencia define un ancho mínimo: los estados con textos más
         // largos necesitan crecer para conservar etiqueta y metadato en línea.
         .width(match estado {
-            EstadoJugar::Listo => 260,
+            EstadoJugar::Listo | EstadoJugar::PorInstalar => 260,
             EstadoJugar::Instalando(_) | EstadoJugar::Preparando => 300,
             EstadoJugar::Ejecutando | EstadoJugar::Cerrar => 340,
         })
@@ -907,7 +924,7 @@ pub fn boton_jugar_estado_animado<'a, M: Clone + 'a>(
         .padding(0)
         .on_press_maybe(accion);
     match estado {
-        EstadoJugar::Listo => b.style(estilo::boton_primario(p)).into(),
+        EstadoJugar::Listo | EstadoJugar::PorInstalar => b.style(estilo::boton_primario(p)).into(),
         EstadoJugar::Cerrar => b.style(estilo::boton_peligro(p)).into(),
         _ => b
             .style(move |_: &iced::Theme, _| iced::widget::button::Style {

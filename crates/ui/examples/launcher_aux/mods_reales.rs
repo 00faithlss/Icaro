@@ -18,17 +18,22 @@ use iced::{
     Element, Task,
 };
 use std::collections::BTreeMap;
+#[path = "packs_reales.rs"]
+pub mod packs;
 
 #[derive(Default)]
 pub struct Estado {
     pub diseno: crate::diseno_mods::Estado,
+    pub packs: packs::Estado,
     pub listas: BTreeMap<String, Vec<Instalado>>,
+    pub recursos: BTreeMap<String, Vec<Instalado>>,
     pub tamanos: BTreeMap<String, u64>,
     pub updates: BTreeMap<String, Vec<Version>>,
     pub errores: BTreeMap<String, String>,
     pub busy: Option<String>,
     pub progreso: String,
     pub confirmacion: Option<(Instancia, Vec<Version>)>,
+    pub confirmacion_recurso: Option<(Instancia, Version)>,
     comprobando: BTreeMap<String, u64>,
     secuencia: u64,
     operacion: u64,
@@ -184,10 +189,15 @@ pub fn ejecutar(app: &mut App, i: Instancia, versions: Vec<Version>) -> Task<Men
                     Some(p) = rx.recv() => { let _ = output.send(Accion::Progreso(request, p)).await; }
                 }
             };
-            let _ = output.send(Accion::Terminada(i.id, request, result)).await;
+            let _ = output
+                .send(Accion::Terminada(i.id.clone(), request, result))
+                .await;
         }),
         m,
     )
+}
+pub fn cargar_recursos(app: &mut App) {
+    packs::cargar_local(app, mods::TipoPack::Recursos)
 }
 pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
     if app.servicios.demo {
@@ -315,7 +325,10 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 return ejecutar(app, i, versions);
             }
         }
-        Accion::Cancelar => app.servicios.mods.confirmacion = None,
+        Accion::Cancelar => {
+            app.servicios.mods.confirmacion = None;
+            app.servicios.mods.confirmacion_recurso = None;
+        }
         Accion::Progreso(request, p) if request == app.servicios.mods.operacion => {
             app.servicios.mods.progreso = p
         }
@@ -418,6 +431,18 @@ pub fn accion_proyecto<'a>(
         }),
     )
 }
+pub fn accion_recurso<'a>(
+    app: &'a App,
+    project: &str,
+    version: Option<&str>,
+) -> Element<'a, Mensaje> {
+    packs::accion_instalar(app, mods::TipoPack::Recursos, project, version)
+}
+/// Reutiliza las filas del System Design para el inventario real de ZIP.
+pub fn vista_recursos(app: &App) -> Element<'_, Mensaje> {
+    packs::vista(app, mods::TipoPack::Recursos)
+}
+
 pub fn estado_operacion(app: &App) -> Element<'_, Mensaje> {
     let p = app.modo.paleta();
     let mut body = column![].spacing(espacio::S2);
@@ -472,14 +497,82 @@ pub fn capa<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, Mensa
     )
 }
 pub fn suscripcion(app: &App) -> iced::Subscription<Mensaje> {
-    if app.servicios.mods.confirmacion.is_none() {
-        return iced::Subscription::none();
+    let regular = if app.servicios.mods.confirmacion.is_some() {
+        iced::keyboard::on_key_press(|key, _| {
+            matches!(
+                key,
+                iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
+            )
+            .then(|| m(Accion::Cancelar))
+        })
+    } else {
+        iced::Subscription::none()
+    };
+    iced::Subscription::batch([regular, packs::suscripcion(app)])
+}
+
+/// Escenas de revisión sin descargas ni acceso a archivos de la cuenta.
+pub fn preparar_diseno(app: &mut App, scene: &str) {
+    use icaro_core::modrinth::Project;
+    app.servicios.demo = false;
+    app.servicios.restoring = false;
+    app.editor = Some(3);
+    app.editor_inst = 0;
+    app.mods_vista = usize::from(scene.contains("ficha"));
+    let i = Instancia {
+        id: "00000000000000000000000000000001".into(),
+        nombre: "Supervivencia".into(),
+        minecraft: "26.3".into(),
+        loader: if scene.contains("vanilla") {
+            "vanilla"
+        } else {
+            "fabric"
+        }
+        .into(),
+        portada: 0,
+        creada: 0,
+    };
+    app.general.nombre = i.nombre.clone();
+    app.servicios.instancias.registros = vec![i.clone()];
+    if let Some(card) = crate::lista_instancias().lock().unwrap().first_mut() {
+        card.nombre = i.nombre.clone();
+        card.version = format!("{} · {}", i.minecraft, i.loader);
     }
-    iced::keyboard::on_key_press(|key, _| {
-        matches!(
-            key,
-            iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape)
-        )
-        .then(|| m(Accion::Cancelar))
-    })
+    let mc = if scene.contains("otra") {
+        "1.20.1"
+    } else {
+        "26.3"
+    };
+    let mut project: Project = serde_json::from_value(serde_json::json!({"id":"50dA9Sha", "project_type":"resourcepack", "slug":"fresh-animations", "title":"Fresh Animations", "description":"Animaciones para mobs", "body":"# Fresh Animations\n\nPaquete de recursos que mejora las animaciones de las criaturas.", "license":{"id":"custom","name":"Licencia personalizada"}, "downloads":49620830, "game_versions":[mc], "loaders":["minecraft"], "categories":["entities"], "client_side":"required", "server_side":"unsupported"})).unwrap();
+    let mut v: Version = serde_json::from_value(serde_json::json!({"id":"resourceqa", "project_id":"50dA9Sha", "name":"Fresh Animations", "version_number":"1.10.5", "version_type":"release", "game_versions":[mc], "loaders":["minecraft"], "downloads":10000, "date_published":"2026-04-01T00:00:00Z", "files":[], "dependencies":[]})).unwrap();
+    if scene.starts_with("shaders") {
+        project.project_type="shader".into();
+        project.title="Complementary Reimagined".into();
+        project.description="Iluminación, sombras y reflejos para Minecraft.".into();
+        project.body="# Complementary Reimagined\n\nPaquete de shaders para Iris y OptiFine.".into();
+        project.loaders=vec!["iris".into(),"optifine".into()];
+        project.categories=vec!["realistic".into()];
+        v.name=project.title.clone(); v.loaders=project.loaders.clone(); v.version_number="r5.6.1".into();
+    }
+    app.servicios.mods.recursos.insert(
+        i.id.clone(),
+        vec![Instalado {
+            project_id: project.id.clone(),
+            nombre: project.title.clone(),
+            version_id: v.id.clone(),
+            version: v.version_number.clone(),
+            publicada: v.date_published.clone(),
+            archivo: "FreshAnimations_v1.10.5.zip".into(),
+            sha512: String::new(),
+            activo: true,
+            dependencias: vec![],
+        }],
+    );
+    packs::preparar_diseno(app, scene, &i, &project, &v);
+    if scene.contains("ficha") {
+        app.servicios.mods.recursos.clear();
+        app.servicios.document = crate::catalogo::Documento::parse(&project.body);
+        app.servicios.ficha = crate::ficha::Estado::nuevo(None, std::slice::from_ref(&v));
+        app.servicios.detail = Some((project, vec![v.clone()]));
+    }
 }
