@@ -264,8 +264,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 if p.project_type != if t == TipoPack::Recursos { "resourcepack" } else { "shader" } { return Err("El proyecto no corresponde a esta tienda.".into()); }
                 let mut versions = catalog.versions(&requested, None, None).await.map_err(|e|e.to_string())?;
                 versions.sort_by(|a,b|b.date_published.cmp(&a.date_published));
-                versions.iter().find(|v| version.as_ref().is_some_and(|id| id == &v.id))
-                    .or_else(|| version.is_none().then(|| versions.iter().find(|v|v.version_type=="release" && mods::recurso_compatible(v,&minecraft)).or_else(||versions.iter().find(|v|v.version_type=="release"))).flatten())
+                elegir_version(&versions, version.as_deref(), &minecraft)
                     .cloned().ok_or_else(||"No hay un archivo instalable para este proyecto.".to_owned())
             }, move |r|m(Accion::CestaPreparada(i.clone(),t,project.clone(),g,r)));
         }
@@ -512,6 +511,16 @@ pub fn accion_instalar<'a>(
         }),
     )
 }
+// La compatibilidad orienta la elección; no impide probar un ZIP de otra versión.
+fn elegir_version<'a>(versions: &'a [Version], requested: Option<&str>, minecraft: &str) -> Option<&'a Version> {
+    let available = || versions.iter().filter(|v| v.files.iter().any(|f| f.filename.ends_with(".zip")));
+    if let Some(id) = requested { return available().find(|v| v.id == id); }
+    available().find(|v| v.version_type == "release" && mods::recurso_compatible(v, minecraft))
+        .or_else(|| available().find(|v| mods::recurso_compatible(v, minecraft)))
+        .or_else(|| available().find(|v| v.version_type == "release"))
+        .or_else(|| available().next())
+}
+
 pub fn cesta(app: &App, tipo: TipoPack) -> &[Version] {
     key(app,tipo).and_then(|k|app.servicios.mods.packs.cestas.get(&k)).map_or(&[],Vec::as_slice)
 }
@@ -932,5 +941,23 @@ pub fn preparar_diseno(app: &mut App, scene: &str, i: &Instancia, project: &Proj
     }
     if scene.contains("confirmacion") {
         app.servicios.mods.packs.confirmacion = Some((i.clone(), tipo, vec![v.clone()], false));
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn version(id: &str, tipo: &str, mc: &str) -> Version {
+        serde_json::from_value(serde_json::json!({"id":id,"project_id":"pack","name":id,"version_number":id,"version_type":tipo,"game_versions":[mc],"loaders":["minecraft"],"files":[{"filename":"pack.zip","url":"https://cdn.modrinth.com/pack.zip","size":1,"primary":true,"hashes":{"sha512":"00"}}],"dependencies":[],"changelog":null})).unwrap()
+    }
+    #[test]
+    fn agregar_acepta_beta_y_otra_version_sin_confundir_la_eleccion_explicita() {
+        let versiones = vec![version("beta", "beta", "1.21.1"), version("estable", "release", "1.20.1")];
+        assert_eq!(elegir_version(&versiones, None, "1.21.1").unwrap().id, "beta");
+        assert_eq!(elegir_version(&versiones[..1], None, "26.3").unwrap().id, "beta");
+        assert_eq!(elegir_version(&versiones, Some("estable"), "1.21.1").unwrap().id, "estable");
+        assert!(elegir_version(&versiones, Some("ausente"), "1.21.1").is_none());
+        let mut sin_archivo = versiones;
+        for v in &mut sin_archivo { v.files.clear(); }
+        assert!(elegir_version(&sin_archivo, None, "1.21.1").is_none());
     }
 }

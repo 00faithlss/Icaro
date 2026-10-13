@@ -765,10 +765,13 @@ fn cuerpo<'a>(app: &'a App, instancia: Option<String>, con_filtro: bool) -> Elem
     let p = app.paleta();
     let ctx = contexto(app);
     let est = &app.capt;
+    let visibles: Vec<usize> = est.visibles(instancia.as_deref());
+    if !con_filtro && (est.vacio || visibles.is_empty()) {
+        return vacios::capturas_para_jugar(ctx, Mensaje::Jugar(app.editor_inst));
+    }
     if est.vacio || est.capturas.is_empty() {
         return vacios::capturas(ctx, Mensaje::Ir(icaro_ui::shell::Seccion::Instancias));
     }
-    let visibles: Vec<usize> = est.visibles(instancia.as_deref());
     // Las seleccionadas que ya no se ven dejan de contar.
     let seleccion: Vec<usize> = est
         .seleccion

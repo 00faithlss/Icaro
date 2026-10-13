@@ -18,6 +18,9 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 
 ## Avances recientes
 
+- [x] Botón de preparación con trama estática y estado estable durante eventos intercalados de descarga/verificación, evitando destellos y cambios rápidos de composición.
+- [x] Confirmación de eliminación con nombre y consecuencias, diez bloques cuadrados y grietas en toda la tarjeta. Iconos con vista previa inmediata y guardado final de calidad; botones conservan contorno e invierten tinta/papel. Capturas vacías dentro de una instancia ofrecen Jugar.
+- [x] Menú de Mods anclado al botón y reposicionado al maximizar; Agregar acepta ZIP de recursos/shaders beta o de otra versión; ArchivosNoVerificados limita la lámina y usa interlineado absoluto.
 - [x] Tiendas de mods, resourcepacks y shaders con composición y cesta compartidas; filtros de entorno distinguen cliente, servidor y ambos.
 - [x] Apariencia, insignias, progreso y toasts recuperan los componentes originales y sus estados reales.
 - [x] Servidores muestra EnConstruccion en modo real; la maqueta de servidores permanece separada.
@@ -136,6 +139,8 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `Movimiento`, `TransicionesPantalla` | A evaluar | Losa, avisos, Picar y Umbral implementados parcialmente. El launcher cambia contenido con fundido; Muro/Rastrillo/Prensa y Lupa no están aplicados como establece la referencia. Reducir movimiento existe; falta revisar el recorrido completo. |
 
 ## Orden para completar el diseño
+
+El [detalle de implementación pendiente](pendientes-implementacion.md) define el alcance de instalación oficial de loaders, importación de modpacks y las comprobaciones que faltan.
 
 1. **Instancia jugable:** extender el instalador a loaders manteniendo los componentes ya conectados; repetir en Linux el recorrido de Vanilla confirmado en Windows. Completar historial de descargas y unificar los instaladores en la cola global.
 2. **Editor y acciones:** completar General/Java, recuperación de Archivos/Capturas, prioridad de Recursos y Mundos; importar/clonar y exportar MRPACK. El cambio de versión con respaldo/copia ya está conectado; falta instalar el loader elegido.

@@ -749,6 +749,16 @@ fn barra(app: &App) -> Element<'_, Mensaje> {
     .into()
 }
 
+fn menu_lista(app: &App, p: icaro_ui::tema::Paleta, activo: bool) -> Element<'_, Mensaje> {
+    use icaro_ui::superficies::{menu_contextual, ElementoMenu};
+    let boton = icaro_ui::descargas::boton_icono(p, Icono::Acciones, m(Accion::MenuBarra));
+    let menu = menu_contextual(app.paleta(), vec![
+        ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar lista…".into(), atajo: None, peligro: false, mensaje: m(Accion::ExportarLista) },
+        ElementoMenu::Opcion { icono: Icono::Aviso, texto: "Archivos sin verificar".into(), atajo: None, peligro: false, mensaje: m(Accion::VerificarArchivos) },
+    ]);
+    icaro_ui::menu_anclado::menu(boton, menu, activo && app.servicios.mods.diseno.menu_barra, m(Accion::MenuBarra))
+}
+
 pub fn lista(app: &App) -> Element<'_, Mensaje> {
     let p = app.paleta();
     let installed = mods_reales::lista(app);
@@ -776,7 +786,7 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
         p, "Seleccionar todos", Variante::Secundario,
         (!installed.is_empty()).then(|| m(Accion::SeleccionarTodos)),
     ));
-    toolbar=toolbar.push(icaro_ui::descargas::boton_icono(p,Icono::Acciones,m(Accion::MenuBarra)));
+    toolbar=toolbar.push(menu_lista(app, p, count == 0));
     if !mods_reales::updates(app).is_empty() {
         toolbar = toolbar.push(componentes::boton_con_icono(
             p,
@@ -843,7 +853,7 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
                     (!busy).then(|| m(Accion::Retirar)),
                     true
                 ),
-                icaro_ui::descargas::boton_icono(inv,Icono::Acciones,m(Accion::MenuBarra)),
+                menu_lista(app, inv, true),
                 componentes::boton_con_icono(
                     inv,
                     Icono::Cerrar,
@@ -1076,17 +1086,7 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
     .padding(Padding::from([24., 48.]))
     .height(Length::Fill)
     .into();
-    if app.servicios.mods.diseno.menu_barra {
-        use icaro_ui::superficies::{menu_contextual,ElementoMenu};
-        let menu=menu_contextual(p,vec![
-            ElementoMenu::Opcion{icono:Icono::Subir,texto:"Exportar lista…".into(),atajo:None,peligro:false,mensaje:m(Accion::ExportarLista)},
-            ElementoMenu::Opcion{icono:Icono::Aviso,texto:"Archivos sin verificar".into(),atajo:None,peligro:false,mensaje:m(Accion::VerificarArchivos)},
-        ]);
-        iced::widget::stack![body,
-            iced::widget::mouse_area(container(Space::new(Length::Fill,Length::Fill))).on_press(m(Accion::MenuBarra)),
-            container(menu).width(Length::Fill).align_x(Alignment::End).padding(Padding{top:106.,right:48.,bottom:0.,left:0.})
-        ].into()
-    }else{body}
+    body
 }
 
 pub fn categoria(value: &str) -> &str {

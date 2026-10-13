@@ -855,11 +855,10 @@ pub fn boton_jugar_estado<'a, M: Clone + 'a>(
     boton_jugar_estado_animado(p, estado, meta, accion, 0.)
 }
 
-/// Barrido, relleno en bloques y pulso de dos pasos del BotonJugar original.
+/// Trama estable y relleno en bloques del BotonJugar.
 struct FondoJugar {
     p: Paleta,
     estado: EstadoJugar,
-    ms: f32,
 }
 impl<M> iced::widget::canvas::Program<M> for FondoJugar {
     type State = ();
@@ -889,7 +888,9 @@ impl<M> iced::widget::canvas::Program<M> for FondoJugar {
                 }
             }
             EstadoJugar::Preparando => {
-                let mut y = (self.ms / 16.).floor() % 3.;
+                // La trama no se desplaza: moverla a cada fotograma producía
+                // destellos sobre toda la superficie del botón.
+                let mut y = 0.;
                 while y < bounds.height {
                     frame.fill_rectangle(
                         iced::Point::new(0., y),
@@ -962,7 +963,7 @@ pub fn boton_jugar_estado_animado<'a, M: Clone + 'a>(
     let contenido: Element<'a, M> =
         if matches!(estado, EstadoJugar::Instalando(_) | EstadoJugar::Preparando) {
             iced::widget::stack![
-                iced::widget::canvas(FondoJugar { p, estado, ms })
+                iced::widget::canvas(FondoJugar { p, estado })
                     .width(Length::Fill)
                     .height(Length::Fill),
                 contenido

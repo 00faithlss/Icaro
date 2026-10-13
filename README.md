@@ -141,7 +141,9 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 
 ### Próximas entregas, en orden
 
-1. **Instancias con loader:** instalar Fabric, NeoForge, Forge y Quilt en versiones compatibles y comprobar el lanzamiento con los mods ya gestionados.
+Consulta el [detalle de implementación pendiente](docs/pendientes-implementacion.md) para el alcance y las comprobaciones de loaders oficiales, importación de packs y funciones restantes.
+
+1. **Instancias con loader:** instalar Fabric, NeoForge, Forge y Quilt desde sus fuentes oficiales, respetar la versión elegida y comprobar el lanzamiento con los mods ya gestionados. Los catálogos y la elección están implementados; la instalación todavía está pendiente.
 2. **Validación multiplataforma:** repetir el recorrido de Vanilla en Arch Linux y completar las opciones de cierre en Windows; el lanzamiento real en Windows ya fue confirmado.
 3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. El cambio de versión ya permite respaldo, copia y actualización de mods; falta instalar los loaders.
 4. **Editor completo:** conectar mundos, prioridad de resourcepacks, otros motores de shaders, integridad y eliminación/recuperación de archivos y capturas; completar el historial persistente y unificar los instaladores en la cola global. Recursos, shaders, capturas y consola ya tienen sus recorridos reales descritos arriba.
@@ -153,7 +155,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [ ] Integración opcional de CurseForge, sujeta al acceso a su API y a las condiciones de distribución.
 - [ ] Conexión a servidores y sincronización de mods con un servidor.
 - [ ] Red privada y bandeja del sistema; publicar los artefactos y validar la actualización del propio launcher de extremo a extremo.
-- [ ] Verificación y reparación de instancias y revisión de archivos de origen desconocido.
+- [ ] Verificación y reparación de instancias e integración de la revisión de archivos de origen desconocido con los importes; la revisión manual de archivos ya está conectada.
 - [ ] Completar adaptación a ventanas angostas, escala, foco y navegación por teclado según el diseño original.
 - [ ] Persistir las preferencias generales y conectar sus efectos reales: idioma, inicio con el sistema y comportamiento al jugar/cerrar.
 - [ ] Validación en Windows y Arch Linux, empaquetado y publicación de la primera versión funcional.
@@ -206,6 +208,7 @@ Las obras y reproducciones utilizadas en los grabados conservan las condiciones 
 - [Acerca de Ícaro](docs/acerca-de.md)
 - [Desarrollo y estructura del proyecto](docs/desarrollo.md)
 - [Roadmap del System Design](docs/roadmap-system-design.md)
+- [Implementación pendiente: loaders, importación y siguientes entregas](docs/pendientes-implementacion.md)
 - [Comparación con el System Design](docs/revision-system-design.md)
 - [Cuenta y estudio de skin](docs/cuenta.md)
 - [Integración real, autenticación y seguridad](docs/integracion-real.md)

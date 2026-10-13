@@ -108,15 +108,28 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
     };
     let tarjeta = stack![tarjeta, container(pie).height(instancias::ALTO_TARJETA).align_bottom(instancias::ALTO_TARJETA)].into();
     let tarjeta = crate::con_efectos(app, i, &d.nombre, tarjeta);
-    let instrucciones = column![text("PICAR").font(fuentes::TITULO).size(texto::DISPLAY.0).color(p.text),
-        text("Mantén presionado el botón: la portada se agrieta en diez etapas, como un bloque bajo el pico. Suelta antes y no pasa nada.")
+    let mut bloques = row![].spacing(4);
+    for n in 0..10 {
+        bloques = bloques.push(container(Space::new(18, 18)).style(move |_| container::Style {
+            background: Some(if n < etapa.min(10) { p.text.into() } else { p.surface.into() }),
+            border: iced::Border { width: 1., color: p.border_strong, radius: 0.0.into() },
+            ..Default::default()
+        }));
+    }
+    let instrucciones = column![text(format!("¿Estás seguro de que quieres eliminar {}?", d.nombre)).font(fuentes::TITULO).size(28).color(p.text),
+        text("Se quitarán de esta instancia tus mods, mundos, capturas y progreso. Exporta una copia antes de continuar. Puedes recuperarla desde la papelera mientras conserve sus archivos.")
             .size(texto::BODY.0).color(p.text_muted),
-        column![componentes::etiqueta(p, "Etapa"), componentes::progreso_bloques(p, 10, etapa.min(10) as usize)].spacing(8),
+        text("Mantén presionado para eliminar. Si sueltas antes, se cancela.").size(texto::BODY_SM.0).color(p.text_muted),
+        column![componentes::etiqueta(p, "Progreso"), bloques].spacing(8),
         row![componentes::insignia_contorno(p, "Supr"), text("Mantener con la tarjeta enfocada").size(texto::BODY_SM.0).color(p.text_muted)]
             .spacing(12).align_y(Alignment::Center)
     ].spacing(20).width(Length::Fill);
     container(row![tarjeta, instrucciones].spacing(48)).width((app.ventana.width-64.).clamp(700.,980.)).height(Length::Shrink)
-        .padding(Padding::from([espacio::S8, espacio::S8])).style(icaro_ui::estilo::bloque(p.bg)).into()
+        .padding(Padding::from([espacio::S8, espacio::S8])).style(move |_| container::Style {
+            background: Some(p.bg.into()),
+            border: iced::Border { width: 2., color: p.text, radius: 0.0.into() },
+            ..Default::default()
+        }).into()
 }
 
 /// Picar sin escombros: la tarjeta se funde con el lienzo en dur-fast (120 ms).

@@ -145,7 +145,9 @@ impl Estado {
         } else {
             text
         };
-        t.preparando = total == 0 || !t.etapa.starts_with("Descargando");
+        // Los archivos se descargan y verifican intercalados. Una vez que
+        // empieza la descarga, esos eventos no deben alternar el botón entero.
+        t.preparando &= total == 0 || !t.etapa.starts_with("Descargando");
         t.estado = EstadoDescarga::Activa(ratio);
         Some((ratio, t.etapa.clone()))
     }
@@ -2196,7 +2198,7 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
             );
             tarjeta(app, &id, EstadoInstancia::Lista, "Lista para jugar");
         }
-        "juego-instalando" => {
+        "juego-instalando" | "juego-preparando" => {
             app.seccion = icaro_ui::shell::Seccion::Instancias;
             app.editor = Some(0);
             app.servicios.juego.trabajos.insert(
@@ -2210,7 +2212,7 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
                     cancel: CancellationToken::new(),
                     pausando: false,
                     reanudar: false,
-                    preparando: false,
+                    preparando: scene == "juego-preparando",
                     partes: Some((34, 100)),
                     bytes: false,
                 },
@@ -2445,7 +2447,7 @@ mod tests {
         assert!(estado
             .progreso("a", 7, "Verificando Java".into(), 0, 0)
             .is_some());
-        assert!(estado.trabajos["a"].preparando);
+        assert!(!estado.trabajos["a"].preparando);
         assert!(estado.trabajos["a"].partes.is_none());
         estado.trabajos.get_mut("a").unwrap().generacion = 8;
         assert!(estado
@@ -2461,8 +2463,25 @@ mod tests {
     }
 
     #[test]
+    fn eventos_intercalados_no_alternan_el_boton_durante_la_instalacion() {
+        let mut estado = estado();
+        estado.trabajos.get_mut("a").unwrap().preparando = true;
+        estado.progreso("a", 7, "Verificando Java".into(), 0, 0);
+        assert!(estado.trabajos["a"].preparando);
+        estado.progreso("a", 7, "Descargando Java".into(), 1, 100);
+        for n in 1..64 {
+            for etapa in ["Verificando archivos de Minecraft", "Descargando librerías", "Preparando componentes nativos"] {
+                assert!(estado.progreso("a", 7, etapa.into(), n, 100).is_some());
+                assert!(!estado.trabajos["a"].preparando, "{etapa}");
+                assert!(matches!(estado.trabajos["a"].estado, EstadoDescarga::Activa(_)));
+            }
+        }
+    }
+
+    #[test]
     fn cache_y_componentes_guardados_permanecen_en_preparando() {
         let mut estado = estado();
+        estado.trabajos.get_mut("a").unwrap().preparando = true;
         for etapa in [
             "Verificando archivos de Minecraft",
             "Preparando componentes nativos",

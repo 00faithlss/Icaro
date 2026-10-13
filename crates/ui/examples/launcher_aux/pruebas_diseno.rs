@@ -75,10 +75,26 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
         }
     }
     crate::componentes_nuevos_qa::preparar(&mut a,&scene);
+    if scene == "capturas-instancia-vacia" {
+        a.editor = Some(5);
+        a.capt.capturas.clear();
+    }
+    if scene.starts_with("mods-menu") {
+        a.servicios.mods.diseno.menu_barra = true;
+        if scene.contains("seleccion") {
+            let id = a.servicios.instancias.registros[0].id.clone();
+            a.servicios.mods.diseno.seleccion.insert(id, std::collections::BTreeSet::from(["sodium.jar".into()]));
+        }
+    }
     let transicion = if cambiar_versiones {Task::perform(async {tokio::time::sleep(std::time::Duration::from_millis(200)).await;}, |_|Mensaje::Servicio(crate::servicios::Accion::FichaPestana(crate::ficha::Pestana::Versiones)))} else {Task::none()};
     (
         a,
-        Task::batch([transicion,Task::perform(
+        Task::batch([transicion,
+        if scene == "mods-menu-maximizar" {
+            Task::perform(async {tokio::time::sleep(std::time::Duration::from_millis(200)).await;}, |_| ())
+                .then(|_| iced::window::get_latest().and_then(|id| iced::window::resize(id, Size::new(1920., 1000.))))
+        } else { Task::none() },
+        Task::perform(
             async {
                 tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             },

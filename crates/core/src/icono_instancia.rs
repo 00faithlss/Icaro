@@ -3,7 +3,7 @@
 
 //! IconoInstancia: imágenes acotadas, recorte y cambio reversible por sesión.
 use crate::instancias::Almacen;
-use image::{ImageFormat, RgbaImage, imageops::FilterType};
+use image::{imageops::FilterType, ImageFormat, RgbaImage};
 use std::{
     fs,
     io::{Cursor, Read},
@@ -82,6 +82,60 @@ pub fn abrir(path: &Path) -> Result<Fuente, String> {
     })
 }
 pub fn recortar(f: &Fuente, zoom: u32, x: f32, y: f32, estilo: u32) -> Result<Vec<u8>, String> {
+    if matches!(estilo, 16 | 32) {
+        // Mismos bloques finales, sin copiar y reducir millones de píxeles.
+        return png(vista_previa(f, zoom, x, y, estilo)?);
+    }
+    let (left, top, size) = region(f, zoom, x, y)?;
+    let cropped = image::imageops::crop_imm(f.imagen.as_ref(), left, top, size, size).to_image();
+    png(image::imageops::resize(
+        &cropped,
+        256,
+        256,
+        FilterType::Lanczos3,
+    ))
+}
+/// Vista interactiva: trabajo acotado a 256² muestras, sin volver a codificar PNG.
+/// El archivo definitivo conserva el recorte Lanczos de la imagen original.
+pub fn vista_previa(
+    f: &Fuente,
+    zoom: u32,
+    x: f32,
+    y: f32,
+    estilo: u32,
+) -> Result<RgbaImage, String> {
+    let (left, top, size) = region(f, zoom, x, y)?;
+    let img = f.imagen.as_ref();
+    let grid = if matches!(estilo, 16 | 32) {
+        estilo
+    } else {
+        256
+    };
+    Ok(RgbaImage::from_fn(256, 256, |ox, oy| {
+        let gx = ox * grid / 256;
+        let gy = oy * grid / 256;
+        let sx = ((gx as f32 + 0.5) * size as f32 / grid as f32 - 0.5).clamp(0., (size - 1) as f32);
+        let sy = ((gy as f32 + 0.5) * size as f32 / grid as f32 - 0.5).clamp(0., (size - 1) as f32);
+        if grid != 256 {
+            return *img.get_pixel(left + sx.round() as u32, top + sy.round() as u32);
+        }
+        let (ix, iy) = (sx.floor() as u32, sy.floor() as u32);
+        let (nx, ny) = ((ix + 1).min(size - 1), (iy + 1).min(size - 1));
+        let (tx, ty) = (sx - ix as f32, sy - iy as f32);
+        let (a, b, c, d) = (
+            img.get_pixel(left + ix, top + iy),
+            img.get_pixel(left + nx, top + iy),
+            img.get_pixel(left + ix, top + ny),
+            img.get_pixel(left + nx, top + ny),
+        );
+        image::Rgba(std::array::from_fn(|i| {
+            ((a[i] as f32 * (1. - tx) + b[i] as f32 * tx) * (1. - ty)
+                + (c[i] as f32 * (1. - tx) + d[i] as f32 * tx) * ty)
+                .round() as u8
+        }))
+    }))
+}
+fn region(f: &Fuente, zoom: u32, x: f32, y: f32) -> Result<(u32, u32, u32), String> {
     let img = f.imagen.as_ref();
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
@@ -93,14 +147,7 @@ pub fn recortar(f: &Fuente, zoom: u32, x: f32, y: f32, estilo: u32) -> Result<Ve
     let left = sx.clamp(0., w as f32 - side).round() as u32;
     let top = sy.clamp(0., h as f32 - side).round() as u32;
     let size = (side.round() as u32).min(w - left).min(h - top).max(1);
-    let cropped = image::imageops::crop_imm(img, left, top, size, size).to_image();
-    let out = if matches!(estilo, 16 | 32) {
-        let small = image::imageops::resize(&cropped, estilo, estilo, FilterType::Nearest);
-        image::imageops::resize(&small, 256, 256, FilterType::Nearest)
-    } else {
-        image::imageops::resize(&cropped, 256, 256, FilterType::Lanczos3)
-    };
-    png(out)
+    Ok((left, top, size))
 }
 fn png(img: RgbaImage) -> Result<Vec<u8>, String> {
     let mut out = Cursor::new(vec![]);
@@ -296,6 +343,33 @@ pub fn capturas(store: &Almacen, id: &str) -> Result<Vec<PathBuf>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_cambia_estilo_y_recorte_sin_mutar_la_fuente() {
+        let source = Fuente {
+            nombre: "gradiente".into(),
+            imagen: Arc::new(RgbaImage::from_fn(2000, 2236, |x, y| {
+                image::Rgba([(x % 255) as u8, (y % 255) as u8, ((x + y) % 255) as u8, 255])
+            })),
+        };
+        let original = vista_previa(&source, 100, 0., 0., 0).unwrap();
+        let pixels = vista_previa(&source, 100, 0., 0., 16).unwrap();
+        assert_ne!(original, pixels);
+        assert_eq!(
+            pixels,
+            decodificar(&recortar(&source, 100, 0., 0., 16).unwrap()).unwrap()
+        );
+        assert_eq!(original.dimensions(), (256, 256));
+        assert_ne!(original, vista_previa(&source, 200, 16., 0., 0).unwrap());
+        for y in 0..256 {
+            for x in 0..256 {
+                assert_eq!(
+                    pixels.get_pixel(x, y),
+                    pixels.get_pixel(x / 16 * 16, y / 16 * 16)
+                );
+            }
+        }
+        assert_eq!(source.imagen.dimensions(), (2000, 2236));
+    }
     #[test]
     fn patron_es_simetrico_estable_y_variaciones_distintas() {
         let a = patron("Supervivencia", 0);

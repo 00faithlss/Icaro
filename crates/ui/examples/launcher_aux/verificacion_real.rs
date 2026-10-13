@@ -261,7 +261,7 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
     Task::none()
 }
 pub fn vista(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.verificacion;
     let ocupado = s.operando || s.cargando;
     let filas: Vec<_> = s

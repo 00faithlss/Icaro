@@ -144,9 +144,12 @@ pub fn vista<'a, M: Clone + 'a>(
                 }),
         );
     }
-    let contenido = row![laminas::grabado_entero(p, Lamina::TorreReja, 200., 420.),
+    let lamina = container(laminas::grabado_entero(p, Lamina::TorreReja, 200., 420.))
+        .width(200).height(420);
+    let contenido = row![lamina,
         column![column![text(format!("{} ARCHIVOS SIN\nVERIFICAR", archivos.len()))
-            .font(fuentes::DISPLAY).size(32).line_height(34.).color(p.text),
+            .font(fuentes::DISPLAY).size(32)
+            .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(34.))).color(p.text),
             text("No pudimos verificar el origen de estos mods. Pueden ser legítimos (copiados a mano), pero conviene reemplazarlos por la versión de Modrinth.")
                 .size(14).color(p.text_muted)].spacing(8), lista].spacing(20).width(Length::Fill)
     ].spacing(40).width(920.);

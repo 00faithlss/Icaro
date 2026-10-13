@@ -58,6 +58,6 @@ pub fn preparar(app: &mut App, scene: &str) {
         app.picar_revision=Some(crate::picar_real::Revision::default());
         app.picar = Some(crate::Picar { instancia: 0, inicio: app.ahora - std::time::Duration::from_millis(480),
             soltada: None, rota: None });
-        app.reducir = true;
+        app.reducir = false;
     }
 }

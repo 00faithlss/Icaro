@@ -31,6 +31,10 @@ Las pruebas de migración, colisiones, renombrado, rollback, confianza, retirada
 
 Haz clic en el icono del editor o elige **Cambiar icono** en sus acciones. Admite PNG, JPG, WebP o GIF de hasta 10 MB; recorta en cuadrado con arrastre, flechas, zoom de 100 a 400 % y estilos Original/Píxeles 32/Píxeles 16. También puedes elegir una captura de la instancia o una de doce variaciones procedurales. Se guarda `icon.png` de 256 × 256 junto a `icono.json`; Deshacer recupera el anterior durante la sesión.
 
+La vista previa se actualiza directamente en RGBA con trabajo limitado a 256 × 256 muestras. El estilo Original se guarda con Lanczos sobre la imagen original en segundo plano; Píxeles 16/32 conserva los bloques de la vista previa. Cambiar la fuente invalida la imagen anterior mientras se decodifica la nueva.
+
+Eliminar muestra una confirmación con el nombre y las consecuencias, diez bloques de avance y grietas sobre toda la tarjeta. Soltar cancela. La eliminación sigue conservando los archivos en la papelera y permite recuperación; el texto no afirma que sea irreversible. En Capturas dentro de la instancia, el estado vacío explica F2 y ofrece Jugar para esa instancia.
+
 ## Exportar
 
 ExportarInstancia muestra un árbol con carpetas, casillas mixtas, tamaños y selecciones Recomendada/Todo/Para compartir/Solo mundos. Genera ZIP de Ícaro o Prism/MultiMC; el segundo necesita la versión concreta del loader y usa `mmc-pack.json` con el esquema oficial. Sus contenidos se verifican con pruebas; la importación en las aplicaciones externas sigue pendiente de comprobación manual. MRPACK pertenece a otro componente.
@@ -38,5 +42,7 @@ ExportarInstancia muestra un árbol con carpetas, casillas mixtas, tamaños y se
 En **Mods → más opciones → Exportar lista…** se exporta todo o la selección actual, con **Solo mods activos** marcado inicialmente. HTML, Markdown, texto, JSON, CSV y plantilla personalizada no copian los JAR. Nombre es obligatorio; versión, autores, URL y archivo son opcionales. Buscar actualizaciones completa metadatos mediante SHA-512 y Modrinth sin instalar. Un JAR reemplazado pierde la identificación antigua hasta reconocer su contenido actual. Copiar comprueba el portapapeles; Guardar abre el selector del sistema y muestra un aviso con acceso a la carpeta.
 
 ## Validación del 12-10-2026
+
+Correcciones posteriores: el menú de Mods sigue la posición actual del botón al redimensionar. Agregar en tiendas de recursos/shaders prefiere un ZIP compatible (estable, si existe), admite beta y permite otras versiones con la confirmación de compatibilidad existente. ArchivosNoVerificados mantiene su lámina en 200 × 420 px y el título en líneas de 34 px, evitando que ocupe miles de píxeles por interpretar el interlineado como multiplicador.
 
 Pasaron 104 pruebas del núcleo, 52 de componentes y 31 del launcher; siete pruebas que requieren servicios o condiciones externas quedaron ignoradas. Las pruebas de regresión cubren el cambio de pestañas y de anchura en páginas de mods, recursos y shaders, además de revisión de respaldos y cancelación de Picar. Se generaron e inspeccionaron capturas del ejecutable para exportación de instancia, iconos, Picar y exportación de lista. La importación manual del ZIP en Prism/MultiMC continúa pendiente.

@@ -80,18 +80,18 @@ fn pie_fantasma<'a, M: Clone + 'a>(
         .height(Length::Fill)
         .padding(0)
         .on_press_maybe(mensaje)
-        .style(move |_, estado| {
-            let encima = activo && matches!(estado, button::Status::Hovered | button::Status::Pressed);
-            button::Style {
-                background: encima.then_some(iced::Background::Color(if invertido {
-                    Color { a: 0.18, ..p.bg }
-                } else {
-                    p.surface_hover
-                })),
-                text_color: tinta,
-                ..Default::default()
-            }
-        })
+        .style(move |_, estado| estilo_pie(p, tinta, activo, invertido, estado))
+}
+
+fn estilo_pie(p: Paleta, tinta: Color, activo: bool, invertido: bool, estado: button::Status) -> button::Style {
+    let encima = activo && matches!(estado, button::Status::Hovered | button::Status::Pressed);
+    let peligro = tinta == p.error;
+    button::Style {
+        background: encima.then_some(iced::Background::Color(if peligro { p.error } else if invertido { p.bg } else { p.text })),
+        text_color: if encima { if peligro { p.on_error } else if invertido { p.text } else { p.bg } } else { tinta },
+        border: iced::Border { width: borde::FINO, color: if peligro { p.error } else if invertido { p.bg } else { p.text }, radius: 0.0.into() },
+        ..Default::default()
+    }
 }
 
 /// Icono procedural de 48 px: una trama de 8 × 8 píxeles simétrica sacada del
@@ -290,4 +290,27 @@ pub fn tarjeta_nueva<'a, M: Clone + 'a>(p: Paleta, al_pulsar: M) -> Element<'a, 
     .on_press(al_pulsar)
     .style(estilo::sin_estilo(p.text))
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acciones_de_tarjeta_invierten_sin_borrar_los_bordes() {
+        for p in [crate::tema::TINTA, crate::tema::PIEDRA] {
+            for invertido in [false, true] {
+                for estado in [button::Status::Hovered, button::Status::Pressed] {
+                    let s = estilo_pie(p, p.text, true, invertido, estado);
+                    assert_eq!(s.background, Some(iced::Background::Color(if invertido { p.bg } else { p.text })));
+                    assert_eq!(s.text_color, if invertido { p.text } else { p.bg });
+                    assert!(s.border.width > 0.);
+                    assert_ne!(s.border.color, Color::TRANSPARENT);
+                }
+            }
+            let peligro = estilo_pie(p, p.error, true, false, button::Status::Hovered);
+            assert_eq!(peligro.text_color, p.on_error);
+            assert_eq!(peligro.border.color, p.error);
+        }
+    }
 }

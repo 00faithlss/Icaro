@@ -24,7 +24,7 @@ use iced::{
 };
 
 use crate::fuentes;
-use crate::instancias::{ALTO_PORTADA, ALTO_TARJETA, ANCHO_TARJETA};
+use crate::instancias::{ALTO_TARJETA, ANCHO_TARJETA};
 use crate::laminas::Lamina;
 use crate::movimiento::{self, FaseUmbral, Lupa, Preferencia};
 use crate::tema::{borde, espacio, Modo, Paleta};
@@ -513,7 +513,7 @@ impl<M> canvas::Program<M> for CapaPicar {
             FasePicar::Grietas(etapa) => {
                 let pts = movimiento::grietas(&self.semilla);
                 let n = movimiento::grietas_visibles(pts.len(), etapa);
-                let (w, h) = (tam.width / 16.0, ALTO_PORTADA / 16.0);
+                let (w, h) = (tam.width / 16.0, tam.height / 16.0);
                 let tinta = if p.modo == Modo::Piedra { Color::from_rgb8(0x0d, 0x0d, 0x0d) } else { p.text };
                 for (i, (x, y)) in pts.iter().take(n).enumerate() {
                     // Una de cada cinco grietas deja pasar la luz.
@@ -545,7 +545,7 @@ impl<M> canvas::Program<M> for CapaPicar {
 }
 
 /// Capa de Picar del tamaño de una tarjeta de instancia: grietas sobre la
-/// portada o, una vez rota, los escombros cayendo.
+/// tarjeta completa o, una vez rota, los escombros cayendo.
 pub fn picar<'a, M: 'a>(p: Paleta, semilla: &str, fase: FasePicar) -> Element<'a, M> {
     Canvas::new(CapaPicar { paleta: p, semilla: semilla.to_owned(), fase })
         .width(ANCHO_TARJETA)

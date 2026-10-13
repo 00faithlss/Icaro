@@ -8,11 +8,11 @@ use icaro_ui::{
     componentes::{self, Variante},
     fuentes,
     iconos::{Icono, Tam},
-    tema::{Paleta, texto},
+    tema::{texto, Paleta},
 };
 use iced::{
+    widget::{button, column, container, image, mouse_area, row, scrollable, slider, text, Space},
     Alignment, Element, Length, Padding, Point, Task,
-    widget::{Space, button, column, container, image, mouse_area, row, scrollable, slider, text},
 };
 use std::{collections::HashMap, path::PathBuf};
 
@@ -50,8 +50,6 @@ pub struct Dialogo {
     sesion: u64,
     arrastre: Option<(Point, f32, f32)>,
     cursor: Point,
-    renderiendo: Option<u64>,
-    sucio: bool,
 }
 #[derive(Debug, Clone)]
 pub enum Accion {
@@ -72,7 +70,6 @@ pub enum Accion {
     Generado(u32),
     OtraTanda,
     VolverGenerado,
-    Preview(u64, Result<Vec<u8>, String>),
     Guardar,
     Guardado(String, Guardado, Result<Anterior, String>),
     Cargados(Vec<(String, Result<(Option<Vec<u8>>, u32), String>)>),
@@ -111,30 +108,18 @@ pub fn cargar(app: &App) -> Task<Mensaje> {
     )
 }
 fn render(app: &mut App) -> Task<Mensaje> {
-    let Some(d) = app.iconos.dialogo.as_mut() else {
-        return Task::none();
-    };
-    let Some(f) = d.fuente.clone() else {
-        return Task::none();
-    };
-    if d.renderiendo.is_some() {
-        d.sucio = true;
-        return Task::none();
+    if let Some(d) = app.iconos.dialogo.as_mut() {
+        if let Some(f) = d.fuente.as_ref() {
+            match core::vista_previa(f, d.zoom, d.x, d.y, [0, 32, 16][d.estilo.min(2)]) {
+                Ok(pixels) => {
+                    d.handle = Some(image::Handle::from_rgba(256, 256, pixels.into_raw()));
+                    d.png = None; // Solo el resultado definitivo se escribe al guardar.
+                }
+                Err(e) => d.error = Some(e),
+            }
+        }
     }
-    app.iconos.secuencia = app.iconos.secuencia.wrapping_add(1);
-    let seq = app.iconos.secuencia;
-    d.generacion = seq;
-    d.renderiendo = Some(seq);
-    d.sucio = false;
-    let (z, x, y, style) = (d.zoom, d.x, d.y, [0, 32, 16][d.estilo.min(2)]);
-    Task::perform(
-        async move {
-            tokio::task::spawn_blocking(move || core::recortar(&f, z, x, y, style))
-                .await
-                .unwrap_or_else(|_| Err("No se pudo preparar el recorte.".into()))
-        },
-        move |r| m(Accion::Preview(seq, r)),
-    )
+    Task::none()
 }
 pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     match a {
@@ -174,8 +159,6 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 sesion: seq,
                 arrastre: None,
                 cursor: Point::ORIGIN,
-                renderiendo: None,
-                sucio: false,
             });
             app.menu = None;
             if !app.servicios.demo {
@@ -220,6 +203,9 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 app.iconos.secuencia = app.iconos.secuencia.wrapping_add(1);
                 let seq = app.iconos.secuencia;
                 d.generacion = seq;
+                d.fuente = None;
+                d.handle = None;
+                d.png = None;
                 d.error = None;
                 return Task::perform(
                     async move {
@@ -320,64 +306,65 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 d.tanda = 0;
             }
         }
-        Accion::Preview(seq, r) => {
-            if let Some(d) = app
-                .iconos
-                .dialogo
-                .as_mut()
-                .filter(|d| d.renderiendo == Some(seq))
-            {
-                d.renderiendo = None;
-                let dirty = std::mem::take(&mut d.sucio);
-                if d.generacion == seq && !dirty {
-                    match r {
-                        Ok(p) => {
-                            d.handle = Some(image::Handle::from_bytes(p.clone()));
-                            d.png = Some(p);
-                        }
-                        Err(e) => d.error = Some(e),
-                    }
-                }
-                if dirty {
-                    return render(app);
-                }
-            }
-        }
         Accion::Guardar => {
             let Some(d) = app.iconos.dialogo.as_mut().filter(|d| !d.ocupada) else {
                 return Task::none();
             };
-            if d.tab != 1 && d.renderiendo.is_some() {
-                d.error = Some("Espera a que termine el recorte.".into());
-                return Task::none();
-            }
-            if d.tab != 1 && d.png.is_none() {
+            if d.tab != 1 && d.fuente.is_none() && d.png.is_none() {
                 d.error = Some("Elige una imagen o un icono generado.".into());
                 return Task::none();
             }
-            let value = Guardado {
+            let recorte = if d.tab == 1 {
+                None
+            } else {
+                d.fuente
+                    .clone()
+                    .map(|f| (f, d.zoom, d.x, d.y, [0, 32, 16][d.estilo.min(2)]))
+            };
+            let mut value = Guardado {
                 png: if d.tab == 1 { None } else { d.png.clone() },
                 variacion: d.variacion,
                 handle: if d.tab == 1 { None } else { d.handle.clone() },
             };
             if app.servicios.demo {
+                if let Some((f, z, x, y, style)) = recorte {
+                    match core::recortar(&f, z, x, y, style) {
+                        Ok(png) => value.png = Some(png),
+                        Err(e) => {
+                            d.error = Some(e);
+                            return Task::none();
+                        }
+                    }
+                }
                 app.iconos.cache.insert(d.id.clone(), value);
                 app.iconos.dialogo = None;
                 return Task::none();
             }
             let id = d.id.clone();
             let store = app.servicios.instancias.almacen.clone();
-            let saved = value.clone();
             d.ocupada = true;
             return Task::perform(
                 async move {
                     let workid = id.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        core::guardar(&store, &workid, saved.png, saved.variacion)
+                    tokio::task::spawn_blocking(move || {
+                        let result = (|| {
+                            if let Some((f, z, x, y, style)) = recorte {
+                                let png = core::recortar(&f, z, x, y, style)?;
+                                value.handle = Some(image::Handle::from_bytes(png.clone()));
+                                value.png = Some(png);
+                            }
+                            core::guardar(&store, &workid, value.png.clone(), value.variacion)
+                        })();
+                        (id, value, result)
                     })
                     .await
-                    .unwrap_or_else(|_| Err("No se pudo guardar el icono.".into()));
-                    (id, value, result)
+                    .unwrap_or_else(|_| {
+                        (
+                            String::new(),
+                            Guardado::default(),
+                            Err("No se pudo guardar el icono.".into()),
+                        )
+                    })
                 },
                 |(id, v, r)| m(Accion::Guardado(id, v, r)),
             );
@@ -454,7 +441,7 @@ pub fn evento(app: &App, e: &iced::Event) -> Option<Accion> {
             Some(Accion::Archivo(path.clone()))
         }
         iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
-            use iced::keyboard::{Key, key::Named};
+            use iced::keyboard::{key::Named, Key};
             let step = if modifiers.shift() { 1. } else { 8. };
             match key {
                 Key::Named(Named::Escape) => Some(Accion::Cerrar),
@@ -671,10 +658,24 @@ pub fn vista<'a>(app: &'a App) -> Option<Element<'a, Mensaje>> {
                             .size(texto::MONO_SM.0)
                             .color(p.text_muted),
                         componentes::etiqueta(p, &format!("Zoom {} %", d.zoom)),
-                        slider(100..=400, d.zoom, |v| m(Accion::Zoom(v))).step(1u32).style(move|_,_|iced::widget::slider::Style{
-                            rail:iced::widget::slider::Rail{backgrounds:(p.border_strong.into(),p.border_strong.into()),width:4.,border:iced::Border::default()},
-                            handle:iced::widget::slider::Handle{shape:iced::widget::slider::HandleShape::Rectangle{width:16,border_radius:0.into()},background:p.text.into(),border_width:2.,border_color:p.bg}
-                        }),
+                        slider(100..=400, d.zoom, |v| m(Accion::Zoom(v)))
+                            .step(1u32)
+                            .style(move |_, _| iced::widget::slider::Style {
+                                rail: iced::widget::slider::Rail {
+                                    backgrounds: (p.border_strong.into(), p.border_strong.into()),
+                                    width: 4.,
+                                    border: iced::Border::default()
+                                },
+                                handle: iced::widget::slider::Handle {
+                                    shape: iced::widget::slider::HandleShape::Rectangle {
+                                        width: 16,
+                                        border_radius: 0.into()
+                                    },
+                                    background: p.text.into(),
+                                    border_width: 2.,
+                                    border_color: p.bg
+                                }
+                            }),
                         componentes::boton_con_icono(
                             p,
                             Icono::Carpeta,
@@ -704,9 +705,9 @@ pub fn vista<'a>(app: &'a App) -> Option<Element<'a, Mensaje>> {
             left=left.push(componentes::etiqueta(p,"Estilo")).push(componentes::segmentado(p,&["Original","Píxeles 32","Píxeles 16"],d.estilo,|i|m(Accion::Estilo(i)))).push(text("Píxeles reduce la imagen sin suavizar para que combine con el estilo de Minecraft.").size(texto::BODY_SM.0).color(p.text_muted));
         }
         1 => {
-            let cols=if app.ventana.width>=1050. {6}else{3};
+            let cols = if app.ventana.width >= 1050. { 6 } else { 3 };
             let mut grid = column![].spacing(16);
-            for y in 0..(12/cols) {
+            for y in 0..(12 / cols) {
                 let mut line = row![].spacing(16);
                 for x in 0..cols {
                     let n = d.tanda * 12 + y * cols + x;

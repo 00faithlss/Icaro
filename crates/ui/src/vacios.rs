@@ -166,6 +166,13 @@ pub fn capturas<'a, M: Clone + 'a>(c: Contexto, ir_a_instancias: M) -> Element<'
 }
 
 /// Capturas de una instancia que no tiene ninguna.
+pub fn capturas_para_jugar<'a, M: Clone + 'a>(c: Contexto, jugar: M) -> Element<'a, M> {
+    estado_vacio(c, Lamina::Umbral, "Tus capturas\naparecerán aquí",
+        "Comienza a jugar y haz capturas con F2 dentro de Minecraft. Las capturas de esta instancia aparecerán aquí.",
+        vec![boton(c.p, Some(Icono::Jugar), "Jugar", Variante::Primario, TamBoton::Lg, Some(jugar))])
+}
+
+/// Capturas de una instancia filtrada desde la galería global.
 pub fn capturas_de_instancia<'a, M: Clone + 'a>(c: Contexto, instancia: &str, ver_todas: M) -> Element<'a, M> {
     estado_vacio(
         c,
