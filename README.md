@@ -1,8 +1,6 @@
 # Icaro Launcher
 
-El nombre visible del producto es **Icaro Launcher** y el repositorio es `00faithlss/Icaro-launcher`. Las carpetas de datos `Icaro`, el protocolo `icaro://` y los identificadores internos conservan sus nombres actuales para mantener la compatibilidad.
-
-Launcher de Minecraft escrito en Rust, con Windows y Arch Linux como plataformas objetivo.
+Launcher de Minecraft escrito en Rust, para Windows y Linux.
 
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
