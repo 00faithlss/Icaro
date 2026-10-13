@@ -69,6 +69,8 @@ pub struct Cambio {
     pub errores_compatibilidad: std::collections::BTreeMap<String, String>,
     pub loader_destino: String,
     pub loader_actual_version: Option<String>,
+    pub solo_loader: bool,
+    pub loader_version_destino: Option<String>,
     pub actualizar_mods: bool,
     pub copia: bool,
     pub detalle_desactivar: bool,
@@ -89,6 +91,16 @@ impl Estado {
         match self.almacen.cargar() {
             Ok(report) => {
                 self.registros = report.instancias;
+                for instance in &self.registros {
+                    if let Err(e) =
+                        icaro_core::minecraft::migrar_directorio(&self.almacen, instance)
+                    {
+                        self.error = Some(format!(
+                            "No se pudieron migrar los datos de {}: {e}",
+                            instance.nombre
+                        ));
+                    }
+                }
                 if report.omitidas > 0 {
                     self.error = Some(format!(
                         "No se pudieron leer {} instancias. Sus archivos se conservan en disco.",
@@ -179,6 +191,9 @@ fn cargar_loaders_version(app: &mut App, mc: String) -> Task<Mensaje> {
     )
 }
 pub fn abrir_cambio(app: &mut App, index: usize) -> Task<Mensaje> {
+    abrir_cambio_tipo(app,index,false)
+}
+fn abrir_cambio_tipo(app:&mut App,index:usize,solo_loader:bool)->Task<Mensaje> {
     let Some(i) = app.servicios.instancias.registros.get(index).cloned() else {
         return Task::none();
     };
@@ -201,7 +216,7 @@ pub fn abrir_cambio(app: &mut App, index: usize) -> Task<Mensaje> {
         instancia: i.id.clone(),
         tipo: 0,
         busqueda: String::new(),
-        destino: String::new(),
+        destino: if solo_loader {i.minecraft.clone()} else {String::new()},
         revision: None,
         revisando: false,
         respaldo: true,
@@ -211,7 +226,9 @@ pub fn abrir_cambio(app: &mut App, index: usize) -> Task<Mensaje> {
         errores_compatibilidad: Default::default(),
         loader_destino: i.loader.clone(),
         loader_actual_version: None,
-        actualizar_mods: true,
+        solo_loader,
+        loader_version_destino: None,
+        actualizar_mods: !solo_loader,
         copia: false,
         detalle_desactivar: false,
         confirmando: false,
@@ -223,12 +240,13 @@ pub fn abrir_cambio(app: &mut App, index: usize) -> Task<Mensaje> {
     let store = app.servicios.instancias.almacen.clone();
     let id = i.id.clone();
     Task::batch([
-        abrir(app),
+        if solo_loader {cargar_loaders_cambio(app)} else {abrir(app)},
         Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || {
-                    let mods =
-                        icaro_core::versiones_instancia::mods_para_compatibilidad(&store, &i)?;
+                    let mods = if solo_loader {Vec::new()} else {
+                        icaro_core::versiones_instancia::mods_para_compatibilidad(&store, &i)?
+                    };
                     Ok((
                         mods,
                         icaro_core::versiones_instancia::leer_loader(&store, &i),
@@ -241,11 +259,26 @@ pub fn abrir_cambio(app: &mut App, index: usize) -> Task<Mensaje> {
         ),
     ])
 }
+pub fn abrir_cambio_loader(app:&mut App,index:usize)->Task<Mensaje> {
+    if app.servicios.instancias.registros.get(index).is_none_or(|i|i.loader=="vanilla") {return Task::none();}
+    abrir_cambio_tipo(app,index,true)
+}
+pub fn aplicar_cambio_loader(app:&mut App)->Task<Mensaje> {
+    let Some(c)=app.servicios.instancias.cambio.as_ref().filter(|c|c.solo_loader) else{return Task::none();};
+    let Some(i)=app.servicios.instancias.registros.iter().find(|i|i.id==c.instancia).cloned() else{return Task::none();};
+    if app.servicios.instancias.operando || app.servicios.juego.ocupada(&i.id) || app.servicios.mods.busy.is_some(){return Task::none();}
+    let Some(version)=c.loader_version_destino.clone() else{return Task::none();};
+    let index=crate::pantallas::LOADERS.iter().position(|(name,_,_)|name.eq_ignore_ascii_case(&i.loader)).unwrap_or(0);
+    if !app.servicios.instancias.loaders.get(&i.minecraft).is_some_and(|l|l.versiones[index].contains(&version)) || c.loader_actual_version.as_ref()==Some(&version){return Task::none();}
+    let backup=c.respaldo;let store=app.servicios.instancias.almacen.clone();let id=i.id.clone();
+    app.servicios.instancias.operando=true;
+    Task::perform(async move {tokio::task::spawn_blocking(move || icaro_core::versiones_instancia::cambiar_solo_loader(&store,&i,&version,backup)).await.map_err(|_|"No se pudo cambiar la versión del loader.".to_owned())?},move |r|Mensaje::Instancias(Accion::Cambiada(id.clone(),r)))
+}
 pub fn revisar_cambio(app: &mut App) -> Task<Mensaje> {
     let Some(c) = app.servicios.instancias.cambio.as_mut() else {
         return Task::none();
     };
-    if c.revisando || c.destino.is_empty() {
+    if c.solo_loader || c.revisando || c.destino.is_empty() {
         return Task::none();
     }
     let Some(i) = app
@@ -309,7 +342,7 @@ pub fn cambiar(app: &mut App, copia: bool) -> Task<Mensaje> {
         );
         return Task::none();
     }
-    let Some(revision) = c.revision.clone() else {
+    let Some(revision) = c.revision.clone().filter(|r|r.loader.is_empty() || r.loader==i.loader) else {
         return Task::none();
     };
     if !c.respaldo
@@ -449,6 +482,7 @@ pub fn accion_cambio(app: &mut App, accion: &pantallas::Accion) -> Option<Task<M
             A::CambiarActualizar(_)
                 | A::CambiarModo(_)
                 | A::CambiarLoader(_)
+                | A::CambiarLoaderVersion(_)
                 | A::CambiarTipo(_)
                 | A::CambiarBuscar(_)
                 | A::CambiarDestino(_)
@@ -457,6 +491,7 @@ pub fn accion_cambio(app: &mut App, accion: &pantallas::Accion) -> Option<Task<M
     {
         return Some(Task::none());
     }
+    if app.servicios.instancias.cambio.as_ref().is_some_and(|c|c.solo_loader) && matches!(accion,A::CambiarDestino(_)|A::CambiarTipo(_)|A::CambiarModo(_)|A::CambiarActualizar(_)|A::CambiarConfirmar(_)) {return Some(Task::none());}
     match accion {
         A::CambiarActualizar(b) => {
             let c = app.servicios.instancias.cambio.as_mut().unwrap();
@@ -470,27 +505,10 @@ pub fn accion_cambio(app: &mut App, accion: &pantallas::Accion) -> Option<Task<M
             let c = app.servicios.instancias.cambio.as_mut().unwrap();
             c.detalle_desactivar = !c.detalle_desactivar;
         }
-        A::CambiarLoader(value) => {
-            let loader = value.to_lowercase();
-            if !["vanilla", "fabric", "quilt", "neoforge", "forge"].contains(&loader.as_str()) {
-                return Some(Task::none());
-            }
-            app.servicios.instancias.cambio_request += 1;
-            let generation = app.servicios.instancias.cambio_request;
-            let c = app.servicios.instancias.cambio.as_mut().unwrap();
-            if c.mods.is_some() {
-                c.compat_generacion = generation;
-            }
-            c.cancelar_compatibilidad.cancel();
-            c.cancelar_compatibilidad = tokio_util::sync::CancellationToken::new();
-            c.loader_destino = loader;
-            c.compatibilidades.clear();
-            c.cargando_compatibilidad.clear();
-            c.errores_compatibilidad.clear();
-            c.revision = None;
-            c.confirmando = false;
-            c.revisando = false;
-            return Some(cargar_compatibilidad(app));
+        A::CambiarLoader(_) => { return Some(Task::none()); }
+        A::CambiarLoaderVersion(version) => {
+            let c=app.servicios.instancias.cambio.as_mut().unwrap();
+            if c.solo_loader {c.loader_version_destino=Some(version.clone());c.error=None;}
         }
         A::CambiarTipo(tipo) => {
             let c = app.servicios.instancias.cambio.as_mut().unwrap();
@@ -582,6 +600,7 @@ pub fn cargar_compatibilidad(app: &mut App) -> Task<Mensaje> {
     let Some(c) = &app.servicios.instancias.cambio else {
         return Task::none();
     };
+    if c.solo_loader {return Task::none();}
     let Some(installed) = c.mods.clone() else {
         return Task::none();
     };
@@ -782,7 +801,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     })
                 })
                 .map(|v| v.id.clone());
-            if !c.destino_manual {
+            if !c.destino_manual && !c.solo_loader {
                 if let Some(destino) = recomendada {
                     c.destino = destino;
                 }
@@ -842,6 +861,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             app.servicios.instancias.operando = false;
             match result {
                 Ok(r) => {
+                    let loader_cambiado=app.servicios.instancias.cambio.as_ref().filter(|c|c.solo_loader).and_then(|c|c.loader_version_destino.clone());
                     let record = r.instancia;
                     if r.copia {
                         let original = app
@@ -886,10 +906,9 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                         .respaldo
                         .map(|p| format!(" Respaldo guardado en {}.", p.display()))
                         .unwrap_or_default();
-                    app.avisar(format!(
-                        "{} ahora usa {}.{}",
-                        record.nombre, record.minecraft, backup
-                    ));
+                    app.avisar(if let Some(version)=loader_cambiado {
+                        format!("{} ahora usa {} {}.{}",record.nombre,crate::ficha::loader(&record.loader),version,backup)
+                    } else {format!("{} ahora usa {}.{}",record.nombre,record.minecraft,backup)});
                     crate::arrancar(app);
                 }
                 Err(e) => {
@@ -1026,7 +1045,10 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     app.avisar(format!("Instancia {name} creada y guardada."));
                     crate::arrancar(app);
                     let index = app.servicios.instancias.registros.len() - 1;
-                    if app.servicios.instancias.registros[index].loader == "vanilla" {
+                    if matches!(
+                        app.servicios.instancias.registros[index].loader.as_str(),
+                        "vanilla" | "fabric"
+                    ) {
                         return crate::juego_real::iniciar(app, index, false);
                     }
                 }
@@ -1044,7 +1066,12 @@ pub fn renombrar(app: &mut App, nombre: &str) -> Result<(), String> {
     if record.nombre == nombre.trim() {
         return Ok(());
     }
-    if app.servicios.juego.ocupada(&record.id) || app.servicios.mods.busy.is_some() || app.servicios.instancias.operando {return Err("Detén el juego o espera a que termine la operación antes de renombrar la carpeta de esta instancia.".into());}
+    if app.servicios.juego.ocupada(&record.id)
+        || app.servicios.mods.busy.is_some()
+        || app.servicios.instancias.operando
+    {
+        return Err("Detén el juego o espera a que termine la operación antes de renombrar la carpeta de esta instancia.".into());
+    }
     let mut record = record.clone();
     record.nombre = nombre.trim().into();
     app.servicios
@@ -1059,7 +1086,9 @@ pub fn renombrar(app: &mut App, nombre: &str) -> Result<(), String> {
     {
         d.nombre = record.nombre.clone();
     }
-    if let Ok(game)=app.servicios.instancias.almacen.juego(&record.id){app.exp=crate::Explorador::desde_ruta(game);}
+    if let Ok(game) = app.servicios.instancias.almacen.juego(&record.id) {
+        app.exp = crate::Explorador::desde_ruta(game);
+    }
     app.servicios.instancias.registros[app.editor_inst] = record;
     Ok(())
 }
@@ -1079,6 +1108,21 @@ mod tests {
         crate::pruebas_diseno::preparar_cambio(&mut app, "cambiar-version-seleccion");
         app
     }
+    #[test]
+    fn cambiar_solo_loader_bloquea_minecraft_y_familia_y_rechaza_version_ajena() {
+        let mut app=selector();let minecraft=app.servicios.instancias.registros[0].minecraft.clone();
+        let _=abrir_cambio_loader(&mut app,0);
+        assert!(app.servicios.instancias.cambio.as_ref().unwrap().solo_loader);
+        let _=pantallas::actualizar(&mut app,pantallas::Accion::CambiarDestino(0));
+        let _=pantallas::actualizar(&mut app,pantallas::Accion::CambiarLoader("quilt".into()));
+        let c=app.servicios.instancias.cambio.as_ref().unwrap();
+        assert_eq!(c.destino,minecraft);assert_eq!(c.loader_destino,"fabric");assert!(!c.actualizar_mods);
+        let _=pantallas::actualizar(&mut app,pantallas::Accion::CambiarLoaderVersion("version-no-publicada".into()));
+        let _=aplicar_cambio_loader(&mut app);assert!(!app.servicios.instancias.operando);
+        let _=pantallas::actualizar(&mut app,pantallas::Accion::CambiarCancelar);
+        assert!(app.cambiar.is_none() && app.servicios.instancias.cambio.is_none());
+    }
+
     #[test]
     fn late_results_cannot_replace_selected_destination_or_reopen_closed_selector() {
         let mut app = selector();
@@ -1137,14 +1181,7 @@ mod tests {
                 Ok(compatible.clone()),
             ),
         );
-        assert!(app
-            .servicios
-            .instancias
-            .cambio
-            .as_ref()
-            .unwrap()
-            .compatibilidades
-            .is_empty());
+        assert_eq!(app.servicios.instancias.cambio.as_ref().unwrap().loader_destino,"fabric");
         let token = app
             .servicios
             .instancias
@@ -1168,7 +1205,7 @@ mod tests {
         assert!(app.servicios.instancias.cambio.is_none() && app.cambiar.is_none());
     }
     #[test]
-    fn review_from_previous_loader_cannot_confirm_new_selection() {
+    fn review_from_another_loader_cannot_change_fixed_family() {
         let mut app = selector();
         let c = app.servicios.instancias.cambio.as_mut().unwrap();
         let id = c.instancia.clone();
@@ -1182,14 +1219,15 @@ mod tests {
             nombres: vec![],
             baja: false,
             loader_version: Some("0.16.14".into()),
-            loader: "fabric".into(),
+            loader: "quilt".into(),
             compatibilidad: Default::default(),
         };
         let _ = actualizar(
             &mut app,
-            Accion::Revision(id, generation, dest, "fabric".into(), Ok(review)),
+            Accion::Revision(id, generation, dest, "quilt".into(), Ok(review)),
         );
         let c = app.servicios.instancias.cambio.as_ref().unwrap();
-        assert!(c.revision.is_none() && !c.confirmando && !c.revisando);
+        assert!(c.revision.is_none() && !c.confirmando && c.revisando);
+        assert_eq!(c.loader_destino,"fabric");
     }
 }

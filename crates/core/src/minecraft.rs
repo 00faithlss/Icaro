@@ -22,10 +22,14 @@ const METADATA_LIMIT: u64 = 8 * 1024 * 1024;
 const FILE_LIMIT: u64 = 1024 * 1024 * 1024;
 const MAX_FILES: usize = 100_000;
 const MARKER: &str = "instalado.json";
+const PRIVADO: &str = ".icaro";
+const PRIVADO_ANTERIOR: &str = ".icaro-minecraft";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instalado {
     pub version: String,
+    #[serde(default)]
+    pub perfil_id: Option<String>,
     pub main_class: String,
     pub classpath: Vec<PathBuf>,
     pub natives: PathBuf,
@@ -146,14 +150,14 @@ struct Extraer {
     #[serde(default)]
     exclude: Vec<String>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Regla {
     action: String,
     os: Option<Os>,
     #[serde(default)]
     features: BTreeMap<String, bool>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Os {
     name: Option<String>,
     arch: Option<String>,
@@ -161,17 +165,17 @@ struct Os {
     #[serde(rename = "versionRange")]
     version_range: Option<Rango>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Rango {
     min: Option<String>,
     max: Option<String>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct Argumentos {
     game: Vec<Argumento>,
     jvm: Vec<Argumento>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum Argumento {
     Texto(String),
@@ -180,7 +184,7 @@ enum Argumento {
         value: ValorArgumento,
     },
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum ValorArgumento {
     Texto(String),
@@ -207,11 +211,19 @@ struct Archivo {
 }
 #[derive(Debug, Serialize, Deserialize)]
 struct Marcador {
+    #[serde(default = "loader_vanilla")]
+    loader: String,
+    #[serde(default)]
+    loader_version: Option<String>,
     schema: u32,
     sistema: String,
     instalado: Instalado,
     archivos: Vec<Archivo>,
     nativos: Vec<(PathBuf, u64, String)>,
+}
+
+fn loader_vanilla() -> String {
+    "vanilla".into()
 }
 
 fn cancelado(cancel: &CancellationToken) -> Result<(), Error> {
@@ -338,6 +350,11 @@ fn nombre_valido(value: &str) -> bool {
         && value != "."
         && value != ".."
 }
+pub(crate) fn version_minecraft_valida(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && value.trim() == value
+        && !value.ends_with('.') && value != "." && value != ".."
+        && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b,b'.'|b'_'|b'-'|b' '))
+}
 fn relativa(value: &str) -> Result<PathBuf, Error> {
     if value.is_empty()
         || value.len() > 1024
@@ -424,6 +441,8 @@ fn oficial(value: &str) -> Result<reqwest::Url, Error> {
                     | "launcher.mojang.com"
                     | "libraries.minecraft.net"
                     | "resources.download.minecraft.net"
+                    | "meta.fabricmc.net"
+                    | "maven.fabricmc.net"
             )
         )
     {
@@ -724,6 +743,333 @@ fn nativo_otro_arch(name: &str) -> bool {
         && (name.ends_with("-arm64") || name.ends_with("-aarch64") || name.ends_with("-x86"))
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct LibreriaFabric {
+    name: String,
+    url: String,
+    #[serde(default)]
+    sha1: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PerfilFabric {
+    id: String,
+    inherits_from: String,
+    main_class: String,
+    #[serde(default)]
+    arguments: Argumentos,
+    libraries: Vec<LibreriaFabric>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct Fabric {
+    schema: u32,
+    #[serde(default)]
+    sin_intermediary: bool,
+    minecraft: String,
+    loader: String,
+    min_java: u32,
+    profile: PerfilFabric,
+    descargas: Vec<Descarga>,
+}
+fn ruta_maven(name: &str) -> Result<String, Error> {
+    let parts: Vec<_> = name.split(':').collect();
+    if parts.len() != 3
+        || parts.iter().enumerate().any(|(index,p)| {
+            p.is_empty()
+                || p.len() > 128
+                || matches!(*p, "." | "..")
+                || !p
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-' | b'+') || (index==2 && c==b' '))
+        })
+    {
+        return Err(Error::Datos);
+    }
+    if parts[0].split('.').any(|s| s.is_empty()) {
+        return Err(Error::Datos);
+    }
+    let path = format!(
+        "{}/{}/{}/{}-{}.jar",
+        parts[0].replace('.', "/"),
+        parts[1],
+        parts[2],
+        parts[1],
+        parts[2]
+    );
+    relativa(&path)?;
+    Ok(path)
+}
+fn validar_fabric(bundle: &Fabric, mc: &str, loader: &str) -> Result<(), Error> {
+    if bundle.schema != 1
+        || bundle.minecraft != mc
+        || bundle.loader != loader
+        || bundle.min_java == 0
+        || bundle.min_java > 255
+        || bundle.profile.id != format!("fabric-loader-{loader}-{mc}")
+        || bundle.profile.inherits_from != mc
+        || bundle.profile.main_class.len() > 256
+        || !bundle
+            .profile
+            .main_class
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'$'))
+        || bundle.profile.libraries.is_empty()
+        || bundle.profile.libraries.len() > 128
+        || bundle.descargas.len() != bundle.profile.libraries.len()
+    {
+        return Err(Error::Datos);
+    }
+    let mut names = BTreeSet::new();
+    for (lib, download) in bundle.profile.libraries.iter().zip(&bundle.descargas) {
+        let path = ruta_maven(&lib.name)?;
+        if !names.insert(lib.name.clone())
+            || lib.url != "https://maven.fabricmc.net/"
+            || download.path != path
+            || download.url != format!("{}{}", lib.url, path)
+            || lib.sha1.as_ref().is_some_and(|h| h != &download.sha1)
+            || lib.size.is_some_and(|n| n != download.size)
+            || download.size > 64 * 1024 * 1024
+        {
+            return Err(Error::Datos);
+        }
+        validar_descarga(download)?;
+    }
+    let intermediary_valido = if bundle.sin_intermediary {
+        !names
+            .iter()
+            .any(|name| name.starts_with("net.fabricmc:intermediary:"))
+    } else {
+        names.contains(&format!("net.fabricmc:intermediary:{mc}"))
+    };
+    if !names.contains(&format!("net.fabricmc:fabric-loader:{loader}")) || !intermediary_valido {
+        return Err(Error::Datos);
+    }
+    Ok(())
+}
+// El API conserva un marcador 0.0.0 para las versiones sin ofuscación.
+// Solo se admite cuando el perfil oficial también omite Intermediary.
+fn validar_detalle_fabric(
+    profile: &PerfilFabric,
+    detail: &serde_json::Value,
+    mc: &str,
+    loader: &str,
+) -> Result<bool, Error> {
+    if profile.id != format!("fabric-loader-{loader}-{mc}")
+        || profile.inherits_from != mc
+        || detail["loader"]["version"].as_str() != Some(loader)
+        || detail["launcherMeta"]["mainClass"]["client"].as_str()
+            != Some(profile.main_class.as_str())
+    {
+        return Err(Error::Datos);
+    }
+    let sin_intermediary = detail["intermediary"]["version"].as_str() == Some("0.0.0")
+        && detail["intermediary"]["maven"].as_str() == Some("net.fabricmc:intermediary:0.0.0");
+    if sin_intermediary {
+        if profile
+            .libraries
+            .iter()
+            .any(|lib| lib.name.starts_with("net.fabricmc:intermediary:"))
+        {
+            return Err(Error::Datos);
+        }
+    } else if detail["intermediary"]["version"].as_str() != Some(mc)
+        || detail["intermediary"]["maven"].as_str()
+            != Some(format!("net.fabricmc:intermediary:{mc}").as_str())
+    {
+        return Err(Error::Datos);
+    }
+    Ok(sin_intermediary)
+}
+async fn preparar_fabric(
+    client: &reqwest::Client,
+    root: &Path,
+    mc: &str,
+    loader: &str,
+    cancel: &CancellationToken,
+) -> Result<Fabric, Error> {
+    if !version_minecraft_valida(mc) || !nombre_valido(loader) {
+        return Err(Error::Datos);
+    }
+    let path = root
+        .join("meta/fabric")
+        .join(mc)
+        .join(loader)
+        .join("perfil.json");
+    if let Ok(bundle) = leer_json::<Fabric>(root, &path) {
+        if validar_fabric(&bundle, mc, loader).is_ok() {
+            return Ok(bundle);
+        }
+    }
+    let endpoint = format!("https://meta.fabricmc.net/v2/versions/loader/{mc}/{loader}");
+    let profile: PerfilFabric = serde_json::from_slice(
+        &bytes_oficiales(
+            client,
+            &format!("{endpoint}/profile/json"),
+            METADATA_LIMIT as usize,
+            cancel,
+        )
+        .await?,
+    )
+    .map_err(|_| Error::Datos)?;
+    let detail: serde_json::Value = serde_json::from_slice(
+        &bytes_oficiales(client, &endpoint, METADATA_LIMIT as usize, cancel).await?,
+    )
+    .map_err(|_| Error::Datos)?;
+    let sin_intermediary = validar_detalle_fabric(&profile, &detail, mc, loader)?;
+    let min_java = detail["launcherMeta"]["min_java_version"]
+        .as_u64()
+        .filter(|n| *n > 0 && *n <= 255)
+        .ok_or(Error::Datos)? as u32;
+    if profile.libraries.len() > 128 {
+        return Err(Error::Datos);
+    }
+    let mut downloads = vec![];
+    for lib in &profile.libraries {
+        cancelado(cancel)?;
+        if lib.url != "https://maven.fabricmc.net/" {
+            return Err(Error::Datos);
+        }
+        let relative = ruta_maven(&lib.name)?;
+        let url = format!("{}{}", lib.url, relative);
+        let hash = if let Some(hash) = &lib.sha1 {
+            hash.clone()
+        } else {
+            let bytes = bytes_oficiales(client, &format!("{url}.sha1"), 256, cancel).await?;
+            std::str::from_utf8(&bytes)
+                .map_err(|_| Error::Datos)?
+                .split_whitespace()
+                .next()
+                .ok_or(Error::Datos)?
+                .to_lowercase()
+        };
+        if !hash_valido(&hash) {
+            return Err(Error::Datos);
+        }
+        let size = if let Some(size) = lib.size {
+            size
+        } else {
+            let response = tokio::select! {_=cancel.cancelled()=>return Err(Error::Cancelada),r=client.head(oficial(&url)?).send()=>r.map_err(|_|Error::Red)?};
+            if !response.status().is_success() {
+                return Err(Error::Http(response.status().as_u16()));
+            }
+            response
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|n| *n > 0 && *n <= 64 * 1024 * 1024)
+                .ok_or(Error::Datos)?
+        };
+        downloads.push(Descarga {
+            url,
+            sha1: hash,
+            size,
+            path: relative,
+            id: String::new(),
+        });
+    }
+    let bundle = Fabric {
+        schema: 1,
+        sin_intermediary,
+        minecraft: mc.into(),
+        loader: loader.into(),
+        min_java,
+        profile,
+        descargas: downloads,
+    };
+    validar_fabric(&bundle, mc, loader)?;
+    escribir_json(root, &path, &bundle)?;
+    Ok(bundle)
+}
+
+fn directorio_lectura(folder: &Path) -> PathBuf {
+    let current = folder.join(PRIVADO);
+    if current.exists() {
+        current
+    } else {
+        folder.join(PRIVADO_ANTERIOR)
+    }
+}
+
+/// Renombra los datos internos y actualiza únicamente referencias a esa carpeta.
+/// Nunca combina dos carpetas que puedan contener perfiles diferentes.
+pub fn migrar_directorio(store: &Almacen, instance: &Instancia) -> Result<PathBuf, Error> {
+    let folder = store
+        .carpeta(&instance.id)
+        .map_err(|_| Error::Disco)?
+        .canonicalize()
+        .map_err(|_| Error::Disco)?;
+    if !folder.join(PRIVADO_ANTERIOR).exists() {
+        return Ok(folder.join(PRIVADO));
+    }
+    let _lock = Guardia::adquirir(&folder)?;
+    migrar_directorio_bloqueado(store, instance)
+}
+fn migrar_directorio_bloqueado(store: &Almacen, instance: &Instancia) -> Result<PathBuf, Error> {
+    let folder = store
+        .carpeta(&instance.id)
+        .map_err(|_| Error::Disco)?
+        .canonicalize()
+        .map_err(|_| Error::Disco)?;
+    let old = folder.join(PRIVADO_ANTERIOR);
+    let target = folder.join(PRIVADO);
+    segura(&folder, &old, false)?;
+    segura(&folder, &target, false)?;
+    if !old.exists() {
+        return Ok(target);
+    }
+    if target.exists() {
+        return Err(Error::NoSoportada(
+            "existen .icaro y .icaro-minecraft; revisa sus perfiles antes de combinarlos".into(),
+        ));
+    }
+    if !fs::symlink_metadata(&old)
+        .map_err(|_| Error::Disco)?
+        .is_dir()
+    {
+        return Err(Error::Datos);
+    }
+    let marker = old.join(MARKER);
+    let mut value: Option<serde_json::Value> = if marker.exists() {
+        Some(leer_json(&old, &marker)?)
+    } else {
+        None
+    };
+    fn actualizar(value: &mut serde_json::Value, old: &str, new: &str) {
+        match value {
+            serde_json::Value::String(text) => *text = text.replace(old, new),
+            serde_json::Value::Array(values) => {
+                for v in values {
+                    actualizar(v, old, new)
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for v in values.values_mut() {
+                    actualizar(v, old, new)
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(v) = &mut value {
+        actualizar(
+            v,
+            old.to_str().ok_or(Error::Datos)?,
+            target.to_str().ok_or(Error::Datos)?,
+        );
+    }
+    fs::rename(&old, &target).map_err(|_| Error::Disco)?;
+    if let Some(value) = value {
+        if let Err(error) = escribir_json(&target, &target.join(MARKER), &value) {
+            let _ = fs::rename(&target, &old);
+            return Err(error);
+        }
+    }
+    Ok(target)
+}
+
 /// Instala o repara todos los archivos necesarios y publica el marcador al final.
 pub async fn instalar(
     store: &Almacen,
@@ -731,14 +1077,14 @@ pub async fn instalar(
     cancel: CancellationToken,
     progress: impl Fn(Progreso) + Send + Sync,
 ) -> Result<Instalado, Error> {
-    if instance.loader != "vanilla" {
+    if !matches!(instance.loader.as_str(), "vanilla" | "fabric") {
         return Err(Error::NoSoportada(
             "el loader de esta instancia aún no se instala".into(),
         ));
     }
     let os = plataforma()?;
     let os_version = version_sistema();
-    if !nombre_valido(&instance.minecraft) {
+    if !version_minecraft_valida(&instance.minecraft) {
         return Err(Error::Datos);
     }
     cancelado(&cancel)?;
@@ -753,7 +1099,7 @@ pub async fn instalar(
         .canonicalize()
         .map_err(|_| Error::Disco)?;
     let _lock = Guardia::adquirir(&folder)?;
-    let private = folder.join(".icaro-minecraft");
+    let private = migrar_directorio_bloqueado(store, instance)?;
     let root = store.datos().map_err(|_| Error::Disco)?;
     let _shared_lock = bloqueo_compartido(&root, &cancel, &progress).await?;
     segura(&root, &private, false)?;
@@ -1068,6 +1414,37 @@ pub async fn instalar(
             "Configurando los registros",
         )?);
     }
+    let fabric = if instance.loader == "fabric" {
+        let selected =
+            crate::versiones_instancia::leer_loader(store, instance).ok_or_else(|| {
+                Error::NoSoportada(
+                    "selecciona una versión oficial de Fabric para esta instancia".into(),
+                )
+            })?;
+        progress(Progreso {
+            etapa: "Preparando el perfil oficial de Fabric".into(),
+            completados: 0,
+            total: 0,
+        });
+        let bundle =
+            preparar_fabric(&client, &root, &instance.minecraft, &selected, &cancel).await?;
+        let mut loader_classpath = Vec::new();
+        for download in &bundle.descargas {
+            let path = root
+                .join("libraries")
+                .join(&download.sha1)
+                .join(relativa(&download.path)?);
+            files.push(nuevo_archivo(download, path.clone(), "Fabric")?);
+            loader_classpath.push(path);
+        }
+        loader_classpath.extend(classpath);
+        classpath = loader_classpath;
+        jvm.extend(argumentos(&bundle.profile.arguments.jvm, os, &os_version)?);
+        game_arguments.extend(argumentos(&bundle.profile.arguments.game, os, &os_version)?);
+        Some(bundle)
+    } else {
+        None
+    };
     let mut unique = BTreeMap::<PathBuf, Archivo>::new();
     for file in files {
         if let Some(previous) = unique.insert(file.ruta.clone(), file.clone()) {
@@ -1262,10 +1639,14 @@ pub async fn instalar(
     };
     let cached = leer_json::<Marcador>(&root, &marker_path)
         .ok()
+        .filter(|m| {
+            m.loader == instance.loader
+                && m.loader_version == fabric.as_ref().map(|b| b.loader.clone())
+        })
         .filter(|m| m.instalado.version == version.id)
         .and_then(|m| m.instalado.java_perfil)
         .filter(|p| p.prism && p.validar().is_ok());
-    let java_perfil = if let Some(perfil) = cached {
+    let mut java_perfil = if let Some(perfil) = cached {
         perfil
     } else {
         crate::java::perfil_minecraft(&version.id, fallback, &cancel)
@@ -1275,9 +1656,21 @@ pub async fn instalar(
                 _ => Error::Datos,
             })?
     };
+    if let Some(bundle) = &fabric {
+        java_perfil.majors.retain(|major| *major >= bundle.min_java);
+        java_perfil.validar().map_err(|_| {
+            Error::NoSoportada(format!(
+                "Fabric necesita Java {} o superior y el perfil de Minecraft no lo admite",
+                bundle.min_java
+            ))
+        })?;
+    }
     let installed = Instalado {
         version: version.id,
-        main_class: version.main_class,
+        perfil_id: fabric.as_ref().map(|b| b.profile.id.clone()),
+        main_class: fabric
+            .as_ref()
+            .map_or(version.main_class, |b| b.profile.main_class.clone()),
         classpath,
         natives,
         assets,
@@ -1289,10 +1682,20 @@ pub async fn instalar(
         jvm_arguments: jvm,
     };
     cancelado(&cancel)?;
+    let current = store.leer(&instance.id).map_err(|_| Error::Disco)?;
+    if current.minecraft != instance.minecraft
+        || current.loader != instance.loader
+        || crate::versiones_instancia::leer_loader(store, &current)
+            != fabric.as_ref().map(|b| b.loader.clone())
+    {
+        return Err(Error::Datos);
+    }
     escribir_json(
         &root,
         &marker_path,
         &Marcador {
+            loader: instance.loader.clone(),
+            loader_version: fabric.as_ref().map(|b| b.loader.clone()),
             schema: 2,
             sistema: format!("{os}-x86_64"),
             instalado: installed.clone(),
@@ -1466,7 +1869,8 @@ fn materializar(
 
 /// Consulta rápida para las tarjetas; antes de lanzar `instalar` comprueba SHA-1.
 pub fn listo(store: &Almacen, instance: &Instancia) -> bool {
-    if instance.loader != "vanilla" {
+    if !crate::modpacks::completo(store,instance){return false;}
+    if !matches!(instance.loader.as_str(), "vanilla" | "fabric") {
         return false;
     }
     let Ok(folder) = store.carpeta(&instance.id).and_then(|path| {
@@ -1475,12 +1879,14 @@ pub fn listo(store: &Almacen, instance: &Instancia) -> bool {
     }) else {
         return false;
     };
-    let root = folder.join(".icaro-minecraft");
+    let root = directorio_lectura(&folder);
     let Ok(marker): Result<Marcador, _> = leer_json(&folder, &root.join(MARKER)) else {
         return false;
     };
     let Ok(os) = plataforma() else { return false };
-    if !matches!(marker.schema, 1 | 2)
+    if marker.loader != instance.loader
+        || marker.loader_version != crate::versiones_instancia::leer_loader(store, instance)
+        || !matches!(marker.schema, 1 | 2)
         || marker.sistema != format!("{os}-x86_64")
         || marker.instalado.version != instance.minecraft
         || marker.archivos.is_empty()
@@ -1494,7 +1900,7 @@ pub fn listo(store: &Almacen, instance: &Instancia) -> bool {
         let allowed = if marker.schema == 1 {
             file.ruta.starts_with(&root)
         } else {
-            ["assets", "libraries", "meta/minecraft"]
+            ["assets", "libraries", "meta/minecraft", "meta/fabric"]
                 .iter()
                 .any(|p| file.ruta.starts_with(shared.join(p)))
         };
@@ -1523,8 +1929,7 @@ pub fn leer(store: &Almacen, instance: &Instancia) -> Option<Instalado> {
         return None;
     }
     let folder = store.carpeta(&instance.id).ok()?.canonicalize().ok()?;
-    let marker: Marcador =
-        leer_json(&folder, &folder.join(".icaro-minecraft").join(MARKER)).ok()?;
+    let marker: Marcador = leer_json(&folder, &directorio_lectura(&folder).join(MARKER)).ok()?;
     Some(marker.instalado)
 }
 
@@ -1538,10 +1943,7 @@ mod tests {
     }
     fn fixture_legacy(store: &Almacen, instance: &Instancia) -> PathBuf {
         use serde_json::json;
-        let root = store
-            .carpeta(&instance.id)
-            .unwrap()
-            .join(".icaro-minecraft");
+        let root = store.carpeta(&instance.id).unwrap().join(PRIVADO);
         fs::create_dir_all(&root).unwrap();
         let download = |bytes: &[u8], path: &str| {
             json!({
@@ -1605,6 +2007,297 @@ mod tests {
             "java_perfil":{"majors":[21], "component":"java-runtime-delta", "prism":true}, "game_arguments":[], "jvm_arguments":[]}
         })).unwrap();
         root
+    }
+
+    #[test]
+    fn renombre_preserva_nativos_y_configuracion_y_rechaza_conflictos() {
+        let root = temp();
+        let store = Almacen::nuevo(root.join("instances"));
+        let instance = store.crear("Renombre", "fixture", 0).unwrap();
+        let folder = store.carpeta(&instance.id).unwrap().canonicalize().unwrap();
+        let old = folder.join(PRIVADO_ANTERIOR);
+        fs::create_dir_all(old.join("natives")).unwrap();
+        fs::write(old.join("natives/test.dll"), b"nativo").unwrap();
+        let config = fs::read(folder.join("instance.json")).unwrap();
+        escribir_json(
+            &old,
+            &old.join(MARKER),
+            &serde_json::json!({
+                "natives": old.join("natives"), "custom": {"conservar": 42},
+                "argument": format!("-Djava.library.path={}", old.join("natives").display())
+            }),
+        )
+        .unwrap();
+        let target = migrar_directorio(&store, &instance).unwrap();
+        assert_eq!(target, folder.join(PRIVADO));
+        assert!(!old.exists());
+        let marker: serde_json::Value = leer_json(&target, &target.join(MARKER)).unwrap();
+        assert_eq!(
+            marker["natives"],
+            target.join("natives").to_string_lossy().as_ref()
+        );
+        assert_eq!(marker["custom"]["conservar"], 42);
+        assert_eq!(
+            marker["argument"],
+            format!("-Djava.library.path={}", target.join("natives").display())
+        );
+        assert_eq!(
+            fs::read(target.join("natives/test.dll")).unwrap(),
+            b"nativo"
+        );
+        assert_eq!(fs::read(folder.join("instance.json")).unwrap(), config);
+        assert_eq!(migrar_directorio(&store, &instance).unwrap(), target);
+        fs::create_dir(&old).unwrap();
+        assert!(matches!(
+            migrar_directorio(&store, &instance),
+            Err(Error::NoSoportada(_))
+        ));
+        assert!(old.exists() && target.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn fixture_fabric(root: &Path, mc: &str, loader: &str) -> Fabric {
+        let names = [
+            format!("net.fabricmc:fabric-loader:{loader}"),
+            format!("net.fabricmc:intermediary:{mc}"),
+        ];
+        let mut libraries = vec![];
+        let mut descargas = vec![];
+        for name in names {
+            let bytes = name.as_bytes();
+            let hash = crate::manifest::sha1_hex(bytes);
+            let path = ruta_maven(&name).unwrap();
+            let local = root.join("libraries").join(&hash).join(&path);
+            fs::create_dir_all(local.parent().unwrap()).unwrap();
+            fs::write(local, bytes).unwrap();
+            descargas.push(Descarga {
+                url: format!("https://maven.fabricmc.net/{path}"),
+                sha1: hash,
+                size: bytes.len() as u64,
+                path,
+                id: String::new(),
+            });
+            libraries.push(LibreriaFabric {
+                name,
+                url: "https://maven.fabricmc.net/".into(),
+                sha1: None,
+                size: None,
+            });
+        }
+        Fabric{schema:1,sin_intermediary:false,minecraft:mc.into(),loader:loader.into(),min_java:8,profile:PerfilFabric{
+            id:format!("fabric-loader-{loader}-{mc}"),inherits_from:mc.into(),main_class:"net.fabricmc.loader.impl.launch.knot.KnotClient".into(),
+            arguments:serde_json::from_value(serde_json::json!({"jvm":["-DFabricMcEmu= net.minecraft.client.main.Main "],"game":[]})).unwrap(),libraries},descargas}
+    }
+    #[tokio::test]
+    async fn fabric_instala_perfil_fijado_y_reutiliza_componentes_sin_red() {
+        let root = temp();
+        let store = Almacen::nuevo(root.join("instances"));
+        let mut instance = store.crear("Fabric", "fixture", 0).unwrap();
+        instance.loader = "fabric".into();
+        store.guardar(&instance).unwrap();
+        crate::versiones_instancia::guardar_loader(&store, &instance, "0.16.14").unwrap();
+        let private = fixture_legacy(&store, &instance);
+        let mut marker: serde_json::Value = leer_json(&private, &private.join(MARKER)).unwrap();
+        marker["loader"] = serde_json::json!("fabric");
+        marker["loader_version"] = serde_json::json!("0.16.14");
+        escribir_json(&private, &private.join(MARKER), &marker).unwrap();
+        let bundle = fixture_fabric(&root, "fixture", "0.16.14");
+        escribir_json(
+            &root,
+            &root.join("meta/fabric/fixture/0.16.14/perfil.json"),
+            &bundle,
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let installed = instalar(&store, &instance, CancellationToken::new(), |p| {
+                assert!(!p.etapa.starts_with("Descargando"))
+            })
+            .await
+            .unwrap();
+            assert!(listo(&store, &instance));
+            assert_eq!(installed.main_class, bundle.profile.main_class);
+            assert_eq!(
+                installed.perfil_id.as_deref(),
+                Some("fabric-loader-0.16.14-fixture")
+            );
+            assert!(installed.classpath[0].ends_with("fabric-loader-0.16.14.jar"));
+            assert!(installed
+                .jvm_arguments
+                .contains(&"-DFabricMcEmu= net.minecraft.client.main.Main ".into()));
+            assert_eq!(installed.java_perfil.unwrap().majors, vec![21]);
+        }
+        let before = fs::read(private.join(MARKER)).unwrap();
+        let mut incompatible = fixture_fabric(&root, "fixture", "0.16.14");
+        incompatible.min_java = 22;
+        escribir_json(
+            &root,
+            &root.join("meta/fabric/fixture/0.16.14/perfil.json"),
+            &incompatible,
+        )
+        .unwrap();
+        assert!(matches!(
+            instalar(&store, &instance, CancellationToken::new(), |_| {}).await,
+            Err(Error::NoSoportada(_))
+        ));
+        assert_eq!(fs::read(private.join(MARKER)).unwrap(), before);
+        escribir_json(
+            &root,
+            &root.join("meta/fabric/fixture/0.16.14/perfil.json"),
+            &bundle,
+        )
+        .unwrap();
+        let cancel = CancellationToken::new();
+        let observer = cancel.clone();
+        assert!(matches!(
+            instalar(&store, &instance, cancel, |p| {
+                if p.etapa == "Preparando el perfil oficial de Fabric" {
+                    observer.cancel();
+                }
+            })
+            .await,
+            Err(Error::Cancelada)
+        ));
+        assert_eq!(fs::read(private.join(MARKER)).unwrap(), before);
+        crate::versiones_instancia::guardar_loader(&store, &instance, "0.16.13").unwrap();
+        assert!(!listo(&store, &instance));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn fabric_rechaza_perfiles_cruzados_y_rutas_maven_invalidas() {
+        let root = temp();
+        let mut bundle = fixture_fabric(&root, "1.21.1", "0.16.14");
+        assert!(validar_fabric(&bundle, "1.21.1", "0.16.14").is_ok());
+        assert!(validar_fabric(&bundle, "1.21.4", "0.16.14").is_err());
+        assert!(validar_fabric(&bundle, "1.21.1", "0.16.13").is_err());
+        bundle.descargas[0].url = "https://example.com/malware.jar".into();
+        assert!(validar_fabric(&bundle, "1.21.1", "0.16.14").is_err());
+        for name in [
+            "net.fabricmc:../../escape:1",
+            "net..fabricmc:loader:1",
+            "net.fabricmc:loader:1:extra",
+            "net.fabricmc:loader:../1",
+        ] {
+            assert!(ruta_maven(name).is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn versiones_antiguas_con_espacios_se_conservan_sin_permitir_escape() {
+        let root=temp();let store=Almacen::nuevo(root.join("instances"));
+        let i=store.crear_con_loader("Pre release","1.14.2 Pre-Release 4","fabric",0).unwrap();
+        crate::versiones_instancia::guardar_loader(&store,&i,"0.19.5").unwrap();
+        assert_eq!(store.cargar().unwrap().instancias[0].minecraft,"1.14.2 Pre-Release 4");
+        assert_eq!(crate::versiones_instancia::leer_loader(&store,&i).as_deref(),Some("0.19.5"));
+        assert!(ruta_maven("net.fabricmc:intermediary:1.14.2 Pre-Release 4").unwrap().contains("1.14.2 Pre-Release 4"));
+        for v in ["../escape","a/b","a\\b","a?b","version ",". "," a","a."] {assert!(!version_minecraft_valida(v),"{v}");}
+        assert!(ruta_maven("net.fabricmc:intermediary:../escape").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fabric_sin_ofuscacion_omite_intermediary_solo_con_metadatos_coherentes() {
+        let root = temp();
+        let mut bundle = fixture_fabric(&root, "26.3", "0.19.5");
+        bundle.profile.libraries.pop();
+        bundle.descargas.pop();
+        let mut detail = serde_json::json!({"loader":{"version":"0.19.5"},"intermediary":{"version":"0.0.0","maven":"net.fabricmc:intermediary:0.0.0"},"launcherMeta":{"mainClass":{"client":bundle.profile.main_class}}});
+        bundle.sin_intermediary =
+            validar_detalle_fabric(&bundle.profile, &detail, "26.3", "0.19.5").unwrap();
+        assert!(bundle.sin_intermediary);
+        assert!(validar_fabric(&bundle, "26.3", "0.19.5").is_ok());
+        bundle.sin_intermediary = false;
+        assert!(validar_fabric(&bundle, "26.3", "0.19.5").is_err());
+        detail["intermediary"]["version"] = serde_json::json!("1.21.1");
+        assert!(validar_detalle_fabric(&bundle.profile, &detail, "26.3", "0.19.5").is_err());
+        let old = fixture_fabric(&root, "1.21.1", "0.16.14");
+        detail["loader"]["version"] = serde_json::json!("0.16.14");
+        detail["intermediary"] =
+            serde_json::json!({"version":"1.21.1","maven":"net.fabricmc:intermediary:1.21.1"});
+        assert!(!validar_detalle_fabric(&old.profile, &detail, "1.21.1", "0.16.14").unwrap());
+        detail["intermediary"] =
+            serde_json::json!({"version":"0.0.0","maven":"net.fabricmc:intermediary:0.0.0"});
+        assert!(validar_detalle_fabric(&old.profile, &detail, "1.21.1", "0.16.14").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "Audita perfiles y metadatos del catálogo completo de Fabric; no descarga el juego"]
+    async fn fabric_catalogo_completo_respeta_contrato_oficial() {
+        let client=reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(90)).build().unwrap();
+        let cancel=CancellationToken::new();
+        let games:Vec<serde_json::Value>=serde_json::from_slice(&bytes_oficiales(&client,"https://meta.fabricmc.net/v2/versions/game",METADATA_LIMIT as usize,&cancel).await.unwrap()).unwrap();
+        let loaders:Vec<serde_json::Value>=serde_json::from_slice(&bytes_oficiales(&client,"https://meta.fabricmc.net/v2/versions/loader",METADATA_LIMIT as usize,&cancel).await.unwrap()).unwrap();
+        let loader=loaders.iter().find(|l|l["stable"]==true).unwrap()["version"].as_str().unwrap().to_owned();
+        let mut jobs=tokio::task::JoinSet::new();let mut checked=0;let total=games.len();
+        for game in games {
+            let mc=game["version"].as_str().unwrap().to_owned();
+            assert!(version_minecraft_valida(&mc),"Minecraft: {mc}");
+            let client=client.clone();let cancel=cancel.clone();let loader=loader.clone();
+            jobs.spawn(async move {
+                let endpoint=format!("https://meta.fabricmc.net/v2/versions/loader/{mc}/{loader}");
+                let profile:PerfilFabric=serde_json::from_slice(&bytes_oficiales(&client,&format!("{endpoint}/profile/json"),METADATA_LIMIT as usize,&cancel).await.unwrap_or_else(|e|panic!("{mc}: {e}"))).unwrap();
+                let detail:serde_json::Value=serde_json::from_slice(&bytes_oficiales(&client,&endpoint,METADATA_LIMIT as usize,&cancel).await.unwrap()).unwrap();
+                let no_intermediary=validar_detalle_fabric(&profile,&detail,&mc,&loader).unwrap_or_else(|e|panic!("{mc}: {e}"));
+                let min=detail["launcherMeta"]["min_java_version"].as_u64().unwrap();assert!((1..=255).contains(&min),"{mc}");
+                let mut names=BTreeSet::new();
+                for lib in &profile.libraries {
+                    assert!(names.insert(lib.name.clone()),"{mc}: duplicada");
+                    assert_eq!(lib.url,"https://maven.fabricmc.net/","{mc}");
+                    ruta_maven(&lib.name).unwrap_or_else(|e|panic!("{mc}: {e}"));
+                    if let Some(hash)=&lib.sha1 {assert!(hash_valido(hash),"{mc}");}
+                    if let Some(size)=lib.size {assert!(size>0&&size<=64*1024*1024,"{mc}");}
+                }
+                assert!(names.contains(&format!("net.fabricmc:fabric-loader:{loader}")),"{mc}");
+                assert!(no_intermediary || names.contains(&format!("net.fabricmc:intermediary:{mc}")),"{mc}");
+            });
+            if jobs.len()==8 {jobs.join_next().await.unwrap().unwrap();checked+=1;if checked%50==0{println!("Perfiles comprobados: {checked}/{total}");}}
+        }
+        while let Some(job)=jobs.join_next().await {job.unwrap();checked+=1;}
+        assert_eq!(checked,total);println!("Catálogo completo: {checked} versiones con Fabric {loader}");
+    }
+
+    #[tokio::test]
+    #[ignore = "Descarga y verifica bibliotecas oficiales de Fabric; no inicia Minecraft"]
+    async fn fabric_oficial_descarga_verifica_y_reutiliza_perfil() {
+        let root = temp();
+        let cancel = CancellationToken::new();
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(90))
+            .build()
+            .unwrap();
+        let bundle = preparar_fabric(&client, &root, "1.21.1", "0.16.14", &cancel)
+            .await
+            .unwrap();
+        for download in &bundle.descargas {
+            let path = root
+                .join("libraries")
+                .join(&download.sha1)
+                .join(&download.path);
+            let file = nuevo_archivo(download, path.clone(), "Fabric").unwrap();
+            descargar(&client, &root, &file, &cancel).await.unwrap();
+            assert_eq!(
+                sha1_archivo(&path, &cancel).unwrap(),
+                (download.size, download.sha1.clone())
+            );
+            if path.file_name().unwrap() == "fabric-loader-0.16.14.jar" {
+                let mut zip = zip::ZipArchive::new(File::open(path).unwrap()).unwrap();
+                assert!(zip
+                    .by_name("net/fabricmc/loader/impl/launch/knot/KnotClient.class")
+                    .is_ok());
+            }
+        }
+        let offline = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:1").unwrap())
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let cached = preparar_fabric(&offline, &root, "1.21.1", "0.16.14", &cancel)
+            .await
+            .unwrap();
+        assert_eq!(cached.profile.id, bundle.profile.id);
+        assert_eq!(bundle.descargas.len(), 8);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
@@ -1878,6 +2571,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "Instala Fabric y Minecraft completos en una carpeta temporal, sin cuentas ni arranque"]
+    async fn instala_fabric_real_y_reutiliza_sin_descargas() {
+        struct Limpieza(PathBuf);
+        impl Drop for Limpieza {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = Limpieza(temp());
+        let store = Almacen::nuevo(root.0.join("instances"));
+        let mut instance = store.crear("Fabric aislada", "1.21.1", 0).unwrap();
+        instance.loader = "fabric".into();
+        store.guardar(&instance).unwrap();
+        crate::versiones_instancia::guardar_loader(&store, &instance, "0.16.14").unwrap();
+        let first = instalar(&store, &instance, CancellationToken::new(), |_| {})
+            .await
+            .unwrap();
+        assert!(listo(&store, &instance));
+        assert_eq!(
+            first.perfil_id.as_deref(),
+            Some("fabric-loader-0.16.14-1.21.1")
+        );
+        assert_eq!(
+            first.main_class,
+            "net.fabricmc.loader.impl.launch.knot.KnotClient"
+        );
+        assert_eq!(first.java_major, 21);
+        assert!(first.natives.is_dir());
+        let second = instalar(&store, &instance, CancellationToken::new(), |p| {
+            assert!(!p.etapa.starts_with("Descargando"))
+        })
+        .await
+        .unwrap();
+        assert_eq!(first.classpath, second.classpath);
+        assert_eq!(first.natives, second.natives);
+        let loader = first
+            .classpath
+            .iter()
+            .find(|p| p.ends_with("fabric-loader-0.16.14.jar"))
+            .unwrap();
+        let mut zip = zip::ZipArchive::new(File::open(loader).unwrap()).unwrap();
+        assert!(zip
+            .by_name("net/fabricmc/loader/impl/launch/knot/KnotClient.class")
+            .is_ok());
     }
 
     #[tokio::test]

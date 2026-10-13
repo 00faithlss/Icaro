@@ -4,6 +4,12 @@ Launcher de Minecraft escrito en Rust, para Windows y Linux.
 
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
+<!-- avance:inicio -->
+[![Avance del roadmap: 71% — 52 de 73 tareas completadas](docs/assets/progreso.svg)](#roadmap)
+
+**71% del roadmap implementado · 52/73 tareas.** Cada casilla tiene el mismo peso.
+<!-- avance:fin -->
+
 Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da nombre al proyecto. Hefesto, el herrero, está en los ajustes, Atlas en el mundo y Faetón en los errores. Hay más figuras repartidas por el launcher, y descubrirlas es parte de usarlo.
 
 ## Tabla de contenidos
@@ -20,13 +26,13 @@ Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da 
 Icaro Launcher está en desarrollo. La interfaz ya permite recorrer instancias, servidores, descargas, consola, modpacks, capturas, ajustes y cuenta, con temas claro y oscuro.
 
 > [!NOTE]
-> El ejemplo conecta Microsoft y Modrinth, guarda las instancias, instala Minecraft Vanilla con Java automático, ejecuta el juego con una cuenta activa, instala y actualiza mods compatibles y exporta instancias en ZIP. Sin cuenta activa muestra la bienvenida; las secciones sin datos aparecen vacías. `ICARO_DEMO=1` permite revisar los datos de muestra. La instalación de loaders y el lanzamiento de instancias con mods siguen pendientes.
+> El ejemplo conecta Microsoft y Modrinth, guarda las instancias, instala Minecraft Vanilla y Fabric con selección de Java por perfil, ejecuta el juego con una cuenta activa, instala y actualiza mods compatibles y exporta instancias en ZIP. Sin cuenta activa muestra la bienvenida; las secciones sin datos aparecen vacías. `ICARO_DEMO=1` permite revisar los datos de muestra. Fabric 26.3 ya fue probado por el usuario con un mod real; Quilt, Forge y NeoForge siguen pendientes.
 
-El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, comprueba tamaño y SHA-1 y reutiliza la instalación guardada. La versión de Java se obtiene de esos metadatos; si no hay una compatible, descarga el runtime oficial de Mojang. Consulta [Vanilla y Java](docs/vanilla-y-java.md) para probar el recorrido.
+El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, comprueba tamaño y SHA-1 y reutiliza la instalación guardada. Java respeta la selección manual y la compatibilidad del perfil. En automático, con descargas habilitadas prepara el runtime gestionado; con descargas deshabilitadas detecta Java local compatible, incluidos runtimes del launcher oficial. Consulta [Vanilla y Java](docs/vanilla-y-java.md) para probar el recorrido.
 
-Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** está destinada a descubrir packs; instalarlos como nuevas instancias sigue pendiente.
+Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** instala los MRPACK de Modrinth en nuevas instancias Vanilla o Fabric, con revisión previa, elección de archivos opcionales, hashes verificados y pausa/cancelación en Descargas. Los packs de Quilt, Forge y NeoForge requieren sus instaladores pendientes.
 
-Las instancias usan carpetas legibles por nombre, mantienen su identidad interna y guardan `instance.cfg`. Las rutas anteriores se migran al recuperar las instancias, conservando sus mundos. El editor permite cambiar el icono desde su imagen o el menú de acciones, recortarlo y volver al icono generado. Consulta [instancias locales](docs/instancias-locales.md).
+Las instancias usan carpetas legibles por nombre, mantienen su identidad interna y guardan su configuración en `instance.json`. La carpeta `.icaro` contiene el perfil instalado y los nativos; assets, bibliotecas y clientes se comparten entre instancias. Las rutas anteriores se migran al recuperar las instancias, conservando sus mundos. El editor permite cambiar el icono desde su imagen o el menú de acciones, recortarlo y volver al icono generado. Consulta [instancias locales](docs/instancias-locales.md).
 
 Apariencia incluye el tema del sistema, Mármol/Plata/Bronce y escala de 80 a 150 %. Los avisos se apilan con acciones, y la eliminación utiliza Picar con revisión de respaldos. La exportación de instancia incorpora el árbol de archivos y formatos Ícaro y Prism/MultiMC. La lista de mods se exporta por separado como HTML, Markdown, texto, JSON, CSV o una plantilla personalizada.
 
@@ -58,7 +64,9 @@ La herramienta de línea de comandos consulta el manifiesto de Mojang y verifica
 
 ## Roadmap
 
-Actualizado el **12-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
+Actualizado el **13-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
+
+La barra cuenta las casillas de este roadmap con el mismo peso para cada una. Al cambiar una casilla o añadir una tarea, ejecuta `python scripts/actualizar_avance.py` para actualizar el porcentaje y la imagen.
 
 El avance de las pantallas y componentes originales se sigue por separado en el [Roadmap del System Design](docs/roadmap-system-design.md). Las diferencias que requieren evaluación están en la [comparación con el diseño](docs/revision-system-design.md).
 
@@ -92,11 +100,11 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Consulta de versiones de Mojang con caché de 24 horas y uso de la copia válida si falla la actualización.
 - [x] Asistente de cuatro pasos que guarda versión, familia de loader, nombre y portada; cada instancia tiene identificador estable y carpeta propia.
 - [x] Selectores de versión y loader separados, con versiones oficiales seleccionables y elección persistida.
-- [x] Cambio de Minecraft y elección de loader con el nuevo `CambioVersionInstancia`: compatibilidad por lotes de todos los mods instalados, actualizaciones opcionales, respaldo obligatorio al bajar y copia independiente. Preparación aislada y recuperación de archivos/metadatos si falla; instalar el loader sigue pendiente.
-- [x] Recuperación de instancias, grupos y ajustes de Java desde disco; renombrado sin mover la carpeta de juego.
-- [x] Eliminación de instancias a la papelera local y recuperación mediante Deshacer.
+- [x] Cambio de Minecraft y cambio separado de versión del loader, conservando su familia, con el nuevo `CambioVersionInstancia`: compatibilidad por lotes de todos los mods instalados, actualizaciones opcionales, respaldo obligatorio al bajar y copia independiente. Preparación aislada y recuperación de archivos/metadatos si falla; Fabric ya se prepara con la versión elegida; Quilt, Forge y NeoForge siguen pendientes.
+- [x] Recuperación de instancias, grupos y ajustes de Java desde disco; renombrado de la carpeta con conservación de la identidad y los archivos del juego.
+- [x] Eliminación de instancias a la papelera del sistema y recuperación mediante Deshacer.
 - [x] Vanilla omite la pestaña y el contador de mods; la barra inferior de Jugar se oculta sin sesión o sin instancia seleccionada.
-- [x] Explorador conectado a la carpeta real: árbol, tamaños, vista previa de texto, abrir, copiar ruta, renombrar y mover archivos a su papelera.
+- [x] Explorador conectado a la carpeta real: árbol, tamaños, vista previa de texto, abrir, copiar ruta, renombrar y mover archivos a la papelera del sistema.
 - [x] Exportación ZIP con metadatos, selección de contenido, tamaños reales y selector nativo de destino; sin sobrescribir exportaciones anteriores.
 - [x] Instalar Minecraft Vanilla al crear la instancia: cliente, bibliotecas, nativos, assets y configuración de registros verificados y reutilizables.
 - [x] Detectar Java compatible o instalar el runtime oficial requerido por los metadatos de Minecraft; reutilizarlo y permitir selección por instancia.
@@ -104,7 +112,11 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Conectar preparación, pausa, cancelación y reintento a la cola; estados reales de Jugar, Umbral, consola e informe de fallo con las composiciones existentes.
 - [x] Lanzamiento real de Vanilla 26.3 en Windows confirmado por el usuario y correcciones del Umbral probadas durante el uso; retirada con fundido al detectar la ventana de Minecraft.
 - [ ] Validar el recorrido completo en Arch Linux y completar la revisión de todas las opciones de cierre en Windows.
-- [ ] Instalar loaders compatibles y lanzar instancias con sus mods.
+- [x] Instalar Fabric desde su perfil oficial, respetar la versión elegida y lanzar Fabric 26.3 con un mod real; confirmado por el usuario en Windows.
+- [ ] Instalar Quilt y validar el arranque con un mod compatible.
+- [ ] Instalar Forge y validar el arranque con un mod compatible.
+- [ ] Instalar NeoForge y validar el arranque con un mod compatible.
+- [x] Compartir assets, bibliotecas y clientes entre instancias, migrar los datos internos a `.icaro` y medir el almacenamiento real.
 - [ ] Importar y duplicar instancias desde sus acciones generales; cambiar la familia de loader.
 - [ ] Exportar modpacks MRPACK con la versión concreta de Minecraft y loader.
 - [x] Instalar resourcepacks ZIP, leer su inventario y activar en `options.txt`; instalación fuera de versión con confirmación.
@@ -113,7 +125,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [ ] Ordenar resourcepacks por prioridad y admitir otros motores de shaders.
 - [ ] Leer mundos reales, crear y restaurar copias de seguridad y permitir jugar directamente a un mundo.
 - [x] Leer capturas F2 reales por instancia; visor con controles de ventana, copiar imagen y abrir carpeta.
-- [ ] Completar eliminación reversible de capturas locales.
+- [x] Eliminar capturas mediante la papelera del sistema y ofrecer Deshacer durante la sesión.
 - [ ] Completar las vistas previas y la recuperación de archivos eliminados en el explorador.
 
 ### Catálogo y gestión de mods
@@ -132,7 +144,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Seleccionar todos los mods y panel de ficha entrando desde el borde derecho.
 - [x] Clic fuera cierra el panel; volver desde la página completa restaura la instancia o el catálogo de origen.
 - [ ] Perfil del creador dentro de la tienda: falta el componente de diseño; por ahora se abre su perfil público en Modrinth.
-- [ ] Instalar modpacks como nuevas instancias, incluidos sus archivos de configuración.
+- [x] Instalar MRPACK de Modrinth como nuevas instancias Vanilla/Fabric, incluidos sus archivos de configuración, con revisión, verificación y reintento.
 
 ### Actualizaciones del launcher
 
@@ -143,9 +155,9 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 
 Consulta el [detalle de implementación pendiente](docs/pendientes-implementacion.md) para el alcance y las comprobaciones de loaders oficiales, importación de packs y funciones restantes.
 
-1. **Instancias con loader:** instalar Fabric, NeoForge, Forge y Quilt desde sus fuentes oficiales, respetar la versión elegida y comprobar el lanzamiento con los mods ya gestionados. Los catálogos y la elección están implementados; la instalación todavía está pendiente.
+1. **Instancias con loader:** instalar Fabric, NeoForge, Forge y Quilt desde sus fuentes oficiales, respetar la versión elegida y comprobar el lanzamiento con los mods ya gestionados. Fabric ya fue validado por el usuario con un mod real y usa el perfil oficial, bibliotecas verificadas y la versión elegida. Quilt, Forge y NeoForge todavía requieren sus instaladores.
 2. **Validación multiplataforma:** repetir el recorrido de Vanilla en Arch Linux y completar las opciones de cierre en Windows; el lanzamiento real en Windows ya fue confirmado.
-3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. El cambio de versión ya permite respaldo, copia y actualización de mods; falta instalar los loaders.
+3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. El cambio de versión ya permite respaldo, copia y actualización de mods; los instaladores de Quilt, Forge y NeoForge siguen pendientes.
 4. **Editor completo:** conectar mundos, prioridad de resourcepacks, otros motores de shaders, integridad y eliminación/recuperación de archivos y capturas; completar el historial persistente y unificar los instaladores en la cola global. Recursos, shaders, capturas y consola ya tienen sus recorridos reales descritos arriba.
 5. **Cuenta y servicios adicionales:** completar Cuenta y Estudio de skin, servidores y proveedores opcionales.
 6. **Primera publicación:** validar Windows y Arch Linux, rendimiento, teclado, ventanas angostas y empaquetado.

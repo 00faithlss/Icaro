@@ -6,15 +6,17 @@ Los caracteres reservados del sistema de archivos se sustituyen por `_`. Los nom
 
 ## Metadatos y migración
 
-La [investigación de Prism y organización objetivo de datos](organizacion-datos.md) distingue las rutas actuales de la reorganización pendiente: assets/bibliotecas compartidos, configuración por instancia y papelera del sistema.
+La [organización de datos](organizacion-datos.md) describe los assets y bibliotecas compartidos, la configuración por instancia y la papelera del sistema ya conectados.
 
-Cada carpeta contiene `instance.json` y `instance.cfg`. El CFG es un INI de Ícaro, con sección `[General]` y campos `Id`, `Name`, `Minecraft`, `Loader`, `Cover` y `Created`. Las cadenas están escapadas como JSON para conservar acentos y caracteres especiales. No es un archivo de configuración intercambiable con Prism Launcher.
+Cada carpeta contiene `instance.json` de esquema 2 como única configuración editable. Guarda identidad y ajustes de Java/memoria; el icono personalizado se conserva por separado. `.icaro` contiene el perfil instalado, los nativos y, cuando corresponde, el estado del modpack; los archivos del juego permanecen en `minecraft/`.
 
-`instance.json` conserva la lectura compatible de versiones anteriores. Cuando no existe, se puede recuperar la instancia desde `instance.cfg`; un JSON presente pero corrupto no se sustituye silenciosamente. El icono personalizado se guarda por separado, dentro de la misma carpeta.
+Los antiguos `instance.cfg` se leen durante la migración; sus claves se conservan en `legacy_cfg` y el CFG se retira después de publicar el JSON. Un JSON presente pero corrupto no se sustituye silenciosamente. Los campos desconocidos se preservan al guardar.
 
-Al cargar el almacén, las carpetas antiguas cuyo nombre es el ID se migran mediante un cambio de nombre dentro del mismo almacén. No se copian ni borran mundos. El JSON legado se conserva byte a byte, incluyendo campos desconocidos. Si el sistema bloquea la carpeta o falla la escritura del CFG, la instancia sigue usando su carpeta anterior. La siguiente carga puede volver a intentar la migración.
+Al cargar el almacén, las carpetas antiguas cuyo nombre es el ID se migran mediante un cambio de nombre dentro del mismo almacén. No se copian ni borran mundos. Si el sistema bloquea la carpeta o falla la publicación de los metadatos, se conserva la carpeta anterior. La siguiente carga puede volver a intentar la migración. `.icaro-minecraft` se renombra a `.icaro`, actualizando las referencias del perfil; una colisión entre ambos nombres detiene la migración.
 
-Renombrar una instancia cambia su carpeta y conserva el ID y todos sus archivos. Si falla la publicación de los metadatos, se revierte el cambio de carpeta y la configuración anterior. Mientras Minecraft o una instalación usan la instancia, la interfaz debe impedir este cambio. Eliminar conserva los datos en la papelera del almacén y restaurar elige de nuevo un nombre de carpeta disponible.
+Renombrar una instancia cambia su carpeta y conserva el ID y todos sus archivos. Si falla la publicación de los metadatos, se revierte el cambio de carpeta y la configuración anterior. Mientras Minecraft o una instalación usan la instancia, la interfaz impide este cambio. Eliminar envía la carpeta a la papelera del sistema; Deshacer restaura durante la sesión y elige un nombre disponible. Un fallo no provoca borrado permanente.
+
+**Cambiar versión** modifica únicamente Minecraft y conserva la familia del loader. **Cambiar versión del loader** conserva Minecraft, la familia, los mods y los mundos; permite elegir otra versión publicada del mismo loader y respaldar los archivos. Fabric se prepara con la versión guardada; Quilt, Forge y NeoForge requieren sus instaladores pendientes.
 
 ## ArchivosNoVerificados
 
@@ -35,7 +37,7 @@ Haz clic en el icono del editor o elige **Cambiar icono** en sus acciones. Admit
 
 La vista previa se actualiza directamente en RGBA con trabajo limitado a 256 × 256 muestras. El estilo Original se guarda con Lanczos sobre la imagen original en segundo plano; Píxeles 16/32 conserva los bloques de la vista previa. Cambiar la fuente invalida la imagen anterior mientras se decodifica la nueva.
 
-Eliminar muestra una confirmación con el nombre y las consecuencias, diez bloques de avance y grietas sobre toda la tarjeta. Soltar cancela. La eliminación sigue conservando los archivos en la papelera y permite recuperación; el texto no afirma que sea irreversible. En Capturas dentro de la instancia, el estado vacío explica F2 y ofrece Jugar para esa instancia.
+Eliminar muestra una revisión de respaldos con **Continuar con la eliminación**, seguida de la confirmación con nombre, consecuencias, diez bloques de avance y grietas sobre toda la tarjeta. Soltar o pulsar **Cancelar** interrumpe la confirmación antes de iniciar la operación. Cancelar queda alineado con el pie de la tarjeta. Los archivos se conservan en la papelera del sistema. En Capturas dentro de la instancia, el estado vacío explica F2 y ofrece Jugar para esa instancia.
 
 ## Exportar
 

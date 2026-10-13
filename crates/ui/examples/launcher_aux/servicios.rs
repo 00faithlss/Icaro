@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Estado {
+    pub modpacks:crate::modpacks_reales::Estado,
     pub juego: crate::juego_real::Estado,
     pub mods: crate::mods_reales::Estado,
     anteriores: Vec<PaginaAnterior>,
@@ -71,6 +72,7 @@ impl Default for Estado {
 impl Estado {
     pub fn nuevo(demo: bool) -> Self {
         Self {
+            modpacks:Default::default(),
             juego: Default::default(),
             mods: Default::default(),
             anteriores: vec![],
@@ -2368,6 +2370,11 @@ mod tests {
         assert_eq!(real.grupos.len(), 3);
         assert_eq!(real.configs.len(), 3);
         assert_eq!(store.cargar().unwrap().instancias.len(), 3);
+        assert_eq!(crate::instancias()[2].estado, icaro_ui::instancias::EstadoInstancia::Preparando);
+        let generation=real.servicios.juego.trabajos[&created.id].generacion;
+        // Esta prueba no ejecuta tareas asíncronas: simula cancelación y su acuse.
+        let _=crate::juego_real::actualizar(&mut real,crate::juego_real::Accion::Cancelar(0));
+        let _=crate::juego_real::actualizar(&mut real,crate::juego_real::Accion::Preparada(created.id.clone(),generation,Err("Prueba cancelada".into())));
         assert!(crate::instancias()
             .iter()
             .all(|i| i.estado == icaro_ui::instancias::EstadoInstancia::Pendiente));

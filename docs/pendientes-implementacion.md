@@ -1,31 +1,35 @@
 # Implementación pendiente
 
-Actualizado el **12-10-2026**. Este documento describe el trabajo que falta; no presenta estas funciones como disponibles. El [roadmap del System Design](roadmap-system-design.md) detalla los componentes y sus diferencias visuales.
+Actualizado el **13-10-2026**. Este documento describe el trabajo que falta; no presenta estas funciones como disponibles. El [roadmap del System Design](roadmap-system-design.md) detalla los componentes y sus diferencias visuales.
 
 ## 1. Instalación y ejecución de loaders oficiales
 
-**Base de almacenamiento:** Vanilla ya comparte assets, bibliotecas y metadatos, y migra las copias verificadas al preparar una instancia. La configuración por instancia, papelera del sistema, medición de almacenamiento y mantenimiento están conectados. Sigue pendiente incorporar los loaders a estas rutas; ver [organización de datos](organizacion-datos.md).
+**Base de almacenamiento:** Vanilla ya comparte assets, bibliotecas y metadatos, y migra las copias verificadas al preparar una instancia. La configuración por instancia, papelera del sistema, medición de almacenamiento y mantenimiento están conectados. Fabric ya usa estas rutas; sigue pendiente incorporar Quilt, Forge y NeoForge; ver [organización de datos](organizacion-datos.md).
 
-**Estado actual:** el asistente y Cambiar versión consultan los catálogos oficiales de Fabric, Quilt, Forge y NeoForge y guardan la versión elegida. La instalación y el lanzamiento completos funcionan para Vanilla. Elegir un loader todavía no instala ni ejecuta ese loader.
+**Estado actual:** el asistente y Cambiar versión consultan los catálogos oficiales de Fabric, Quilt, Forge y NeoForge y guardan la versión elegida. Vanilla está validado por el usuario. Fabric 26.3 fue validado por el usuario con un mod real en Windows; usa el perfil oficial para la versión elegida. Quilt, Forge y NeoForge todavía no se instalan ni ejecutan.
 
-- [ ] Conectar la instalación de cada loader usando sus perfiles, manifiestos, bibliotecas y/o instaladores oficiales, según corresponda. No sustituir el resultado oficial por versiones o perfiles inventados.
+- [x] Conectar Fabric al perfil oficial, versión fijada, bibliotecas verificadas, argumentos y mínimo de Java.
+- [ ] Conectar la instalación de Quilt, Forge y NeoForge usando sus perfiles, manifiestos, bibliotecas y/o instaladores oficiales, según corresponda. No sustituir el resultado oficial por versiones o perfiles inventados.
 - [ ] Respetar la versión concreta guardada en la instancia y su compatibilidad con Minecraft; resolver Java y dependencias del perfil resultante.
 - [ ] Preparar la instalación fuera de la carpeta activa, verificar las descargas y publicar el resultado solo al terminar. Conservar la instalación anterior ante error o cancelación.
 - [ ] Integrar el avance con la cola, pausa/cancelación, consola y estados estables del botón; comprobar archivos existentes sin mostrar una instalación ficticia.
 - [ ] Lanzar el perfil instalado con sus argumentos, bibliotecas y nativos reales y con los mods de esa instancia.
 - [ ] Conectar el mismo recorrido a Crear instancia, Instalar/Jugar y Cambiar versión. Probar cada loader con una instancia nueva, una instalación reutilizada y una migración.
 
+Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; Fabric ya tiene fijación de versión, preparación verificada, cola y lanzamiento.
+
 **Criterio de finalización:** instalar y abrir una instancia de cada loader con un mod compatible, reutilizar sus archivos al reiniciar y recuperarse de una descarga fallida sin perder mundos ni mods.
 
 ## 2. Importación e instalación de modpacks
 
-**Estado actual:** la tienda descubre modpacks y existe la composición ImportarClonar. Falta convertir el pack elegido o el archivo importado en una instancia jugable. Exportar una lista de mods o un ZIP de instancia no implementa este recorrido.
+**Estado actual:** la tienda instala los MRPACK de Modrinth en nuevas instancias Vanilla/Fabric. La revisión muestra Minecraft, la versión exacta del loader y los archivos opcionales; la instalación verifica SHA-512/SHA-1 y aplica overrides/client-overrides antes de preparar el juego. Pasó la instalación completa de Fabulously Optimized 14.1.1 con Minecraft 26.2/Fabric 0.19.5 y reutilización sin descargas. La importación desde archivos locales, ZIP de otros launchers y los instaladores de Quilt/Forge/NeoForge siguen pendientes.
 
-- [ ] Leer MRPACK: metadatos, Minecraft, loader, referencias de archivos, hashes y archivos incluidos; presentar una revisión antes de importar.
-- [ ] Descargar y verificar los archivos referenciados, aplicar los archivos incluidos y preparar el loader correspondiente mediante el instalador oficial.
+- [x] Leer MRPACK desde el catálogo de Modrinth: metadatos, Minecraft, loader, referencias de archivos, hashes y archivos incluidos; presentar una revisión antes de importar.
+- [x] Descargar y verificar los archivos referenciados de MRPACK de Modrinth, aplicar los archivos incluidos y preparar Vanilla o Fabric mediante sus perfiles oficiales.
+- [ ] Extender la instalación de modpacks a Quilt, Forge y NeoForge cuando estén disponibles sus instaladores.
 - [ ] Importar los ZIP de Ícaro y los formatos compatibles de Prism/MultiMC; detectar el formato y explicar los formatos no admitidos.
 - [ ] Conectar la selección de archivo y ZonaSoltar a la importación real.
-- [ ] Validar las rutas del archivo comprimido y los límites de extracción; evitar que archivos o enlaces escriban fuera de la nueva instancia.
+- [ ] Aplicar a la importación local y los ZIP de otros launchers las validaciones de rutas, enlaces y límites de extracción que ya tiene el instalador MRPACK de Modrinth.
 - [ ] Integrar ArchivosNoVerificados para los archivos sin origen comprobado; conservar las decisiones de confianza asociadas al contenido exacto.
 - [ ] Completar el descubrimiento/importación desde otros launchers y la duplicación de una instancia sin alterar el original.
 - [ ] Probar la importación manual de los ZIP exportados en Prism/MultiMC; actualmente se verifica su estructura con pruebas.
@@ -48,7 +52,7 @@ Actualizado el **12-10-2026**. Este documento describe el trabajo que falta; no 
 - [ ] Completar PantallaCuenta y EstudioSkin con la composición original y acciones reales.
 - [ ] Implementar servidores y sincronización de mods. Por ahora Servidores muestra EnConstruccion en modo real.
 - [ ] Resolver la integración opcional de CurseForge cuando exista acceso válido a su API y condiciones de distribución.
-- [ ] Completar almacenamiento y bandeja, y revisar los comportamientos de cierre.
+- [ ] Completar el traslado de la raíz de datos y la bandeja, y revisar los comportamientos de cierre; tamaños, caché, rotación y recuperación de operaciones ya están conectados.
 - [ ] Publicar el ejecutable y los metadatos de actualización y probar una actualización completa. La comprobación y descarga del actualizador ya están conectadas; ver el [contrato de publicación](actualizaciones-launcher.md).
 
 ## 5. Validación y diseño

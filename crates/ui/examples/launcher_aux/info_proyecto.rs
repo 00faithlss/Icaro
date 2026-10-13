@@ -147,8 +147,8 @@ fn datum<'a>(
         text(label.to_owned())
             .size(13)
             .color(p.text_muted)
-            .width(Length::Fill),
-        value
+            .width(94),
+        container(value).align_right(Length::Fill)
     ]
     .spacing(10)
     .align_y(Alignment::Center)
@@ -210,13 +210,13 @@ pub fn vista<'a>(app: &'a App, project: &'a Project, width: f32) -> Element<'a, 
             &app.servicios.instancias.versiones,
             s.info_snapshots,
         );
-        let current = crate::mods_reales::instancia(app).map(|i| i.minecraft.as_str());
+        let current = if project.project_type=="modpack" {None} else {crate::mods_reales::instancia(app).map(|i| i.minecraft.as_str())};
         let mut body =
             column![text("Minecraft: Java Edition").size(13).color(p.text_muted)].spacing(12);
         let mut rows: Vec<Vec<&VersionChip>> = vec![vec![]];
         let mut used = 0.;
         for chip in &chips {
-            let chip_width = chip.label.chars().count() as f32 * 7.2 + 16.;
+            let chip_width = chip.label.chars().count() as f32 * 8.0 + 20.;
             if used > 0. && used + 6. + chip_width > width {
                 rows.push(vec![]);
                 used = 0.;
@@ -240,6 +240,7 @@ pub fn vista<'a>(app: &'a App, project: &'a Project, width: f32) -> Element<'a, 
                                 .color(if actual { p.bg } else { p.text }),
                         )
                         .padding([4, 8])
+                        .width(chip.label.chars().count() as f32 * 8.0 + 20.)
                         .style(move |_| iced::widget::container::Style {
                             background: actual.then_some(p.text.into()),
                             border: iced::Border {

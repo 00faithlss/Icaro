@@ -33,8 +33,8 @@ El selector de versiones conserva su marco durante hover y selección y usa los 
 - **Inicio de sesión (`CodigoDispositivo`)** usa el flujo por navegador y retorno directo a Ícaro solicitado y probado por el usuario. No muestra código ni QR del flujo que fallaba; conserva la lámina de Hermes y el progreso real.
 - **CurseForge** aparece como fuente deshabilitada, en el lugar definido por el diseño. No hay una conexión simulada en el modo real.
 - **MRPACK** conserva su selector, pero no permite exportar hasta disponer de instalación real de Minecraft y de la versión concreta del loader. No genera un JSON aislado presentado como modpack.
-- Crear Vanilla guarda su configuración y prepara Minecraft y Java; Jugar ejecuta el proceso y conecta los estados originales, registros y fallo. **Instalar loaders y lanzar instancias con mods siguen pendientes**. Importar, duplicar e instalar modpacks también siguen pendientes.
-- El explorador conserva su papelera interna; la recuperación y eliminación definitiva desde esa pestaña todavía requieren conexión al flujo completo definido en el diseño.
+- Crear Vanilla o Fabric guarda su configuración y prepara Minecraft, el perfil y Java; Jugar conecta los estados originales, registros y fallo. Fabric 26.3 fue confirmado con un mod real en Windows. Quilt, Forge y NeoForge siguen pendientes. Los MRPACK de Modrinth crean instancias Vanilla/Fabric; importar archivos locales y duplicar instancias desde las acciones generales siguen pendientes.
+- El explorador envía las eliminaciones a la papelera del sistema; la recuperación desde su propia pestaña todavía requiere conexión al flujo completo definido en el diseño.
 
 ## Implementación
 

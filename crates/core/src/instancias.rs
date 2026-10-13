@@ -77,12 +77,7 @@ fn validar(i: &Instancia) -> Result<(), Error> {
         "vanilla" | "fabric" | "forge" | "neoforge" | "quilt"
     ) || !id_valido(&i.id)
         || i.portada > 3
-        || i.minecraft.is_empty()
-        || i.minecraft.len() > 128
-        || !i
-            .minecraft
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        || !crate::minecraft::version_minecraft_valida(&i.minecraft)
     {
         return Err(Error::Datos);
     }
@@ -408,7 +403,7 @@ impl Almacen {
         }
         Ok(path)
     }
-    fn leer(&self, id: &str) -> Result<Instancia, Error> {
+    pub(crate) fn leer(&self, id: &str) -> Result<Instancia, Error> {
         let i = leer_en(&self.carpeta(id)?)?;
         if i.id != id {
             return Err(Error::Datos);

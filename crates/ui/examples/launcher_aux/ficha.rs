@@ -330,7 +330,7 @@ fn versiones_tabla<'a>(
         .skip(s.pagina * PAGE_SIZE)
         .take(PAGE_SIZE)
     {
-        let instance=crate::mods_reales::instancia(app).is_some_and(|i|v.game_versions.contains(&i.minecraft)&&(matches!(project.project_type.as_str(),"resourcepack"|"shader")||v.loaders.contains(&i.loader)));
+        let instance=project.project_type!="modpack" && crate::mods_reales::instancia(app).is_some_and(|i|v.game_versions.contains(&i.minecraft)&&(matches!(project.project_type.as_str(),"resourcepack"|"shader")||v.loaders.contains(&i.loader)));
         let mut version = column![button(
             text(&v.version_number)
                 .font(fuentes::MONO)
@@ -355,7 +355,9 @@ fn versiones_tabla<'a>(
                 canal(&v.version_type),
             ));
         }
-        let action = if app.editor == Some(2) {
+        let action = if project.project_type=="modpack" {
+            crate::modpacks_reales::accion(app,&project.id,Some(&v.id))
+        } else if app.editor == Some(2) {
             crate::diseno_mods::accion(app, &project.id, Some(&v.id), false)
         } else if app.editor == Some(3) && project.project_type == "resourcepack" {
             crate::mods_reales::accion_recurso(app, &project.id, Some(&v.id))
@@ -823,7 +825,9 @@ pub fn vista<'a>(
     let left = column![cabecera, contenido]
         .width(Length::Fill)
         .height(Length::Fill);
-    let compatible: Element<Mensaje> = if let Some(i) = crate::mods_reales::instancia(app) {
+    let compatible: Element<Mensaje> = if project.project_type=="modpack" {
+        text("Se instalará en una nueva instancia con el Minecraft y loader del modpack.").size(13).color(p.text_muted).into()
+    } else if let Some(i) = crate::mods_reales::instancia(app) {
         let resource = matches!(project.project_type.as_str(), "resourcepack" | "shader");
         let ok = project.game_versions.contains(&i.minecraft)
             && (resource || project.loaders.contains(&i.loader));
@@ -865,7 +869,9 @@ pub fn vista<'a>(
             container(Space::new(1, Length::Fill)).style(icaro_ui::estilo::bloque(p.border)),
             container(
                 column![
-                    if app.editor == Some(2) {
+                    if project.project_type=="modpack" {
+                        crate::modpacks_reales::accion(app,&project.id,None)
+                    } else if app.editor == Some(2) {
                         crate::diseno_mods::accion(app, &project.id, None, true)
                     } else if app.editor == Some(3) && project.project_type == "resourcepack" {
                         crate::mods_reales::accion_recurso(app, &project.id, None)

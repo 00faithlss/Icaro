@@ -297,7 +297,10 @@ fn preparar(
         ("clientid", auth::CLIENT_ID),
         ("auth_client_id", auth::CLIENT_ID),
         ("auth_xuid", xuid),
-        ("version_name", instalado.version.as_str()),
+        (
+            "version_name",
+            instalado.perfil_id.as_deref().unwrap_or(&instalado.version),
+        ),
         ("version_type", "release"),
         ("game_directory", ruta_texto(juego)?),
         ("assets_root", ruta_texto(&instalado.assets)?),
@@ -855,6 +858,7 @@ mod tests {
     fn instalado() -> Instalado {
         Instalado {
             version: "1.21.1".into(),
+            perfil_id: None,
             main_class: "net.minecraft.client.main.Main".into(),
             classpath: vec![
                 PathBuf::from("bibliotecas con espacios/lwjgl.jar"),
@@ -890,7 +894,7 @@ mod tests {
         let shared = std::env::temp_dir().join("Icaro datos compartidos");
         let private = shared.join("instances/Primera/minecraft");
         installed.assets = shared.join("assets");
-        installed.natives = shared.join("instances/Primera/.icaro-minecraft/natives");
+        installed.natives = shared.join("instances/Primera/.icaro/natives");
         installed.classpath = vec![
             shared.join("libraries/hash/library.jar"),
             shared.join("meta/minecraft/clients/hash/client.jar"),
@@ -967,6 +971,45 @@ mod tests {
         let values = HashMap::from([("auth_access_token", "CANARY")]);
         let error = expandir("${no_existe}CANARY", &values).unwrap_err();
         assert!(!format!("{error:?}: {error}").contains("CANARY"));
+    }
+
+    #[test]
+    fn fabric_conserva_perfil_memoria_y_argumentos_oficiales() {
+        let mut installed = instalado();
+        installed.perfil_id = Some("fabric-loader-0.16.14-1.21.1".into());
+        installed.main_class = "net.fabricmc.loader.impl.launch.knot.KnotClient".into();
+        installed
+            .game_arguments
+            .extend(["--version".into(), "${version_name}".into()]);
+        installed
+            .jvm_arguments
+            .push("-DFabricMcEmu= net.minecraft.client.main.Main ".into());
+        let config = Config {
+            memoria_min_mb: 1024,
+            memoria_max_mb: 4096,
+            argumentos_jvm: "-Dpersonal=valor".into(),
+            ..Config::default()
+        };
+        let args = preparar(
+            &installed,
+            Path::new("juego"),
+            "Jugador",
+            "uuid",
+            "token",
+            "xuid",
+            &config,
+        )
+        .unwrap();
+        for expected in [
+            "-Xms1024M",
+            "-Xmx4096M",
+            "-Dpersonal=valor",
+            "-DFabricMcEmu= net.minecraft.client.main.Main ",
+            "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            "fabric-loader-0.16.14-1.21.1",
+        ] {
+            assert!(args.iter().any(|a| a == expected), "{expected}");
+        }
     }
 
     #[test]

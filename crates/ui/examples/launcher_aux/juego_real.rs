@@ -102,6 +102,16 @@ impl Drop for Estado {
     }
 }
 impl Estado {
+    fn quitar_registro(&mut self, index: usize) {
+        let Some(id)=self.orden.get(index) else {return;};
+        // Una cancelación puede tener estado Fallo mientras espera el acuse.
+        if self.activa.as_ref()==Some(id) || self.pendientes.iter().any(|s| &s.instancia.id==id) {
+            return;
+        }
+        if self.trabajos.get(id).is_some_and(|t|matches!(t.estado,EstadoDescarga::Completada|EstadoDescarga::Fallo(_))) {
+            self.orden.remove(index);
+        }
+    }
     fn indicador_descarga(&self) -> Option<icaro_ui::shell::DescargasActivas> {
         let t = self.trabajos.get(self.activa.as_ref()?)?;
         if t.preparando || t.cancel.is_cancelled() {
@@ -263,6 +273,7 @@ pub enum Accion {
     Pausar(usize),
     Cancelar(usize),
     Reintentar(usize),
+    QuitarRegistro(usize),
     Detener(String),
     Ventana(String, u64, u32, ResultadoVentana),
     UmbralRetirado(String, u64, Instant),
@@ -431,16 +442,23 @@ pub(crate) fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::p
 }
 pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
     if app.actualizacion.descargando {
-        app.avisar("Espera a que termine de descargarse la actualización de Icaro Launcher.".into());
+        app.avisar(
+            "Espera a que termine de descargarse la actualización de Icaro Launcher.".into(),
+        );
         return Task::none();
     }
     let Some(i) = app.servicios.instancias.registros.get(index).cloned() else {
         return Task::none();
     };
-    if app.configs.get(index).is_some_and(|c|c.java_requiere_seleccion && !c.heredar && c.java.is_none()) {
-        app.avisar("Esta instancia exportada usaba un Java manual. Selecciona una instalación o Automático en su pestaña Java.".into());return Task::none();
+    if app
+        .configs
+        .get(index)
+        .is_some_and(|c| c.java_requiere_seleccion && !c.heredar && c.java.is_none())
+    {
+        app.avisar("Esta instancia exportada usaba un Java manual. Selecciona una instalación o Automático en su pestaña Java.".into());
+        return Task::none();
     }
-    if i.loader != "vanilla" {
+    if !matches!(i.loader.as_str(), "vanilla" | "fabric") {
         app.avisar("La instalación de este loader será la siguiente etapa. Puedes seguir gestionando sus mods.".into());
         return Task::none();
     }
@@ -485,7 +503,11 @@ pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
         return Task::none();
     }
     let (_, java) = config(app, &i.id);
-    let descarga_java = app.configs.get(index).map(|c| crate::java_real::efectiva(c, &app.java_global).1).unwrap_or(app.java_global.descarga);
+    let descarga_java = app
+        .configs
+        .get(index)
+        .map(|c| crate::java_real::efectiva(c, &app.java_global).1)
+        .unwrap_or(app.java_global.descarga);
     let s = &mut app.servicios.juego;
     s.secuencia += 1;
     if !s.orden.contains(&i.id) {
@@ -569,6 +591,9 @@ fn siguiente(app: &mut App) -> Task<Mensaje> {
         iced::stream::channel(32, async move |mut output| {
             let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, u64, u64)>(32);
             let operation = async {
+                icaro_core::modpacks::instalar(&store,&solicitud.instancia,cancel.clone(),|p| {
+                    let _=tx.try_send((p.etapa.to_string(),p.completados,p.total));
+                }).await?;
                 let game = minecraft::instalar(&store, &solicitud.instancia, cancel.clone(), |p| {
                     let _ = tx.try_send((p.etapa.to_string(), p.completados, p.total));
                 })
@@ -1026,6 +1051,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                         .preparada
                         .insert(id.clone(), p.minecraft.clone());
                     listo(app, &id);
+                    crate::mods_reales::recargar(app,&id);
                     if jugar {
                         lanzar(app, id.clone(), p)
                     } else {
@@ -1174,6 +1200,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 listo(app, &id);
             }
         }
+        Accion::QuitarRegistro(n) => app.servicios.juego.quitar_registro(n),
         Accion::Reintentar(n) => {
             let Some(id) = app.servicios.juego.orden.get(n).cloned() else {
                 return Task::none();
@@ -1549,10 +1576,18 @@ pub fn estado_boton(app: &App, index: usize) -> (EstadoJugar, String, Option<Men
             _ => {}
         }
     }
-    let listo = crate::instancias().get(index).is_some_and(|d|
-        matches!(d.estado, EstadoInstancia::Lista | EstadoInstancia::Desactualizada));
+    let listo = crate::instancias().get(index).is_some_and(|d| {
+        matches!(
+            d.estado,
+            EstadoInstancia::Lista | EstadoInstancia::Desactualizada
+        )
+    });
     (
-        if listo { EstadoJugar::Listo } else { EstadoJugar::PorInstalar },
+        if listo {
+            EstadoJugar::Listo
+        } else {
+            EstadoJugar::PorInstalar
+        },
         String::new(),
         Some(Mensaje::Jugar(index)),
     )
@@ -1566,13 +1601,7 @@ pub fn boton(app: &App, index: usize) -> Element<'_, Mensaje> {
             .saturating_duration_since(app.codigo_inicio)
             .as_millis()
     };
-    componentes::boton_jugar_estado_animado(
-        app.paleta(),
-        state,
-        Some(&meta),
-        message,
-        ms as f32,
-    )
+    componentes::boton_jugar_estado_animado(app.paleta(), state, Some(&meta), message, ms as f32)
 }
 pub fn indicador(app: &App) -> Option<icaro_ui::shell::DescargasActivas> {
     app.servicios.juego.indicador_descarga()
@@ -1587,19 +1616,44 @@ pub fn descargas(app: &App) -> Element<'_, Mensaje> {
         .filter_map(|id| app.servicios.juego.trabajos.get(id))
         .map(|t| Descarga {
             nombre: t.nombre.clone(),
-            destino: "Minecraft Vanilla".into(),
+            destino: app.servicios.instancias.registros.iter()
+                .find(|i|i.nombre==t.nombre)
+                .map(|i|format!("Minecraft {}",crate::ficha::loader(&i.loader)))
+                .unwrap_or_else(||"Minecraft".into()),
             estado: t.estado.clone(),
             detalle: t.etapa.clone(),
         })
         .collect();
-    let indeterminadas: Vec<usize> = app.servicios.juego.orden.iter()
+    let indeterminadas: Vec<usize> = app
+        .servicios
+        .juego
+        .orden
+        .iter()
         .filter_map(|id| app.servicios.juego.trabajos.get(id))
-        .enumerate().filter_map(|(i, t)| t.partes.is_none().then_some(i)).collect();
-    let contables: Vec<(usize, usize, usize)> = app.servicios.juego.orden.iter()
-        .filter_map(|id| app.servicios.juego.trabajos.get(id)).enumerate()
-        .filter_map(|(i, t)| if t.bytes { None } else {
-            t.partes.map(|(hechos, total)| (i, total.min(usize::MAX as u64) as usize, hechos.min(usize::MAX as u64) as usize))
-        }).collect();
+        .enumerate()
+        .filter_map(|(i, t)| t.partes.is_none().then_some(i))
+        .collect();
+    let contables: Vec<(usize, usize, usize)> = app
+        .servicios
+        .juego
+        .orden
+        .iter()
+        .filter_map(|id| app.servicios.juego.trabajos.get(id))
+        .enumerate()
+        .filter_map(|(i, t)| {
+            if t.bytes {
+                None
+            } else {
+                t.partes.map(|(hechos, total)| {
+                    (
+                        i,
+                        total.min(usize::MAX as u64) as usize,
+                        hechos.min(usize::MAX as u64) as usize,
+                    )
+                })
+            }
+        })
+        .collect();
     let resumen = format!(
         "{} activa · {} en cola",
         usize::from(app.servicios.juego.activa.is_some()),
@@ -1612,8 +1666,12 @@ pub fn descargas(app: &App) -> Element<'_, Mensaje> {
             pausar: |n| m(Accion::Pausar(n)),
             cancelar: |n| m(Accion::Cancelar(n)),
             reintentar: |n| m(Accion::Reintentar(n)),
+            quitar: |n| m(Accion::QuitarRegistro(n)),
             seguir: |n| m(Accion::Reintentar(n))
-        }, app.reducir, &indeterminadas, &contables
+        },
+        app.reducir,
+        &indeterminadas,
+        &contables
     )]
     .spacing(espacio::S8)
     .padding(Padding::from([espacio::S8, espacio::S12]));
@@ -1951,7 +2009,9 @@ pub fn instalaciones_java(app: &App) -> Vec<icaro_ui::editor::InstalacionJava> {
     let captura = std::env::var_os("ICARO_CAPTURA_DISENO").is_some();
     let mut detectadas: BTreeMap<std::path::PathBuf, (java::Java, Vec<String>)> = BTreeMap::new();
     for runtime in &app.java_detectadas {
-        detectadas.entry(runtime.executable.clone()).or_insert((runtime.clone(), vec![]));
+        detectadas
+            .entry(runtime.executable.clone())
+            .or_insert((runtime.clone(), vec![]));
     }
     for (id, runtime) in &app.servicios.juego.java {
         let (_, usado) = detectadas
@@ -1967,12 +2027,7 @@ pub fn instalaciones_java(app: &App) -> Vec<icaro_ui::editor::InstalacionJava> {
         .into_values()
         .map(|(runtime, usado)| icaro_ui::editor::InstalacionJava {
             version: format!("{} · {}", runtime.version, runtime.arquitectura),
-            proveedor: if runtime.managed {
-                "Mojang"
-            } else {
-                "Sistema"
-            }
-            .into(),
+            proveedor: if runtime.managed { "Mojang" } else { "Sistema" }.into(),
             gestionada: runtime.managed,
             ruta: runtime.executable.to_string_lossy().into_owned(),
             usado_por: if usado.is_empty() {
@@ -2374,6 +2429,26 @@ mod tests {
     }
 
     #[test]
+    fn quitar_registro_conserva_datos_y_espera_el_acuse_de_cancelacion() {
+        let mut state=estado();
+        state.orden=vec!["a".into(),"completa".into(),"pausada".into()];
+        state.trabajos.insert("completa".into(),trabajo(EstadoDescarga::Completada));
+        state.trabajos.insert("pausada".into(),trabajo(EstadoDescarga::Pausada(0.3)));
+        state.errores.insert("completa".into(),"registro conservado".into());
+        state.quitar_registro(0);assert_eq!(state.orden.len(),3);
+        state.quitar_registro(2);assert_eq!(state.orden.len(),3);
+        state.quitar_registro(1);
+        assert_eq!(state.orden,vec!["a","pausada"]);
+        assert!(state.trabajos.contains_key("completa"));
+        assert_eq!(state.errores["completa"],"registro conservado");
+        state.suspender("a",false);
+        state.quitar_registro(0);assert_eq!(state.orden.len(),2);
+        state.activa=None;
+        state.quitar_registro(0);assert_eq!(state.orden,vec!["pausada"]);
+        state.quitar_registro(999);assert_eq!(state.orden.len(),1);
+    }
+
+    #[test]
     fn pausar_reanudar_antes_del_ack_y_cancelar_una_pausa() {
         let mut estado = estado();
         assert!(!estado.suspender("a", true));
@@ -2476,10 +2551,17 @@ mod tests {
         assert!(estado.trabajos["a"].preparando);
         estado.progreso("a", 7, "Descargando Java".into(), 1, 100);
         for n in 1..64 {
-            for etapa in ["Verificando archivos de Minecraft", "Descargando librerías", "Preparando componentes nativos"] {
+            for etapa in [
+                "Verificando archivos de Minecraft",
+                "Descargando librerías",
+                "Preparando componentes nativos",
+            ] {
                 assert!(estado.progreso("a", 7, etapa.into(), n, 100).is_some());
                 assert!(!estado.trabajos["a"].preparando, "{etapa}");
-                assert!(matches!(estado.trabajos["a"].estado, EstadoDescarga::Activa(_)));
+                assert!(matches!(
+                    estado.trabajos["a"].estado,
+                    EstadoDescarga::Activa(_)
+                ));
             }
         }
     }

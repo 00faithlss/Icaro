@@ -116,14 +116,20 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
             ..Default::default()
         }));
     }
-    let instrucciones = column![text(format!("¿Estás seguro de que quieres eliminar {}?", d.nombre)).font(fuentes::TITULO).size(28).color(p.text),
+    let detalles = column![text(format!("¿Estás seguro de que quieres eliminar {}?", d.nombre)).font(fuentes::TITULO).size(28).color(p.text),
         text("Se quitarán de esta instancia tus mods, mundos, capturas y progreso. Exporta una copia antes de continuar. Puedes recuperarla desde la papelera mientras conserve sus archivos.")
             .size(texto::BODY.0).color(p.text_muted),
         text("Mantén presionado para eliminar. Si sueltas antes, se cancela.").size(texto::BODY_SM.0).color(p.text_muted),
         column![componentes::etiqueta(p, "Progreso"), bloques].spacing(8),
         row![componentes::insignia_contorno(p, "Supr"), text("Mantener con la tarjeta enfocada").size(texto::BODY_SM.0).color(p.text_muted)]
-            .spacing(12).align_y(Alignment::Center)
-    ].spacing(20).width(Length::Fill);
+            .spacing(12).align_y(Alignment::Center),
+    ].spacing(20);
+    let cancelar=componentes::boton(p,"Cancelar",componentes::Variante::Secundario,
+        (!app.servicios.instancias.operando && !app.picar.as_ref().is_some_and(|s|s.rota.is_some())).then_some(Mensaje::CerrarDialogo));
+    let instrucciones=column![
+        container(detalles).height(instancias::ALTO_TARJETA-44.),
+        container(cancelar).height(44).align_y(Alignment::Center)
+    ].width(Length::Fill).height(instancias::ALTO_TARJETA);
     container(row![tarjeta, instrucciones].spacing(48)).width((app.ventana.width-64.).clamp(700.,980.)).height(Length::Shrink)
         .padding(Padding::from([espacio::S8, espacio::S8])).style(move |_| container::Style {
             background: Some(p.bg.into()),

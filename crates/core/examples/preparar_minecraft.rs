@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find(|i| std::ffi::OsStr::new(&i.id) == id)
         .ok_or("Instancia no encontrada")?;
     let last = Mutex::new(String::new());
+    icaro_core::modpacks::instalar(&store,&instance,CancellationToken::new(),|p|println!("{} ({}/{})",p.etapa,p.completados,p.total)).await?;
     let installed = minecraft::instalar(&store, &instance, CancellationToken::new(), |p| {
         let mut last = last.lock().unwrap();
         if *last != p.etapa {

@@ -23,7 +23,7 @@ pub enum EstadoDescarga {
     EnCola(usize),
     /// Motivo del fallo.
     Fallo(String),
-    /// Terminó: la fila se queda 5 s y pasa al historial.
+    /// Terminó; permite quitar la fila conservando los archivos descargados.
     Completada,
     /// Cancelar borraría lo ya descargado (más de 100 MB): pide confirmación.
     /// Lleva el tamaño que se perdería, por ejemplo `412,8 MB`.
@@ -54,6 +54,8 @@ pub struct AccionesCola<M> {
     pub pausar: fn(usize) -> M,
     pub cancelar: fn(usize) -> M,
     pub reintentar: fn(usize) -> M,
+    /// Quita una fila terminada de la vista, conservando sus archivos.
+    pub quitar: fn(usize) -> M,
     /// Desiste de cancelar y sigue descargando.
     pub seguir: fn(usize) -> M,
 }
@@ -164,14 +166,13 @@ fn fila_descarga<'a, M: Clone + 'a>(
             mono_sm(p, format!("En cola · {n} · {}", d.detalle)),
         ),
         EstadoDescarga::Fallo(motivo) => (
-            boton_con_icono(
-                p,
-                Icono::Actualizar,
-                "Reintentar",
-                Variante::Secundario,
-                Some((a.reintentar)(i)),
-                true,
-            ),
+            row![
+                boton_con_icono(
+                    p, Icono::Actualizar, "Reintentar", Variante::Secundario,
+                    Some((a.reintentar)(i)), true,
+                ),
+                boton_icono_con_ayuda(p, Icono::Cerrar, "Quitar de Descargas", (a.quitar)(i)),
+            ].spacing(espacio::S1).into(),
             row![
                 icono(Icono::Alerta, Tam::Sm, p.error),
                 text(motivo.clone()).size(texto::BODY_SM.0).color(p.error),
@@ -198,8 +199,10 @@ fn fila_descarga<'a, M: Clone + 'a>(
             .into(),
         ),
         EstadoDescarga::Completada => (
-            // Mismo ancho que Pausar y Cancelar, para que las barras alineen.
-            Space::with_width(60).into(),
+            row![
+                Space::with_width(28),
+                boton_icono_con_ayuda(p, Icono::Cerrar, "Quitar de Descargas", (a.quitar)(i)),
+            ].spacing(espacio::S1).into(),
             column![
                 barra(p, 1.0, p.text),
                 mono_sm(p, format!("Completada · {}", d.detalle)),

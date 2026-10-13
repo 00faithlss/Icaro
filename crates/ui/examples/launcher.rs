@@ -65,6 +65,8 @@ mod componentes_nuevos_qa;
 mod actualizacion_real;
 #[path = "launcher_aux/instancias_reales.rs"]
 mod instancias_reales;
+#[path = "launcher_aux/modpacks_reales.rs"]
+mod modpacks_reales;
 #[path = "launcher_aux/mods_reales.rs"]
 mod mods_reales;
 #[path = "launcher_aux/diseno_mods.rs"]
@@ -257,6 +259,7 @@ enum Mensaje {
     CapturarDiseno,
     DisenoCapturado(window::Screenshot),
     DisenoMods(diseno_mods::Accion),
+    Modpacks(modpacks_reales::Accion),
     ModsReales(mods_reales::Accion),
     PacksReales(mods_reales::packs::Accion),
     Instancias(instancias_reales::Accion),
@@ -523,6 +526,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         return Task::none();
     }
     match m {
+        Mensaje::Modpacks(a) => return modpacks_reales::actualizar(app,a),
         Mensaje::Almacenamiento(a) => return almacenamiento_real::actualizar(app,a),
         Mensaje::Java(a) => return java_real::actualizar(app, a),
         Mensaje::Actualizacion(a) => return actualizacion_real::actualizar(app, a),
@@ -1134,6 +1138,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Eliminar => {app.dialogo=false;}
         Mensaje::Escape => {
+            if app.servicios.modpacks.abierto{return modpacks_reales::actualizar(app,modpacks_reales::Accion::Cerrar);}
             if app.exportar_lista.dialogo.is_some(){return exportar_lista_mods::actualizar(app,exportar_lista_mods::Accion::Cerrar);}
             if app.iconos.dialogo.is_some(){return icono_instancia::actualizar(app,icono_instancia::Accion::Cerrar);}
             if app.picar_objetivo.is_some(){return actualizar_estado(app,Mensaje::CerrarDialogo);}
@@ -3104,6 +3109,7 @@ fn pantalla_descargas(app: &App) -> Element<'_, Mensaje> {
         pausar: |i| Mensaje::Red(red::Mensaje::Pausar(i)),
         cancelar: |i| Mensaje::Red(red::Mensaje::Cancelar(i)),
         reintentar: |i| Mensaje::Red(red::Mensaje::Reintentar(i)),
+        quitar: |i| Mensaje::Red(red::Mensaje::QuitarRegistro(i)),
         seguir: |i| Mensaje::Red(red::Mensaje::Seguir(i)),
     };
     let cola: Element<'_, Mensaje> = if app.red.hay_cola() {
@@ -3279,7 +3285,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         elementos_grupos.push(ElementoMenu::Separador);
         elementos_grupos.push(ElementoMenu::Opcion { icono: Icono::Mas, texto: "Nuevo grupo".into(), atajo: None, peligro: false, mensaje: Mensaje::NuevoGrupoParaInstancia });
         elementos_grupos.push(ElementoMenu::Opcion { icono: Icono::ChevronDerecha, texto: "Volver".into(), atajo: None, peligro: false, mensaje: Mensaje::VerGrupos(false) });
-        let elementos = if app.menu_grupos { elementos_grupos } else { vec![
+        let mut elementos = if app.menu_grupos { elementos_grupos } else { vec![
                 ElementoMenu::Opcion { icono: Icono::Jugar, texto: "Jugar".into(), atajo: Some("Enter"), peligro: false, mensaje: Mensaje::Jugar(app.menu.unwrap_or(0)) },
                 ElementoMenu::Opcion { icono: Icono::Carpeta, texto: "Abrir carpeta".into(), atajo: Some("O"), peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::AbrirCarpetaInstancia(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Editar, texto: "Editar".into(), atajo: Some("E"), peligro: false, mensaje: Mensaje::Editar },
@@ -3289,6 +3295,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                 ElementoMenu::Separador,
                 ElementoMenu::Opcion { icono: Icono::Copiar, texto: "Duplicar".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::Duplicar(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Actualizar, texto: "Cambiar versión".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::CambiarVersion(app.menu.unwrap_or(0))) },
+                ElementoMenu::Opcion { icono: Icono::Actualizar, texto: "Cambiar versión del loader".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::CambiarVersionLoader(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Subir, texto: "Exportar instancia".into(), atajo: None, peligro: false, mensaje: Mensaje::Pant(pantallas::Accion::Exportar(app.menu.unwrap_or(0))) },
                 ElementoMenu::Opcion { icono: Icono::Externo, texto: "Crear acceso directo".into(), atajo: None, peligro: false, mensaje: Mensaje::Menu(None) },
                 ElementoMenu::Separador,
@@ -3296,6 +3303,10 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             ] };
         let posicion = posicion_menu(app.menu_en, app.ventana, tamano_menu(&elementos),
             if app.reducir { 1.0 } else { progreso(app.anim_menu, app.ahora, MS_MENU) });
+        if !app.servicios.demo && app.servicios.instancias.registros.get(app.menu.unwrap_or(0)).is_some_and(|i|i.loader=="vanilla") {
+            elementos.retain(|e|!matches!(e,ElementoMenu::Opcion{mensaje:Mensaje::Pant(pantallas::Accion::CambiarVersionLoader(_)),..}));
+        }
+
         let menu = menu_contextual(p, elementos);
         Some(iced::widget::opaque(iced::widget::mouse_area(
                 container(menu)
@@ -3327,6 +3338,9 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
     if let Some(s) = &app.asistente {
         ventana = con_velo_losa(p, ventana, pantallas::asistente(app, s), Mensaje::Pant(pantallas::Accion::AsistenteCancelar), desfase_losa(app));
     }
+    if app.servicios.modpacks.abierto {
+        ventana=con_velo_losa(p,ventana,modpacks_reales::vista(app),Mensaje::Modpacks(modpacks_reales::Accion::Cerrar),desfase_losa(app));
+    }
     if let Some(i) = app.cambiar {
         ventana = con_velo_losa(p, ventana, pantallas::cambiar_version(app, i), Mensaje::Pant(pantallas::Accion::CambiarCancelar), desfase_losa(app));
     }
@@ -3347,7 +3361,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         };
         let ocupado = app.servicios.instancias.operando;
         let cuerpo = text(if app.servicios.demo { "Se borrarán la instancia, sus 214 mods y 3 mundos (2,4 GB). Esta acción no se puede deshacer." } else {
-            "Hay mundos sin una copia de seguridad vigente. La instancia se moverá a la papelera del sistema y podrás recuperarla con Deshacer. Confirma para continuar con Picar."
+            "Hay mundos sin una copia de seguridad vigente. La instancia se moverá a la papelera del sistema y podrás recuperarla con Deshacer. Confirma para continuar con la eliminación."
         })
             .size(texto::BODY.0)
             .color(p.text_muted)
@@ -3361,7 +3375,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
                 cuerpo,
                 vec![
                     componentes::boton(p, "Cancelar", Variante::Secundario, (!ocupado).then_some(Mensaje::CerrarDialogo)),
-                    componentes::boton(p, &if ocupado { "Eliminando…".to_owned() } else { "Continuar con Picar".to_owned() }, Variante::Peligro, (!ocupado).then_some(Mensaje::Eliminar)),
+                    componentes::boton(p, &if ocupado { "Eliminando…".to_owned() } else { "Continuar con la eliminación".to_owned() }, Variante::Peligro, (!ocupado).then_some(Mensaje::Eliminar)),
                 ],
                 Some(Lamina::FaetonMano),
                 620.0,

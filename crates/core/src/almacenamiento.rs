@@ -201,6 +201,9 @@ pub fn registrar(root: &Path, message: &str) -> Result<(), String> {
 pub fn migrar_configuraciones(root: &Path) -> Result<(), String> {
     let store = crate::instancias::Almacen::nuevo(root.join("instances"));
     let instances = store.cargar().map_err(|e| e.to_string())?.instancias;
+    for instance in &instances {
+        crate::minecraft::migrar_directorio(&store, instance).map_err(|e| e.to_string())?;
+    }
     let path = root.join("estado.json");
     if !path.exists() {
         return Ok(());

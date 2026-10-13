@@ -26,7 +26,7 @@ Las referencias son `icaro-design-system.rar` e `icaro-componentes-nuevos.zip` (
 
 | Carpeta | Contenido |
 | --- | --- |
-| `crates/core` | Autenticación, instancias, Vanilla/Java, lanzamiento, mods/paquetes, cambio de versión, exportación y actualización del launcher |
+| `crates/core` | Autenticación, instancias, Vanilla/Fabric/Java, MRPACK de Modrinth, lanzamiento, mods/paquetes, cambio de versión, exportación y actualización del launcher |
 | `crates/cli` | Herramienta de línea de comandos |
 | `crates/ui` | Sistema de diseño en iced: tema, tipografía, iconos y componentes |
 
@@ -45,13 +45,13 @@ El ejemplo `launcher` acepta variables de entorno para abrir una pantalla en un 
 | `ICARO_BUSCAR` | Texto de búsqueda de la tienda de mods |
 
 En `ICARO_DEMO=1`, las capturas son recortes de grabados y sus acciones se simulan. En modo real se leen las PNG de las instancias; copiar y abrir carpeta funcionan en Windows y el visor conserva los controles de ventana.
-El login y el catálogo se prueban según la guía de [inicio de sesión y catálogo](login-y-catalogo.md). La instalación y ejecución de Vanilla se prueban según [Vanilla y Java](vanilla-y-java.md). Las variables de estados ficticios de cuenta requieren el modo de demostración.
+El login y el catálogo se prueban según la guía de [inicio de sesión y catálogo](login-y-catalogo.md). La instalación y ejecución de Vanilla/Fabric y la instalación de modpacks se prueban según [Vanilla y Java](vanilla-y-java.md). Las variables de estados ficticios de cuenta requieren el modo de demostración.
 
 ## Capturas aisladas del diseño
 
 El ejemplo puede capturar los widgets reales con datos de prueba y cerrar esa ventana, sin consultar Microsoft o Modrinth ni guardar cambios en las cuentas e instancias del usuario. `ICARO_VISTA_DISENO` admite `asistente`, `exportar`, `mods`, `seleccion`, `tienda`, `ficha`, `pagina`, `archivos`, `archivos-renombrar`, `juego-descargas`, `juego-consola`, `juego-consola-vacia`, `juego-fallo`, `juego-editor`, `juego-instalando`, `juego-ejecutando` y las fases `juego-umbral-entrada`, `juego-umbral-arco`, `juego-umbral-registro`, `juego-umbral-retirada`, `juego-umbral-fallo`. `juego-capturas` y `juego-capturas-visor` leen una PNG de prueba indicada en `ICARO_QA_CAPTURA`, sin modificarla ni refrescarla desde el inventario real. El explorador usa una carpeta de muestra dentro del directorio temporal. Las escenas del juego no ejecutan Java ni usan una cuenta.
 
-Los selectores separados se revisan con `asistente-version` y `asistente-loader`; el componente nuevo de cambio de versión con `cambiar-version-seleccion`, `cambiar-version-carga`, `cambiar-version-detalle` y `cambiar-version-seleccion-angosto` (940×720). `cambiar-version` es la confirmación de riesgo. `pagina-galeria`, `pagina-descripcion`, `pagina-dependencias` y `pagina-creadores` revisan la página nueva y su InfoProyecto; `pagina-creadores-minima` omite datos opcionales del fixture para mostrar los avatares en el primer cuadro. Los dos fixtures de creadores leen el JSON y las imágenes públicas descargadas previamente en `ICARO_QA_CREATORES`.
+Las escenas `pagina-modpack` y `pagina-modpack-detalles` revisan los chips de compatibilidad y las licencias largas, y `picar` muestra la confirmación de eliminación con Cancelar alineado al pie de la tarjeta. Los selectores separados se revisan con `asistente-version` y `asistente-loader`; el componente nuevo de cambio de versión con `cambiar-version-seleccion`, `cambiar-version-carga`, `cambiar-version-detalle` y `cambiar-version-seleccion-angosto` (940×720). `cambiar-version` es la confirmación de riesgo. `pagina-galeria`, `pagina-descripcion`, `pagina-dependencias` y `pagina-creadores` revisan la página nueva y su InfoProyecto; `pagina-creadores-minima` omite datos opcionales del fixture para mostrar los avatares en el primer cuadro. Los dos fixtures de creadores leen el JSON y las imágenes públicas descargadas previamente en `ICARO_QA_CREATORES`.
 
 Para resourcepacks están disponibles `recursos-lista`, `recursos-seleccion`, `recursos-ficha-compatible`, `recursos-ficha-otra`, `recursos-ficha-vanilla` y `recursos-confirmacion-otra`. Shaders usa `shaders-lista`, `shaders-seleccion`, `shaders-actualizacion`, `shaders-confirmacion` y `shaders-ficha-compatible`. `actualizacion` y `actualizacion-al-cerrar` muestran la composición de actualización con datos de prueba, sin descargar ni sustituir ningún ejecutable. Estas versiones y notas ficticias se usan exclusivamente en las capturas aisladas.
 
@@ -90,7 +90,7 @@ Validación: 110 pruebas del núcleo, 55 de la biblioteca de interfaz y 35 del l
 
 La validación incluye perfiles explícitos con varias versiones, runtime administrado sin consultar candidatos locales, ruta manual compatible, búsqueda acotada de runtimes oficiales, argumentos con espacios, límites de memoria y fallo de JVM. Se ejecutaron también una prueba con el Java 25 ya guardado en Ícaro y la consulta real del perfil Prism de Minecraft 1.17.1, sin descargar nuevos runtimes ni usar cuentas.
 
-La integración de requisitos de loaders depende de sus instaladores, que siguen pendientes. Faltan el recorrido nativo en Arch y el lanzamiento completo del juego con los nuevos modos.
+Fabric integra el mínimo de Java de su perfil oficial. Los requisitos de Quilt, Forge y NeoForge dependen de sus instaladores pendientes. Faltan el recorrido nativo en Arch y el lanzamiento completo del juego con los nuevos modos.
 
 ## Almacenamiento compartido de Vanilla (13-10-2026)
 
@@ -98,7 +98,7 @@ El instalador usa assets compartidos, bibliotecas por SHA-1/ruta Maven y metadat
 
 Validación: 114 pruebas del núcleo aprobadas (7 omitidas) y 35 del launcher aprobadas (2 omitidas; ejecución secuencial). Los casos nuevos cubren dos instancias sin red, reparación de corrupción del mismo tamaño, cambio de nombre, eliminación de una instancia sin perder el almacén común, cancelación de migración conservando el perfil anterior, espera cancelable y argumentos de lanzamiento con rutas compartidas/privadas.
 
-La instancia local de prueba Vanilla 26.3 se migró y volvió a preparar: 5.215 archivos verificados y 65 entradas de classpath; la segunda preparación no anunció descargas. Se comprobó esquema 2 y ausencia de las carpetas antiguas `assets`, `libraries` y `versions` dentro de la instancia. La validación del menú del juego con este nuevo almacenamiento y la ejecución en Linux siguen pendientes.
+La instancia local de prueba Vanilla 26.3 se migró y volvió a preparar: 5.215 archivos verificados y 65 entradas de classpath; la segunda preparación no anunció descargas. Se comprobó esquema 2 y ausencia de las carpetas antiguas `assets`, `libraries` y `versions` dentro de la instancia. El usuario confirmó el funcionamiento de Vanilla con este almacenamiento; la ejecución en Linux sigue pendiente.
 
 Para preparar una instancia existente sin abrir Minecraft ni acceder a cuentas:
 
@@ -124,9 +124,15 @@ cargo run -j 1 -p icaro-core --example reorganizar_datos -- "$env:APPDATA\Icaro"
 
 Este comando traslada papeleras antiguas, migra ajustes y recupera operaciones interrumpidas. La interfaz ofrece las mismas acciones de mantenimiento en Almacenamiento. No necesita iniciar sesión ni abrir el juego.
 
-Validación final: 117 pruebas del núcleo, 55 de la biblioteca de interfaz y 35 del launcher aprobadas, más la prueba nativa explícita de papelera: 208 pruebas únicas aprobadas. El núcleo conserva 8 pruebas omitidas por defecto y el launcher 2. Las comprobaciones específicas de exportación portable y retirada de packs también pasaron tras sus últimos ajustes. Compilación del launcher y `git diff --check` correctos. Se revisó Almacenamiento en Tinta y Piedra y Java global en Piedra mediante capturas de fixtures. La llegada al menú con esta estructura y Linux siguen pendientes.
+Validación final: 117 pruebas del núcleo, 55 de la biblioteca de interfaz y 35 del launcher aprobadas, más la prueba nativa explícita de papelera: 208 pruebas únicas aprobadas. El núcleo conserva 8 pruebas omitidas por defecto y el launcher 2. Las comprobaciones específicas de exportación portable y retirada de packs también pasaron tras sus últimos ajustes. Compilación del launcher y `git diff --check` correctos. Se revisó Almacenamiento en Tinta y Piedra y Java global en Piedra mediante capturas de fixtures. El usuario confirmó el funcionamiento con esta estructura en Windows; Linux sigue pendiente.
 
 
 ## Licencia
 
 GPL-3.0-only. El texto completo está en [LICENSE](../LICENSE).
+
+## Validación de Fabric, MRPACK y ajustes de interfaz
+
+Pasaron 127 pruebas del núcleo, 55 de componentes y 38 del launcher, sin fallos. Quedaron omitidas por defecto 12 pruebas del núcleo y dos del launcher que necesitan servicios o fixtures externos. La instalación real de Fabulously Optimized 14.1.1 con Minecraft 26.2/Fabric 0.19.5 y la reutilización sin descargas se comprobaron por separado; esa prueba no inicia el juego ni usa una cuenta. El usuario confirmó Fabric 26.3 con un mod real en Windows.
+
+Se inspeccionaron capturas de modpacks y eliminación en Tinta/Piedra, incluidos los chips de versiones, licencia larga y Cancelar alineado al pie de la tarjeta. El ejecutable compiló y git diff --check pasó. Los comandos reproducibles de instalación están en [Vanilla, Fabric y Java](vanilla-y-java.md).

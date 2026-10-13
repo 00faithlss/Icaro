@@ -9,7 +9,10 @@
 | [Comparación con el system design](revision-system-design.md) | Diferencias entre las pantallas reales y los componentes originales, para evaluación |
 | [Integración real](integracion-real.md) | Estado del núcleo, autenticación, seguridad y tiendas de mods |
 | [Inicio de sesión y catálogo](login-y-catalogo.md) | Probar Microsoft, almacenamiento de sesión y catálogo público de Modrinth |
-| [Vanilla y Java](vanilla-y-java.md) | Instalación oficial, ejecución, consola y capturas reales |
+| [Vanilla, Fabric, Java y modpacks](vanilla-y-java.md) | Perfiles oficiales, Java, instalación MRPACK, ejecución y validación |
+| [Instancias locales](instancias-locales.md) | Metadatos, migración, cambios de versión, eliminación y exportación |
+| [Organización de datos](organizacion-datos.md) | Almacén compartido, configuración por instancia, runtimes y mantenimiento |
+| [Implementación pendiente](pendientes-implementacion.md) | Límites actuales y criterios para completar las funciones restantes |
 | [Actualizaciones del launcher](actualizaciones-launcher.md) | Pantalla, descarga verificada y contrato de publicación de releases portables |
 | [Cuenta y estudio de skin](cuenta.md) | Pantallas de cuenta, estados de sesión y cómo abrirlos en la maqueta |
 | [Movimiento](movimiento.md) | Animaciones del launcher, visor y opción de reducir movimiento |

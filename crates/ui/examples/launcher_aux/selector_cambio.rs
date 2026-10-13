@@ -395,61 +395,7 @@ fn resumen<'a>(app: &'a App, record: &icaro_core::instancias::Instancia) -> Elem
         || crate::ficha::loader(&record.loader),
         |version| format!("{} {}", crate::ficha::loader(&record.loader), version),
     );
-    let destinos: Vec<String> = app
-        .servicios
-        .instancias
-        .loaders
-        .get(&c.destino)
-        .map(|l| {
-            super::LOADERS
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| *idx == 0 || !l.versiones[*idx].is_empty())
-                .map(|(index, (name, _, _))| {
-                    l.versiones[index]
-                        .first()
-                        .map_or_else(|| name.to_string(), |version| format!("{name} {version}"))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let selector: Element<'a, Mensaje> = if destinos.len() > 1 {
-        let elegida = destinos
-            .iter()
-            .find(|opcion| {
-                opcion
-                    .split_whitespace()
-                    .next()
-                    .is_some_and(|nombre| nombre.eq_ignore_ascii_case(&c.loader_destino))
-            })
-            .cloned();
-        iced::widget::pick_list(destinos, elegida, |s: String| {
-            m(Accion::CambiarLoader(
-                s.split_whitespace()
-                    .next()
-                    .unwrap_or("vanilla")
-                    .to_lowercase(),
-            ))
-        })
-        .font(fuentes::MONO)
-        .text_size(11)
-        .padding([4., 8.])
-        .width(Length::Fill)
-        .style(icaro_ui::estilo::selector(p))
-        .menu_style(icaro_ui::estilo::menu_selector(p))
-        .into()
-    } else {
-        mono(
-            if c.destino.is_empty() {
-                "—".to_owned()
-            } else {
-                crate::ficha::loader(&c.loader_destino).to_owned()
-            },
-            11.,
-            p.text_muted,
-        )
-        .into()
-    };
+    let selector:Element<'a,Mensaje> = Space::new(0,0).into();
     let antes_despues = container(
         row![
             column![
@@ -631,6 +577,37 @@ fn resumen<'a>(app: &'a App, record: &icaro_core::instancias::Instancia) -> Elem
         .width(Length::FillPortion(2))
         .height(Length::Fill)
         .into()
+}
+
+pub(super) fn loader(app:&App)->Element<'_,Mensaje> {
+    let p=app.paleta();let c=app.servicios.instancias.cambio.as_ref().unwrap();
+    let i=app.servicios.instancias.registros.iter().find(|i|i.id==c.instancia).unwrap();
+    let index=super::LOADERS.iter().position(|(name,_,_)|name.eq_ignore_ascii_case(&i.loader)).unwrap_or(0);
+    let catalog=app.servicios.instancias.loaders.get(&i.minecraft);
+    let versions=catalog.map(|l|l.versiones[index].clone()).unwrap_or_default();
+    let enabled=!app.servicios.instancias.operando && c.mods.is_some() && c.loader_version_destino.as_ref().is_some_and(|v|versions.contains(v)&&Some(v)!=c.loader_actual_version.as_ref());
+    let selector=iced::widget::pick_list(versions,c.loader_version_destino.clone(),|v|m(Accion::CambiarLoaderVersion(v)))
+        .placeholder("Selecciona una versión").font(fuentes::MONO).text_size(13).padding([8.,12.])
+        .style(icaro_ui::estilo::selector(p)).menu_style(icaro_ui::estilo::menu_selector(p));
+    let mut body=column![
+        text("Cambiar versión del loader").font(fuentes::TITULO).size(26).color(p.text),
+        text(format!("{} · Minecraft {} · {}",i.nombre,i.minecraft,crate::ficha::loader(&i.loader))).size(14).color(p.text_muted),
+        container(row![
+            column![componentes::etiqueta(p,"Ahora"),mono(c.loader_actual_version.as_deref().unwrap_or(if c.mods.is_some(){"Sin versión guardada"}else{"Leyendo…"}),18.,p.text)].width(Length::Fill).spacing(8),
+            icono(Icono::Adelante,Tam::Sm,p.text_muted),
+            column![componentes::etiqueta(p,"Después"),selector].width(Length::Fill).spacing(8)
+        ].spacing(24)).padding(20).style(icaro_ui::estilo::marco(p)),
+        text("Se conservarán la versión de Minecraft, la familia del loader, los mods y los mundos. Los mods pueden exigir una versión mínima del loader.").size(13).color(p.text_muted),
+        iced::widget::checkbox("Copia de seguridad de los mundos y archivos",c.respaldo)
+            .on_toggle(|b|m(Accion::CambiarRespaldo(b))).icon(componentes::icono_casilla()).style(icaro_ui::estilo::casilla(p)),
+    ].spacing(20);
+    if let Some(error)=&c.error {body=body.push(text(error.clone()).color(p.error));}
+    if let Some(error)=catalog.and_then(|l|l.errores[index].as_ref()){body=body.push(text(error.clone()).color(p.error));}
+    body=body.push(row![
+        componentes::boton(p,"Cancelar",Variante::Secundario,(!app.servicios.instancias.operando).then(||m(Accion::CambiarCancelar))),
+        componentes::boton(p,if app.servicios.instancias.operando{"Cambiando…"}else{"Cambiar versión del loader"},Variante::Primario,enabled.then(||m(Accion::AplicarVersionLoader)))
+    ].spacing(12));
+    container(body).padding(28).width((app.ventana.width-48.).clamp(640.,700.)).style(icaro_ui::estilo::flotante(p)).into()
 }
 
 pub(super) fn vista<'a>(app: &'a App) -> Element<'a, Mensaje> {

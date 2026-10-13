@@ -17,14 +17,14 @@ cargo run -p icaro-ui --example launcher
 5. Al terminar, la instancia vuelve a estar disponible. Al jugar de nuevo, Ícaro comprueba los archivos guardados y descarga solamente los ausentes o dañados.
 6. Mientras el juego está en ejecución, pulsa su botón: muestra **Cerrar juego** durante tres segundos. Un segundo clic lo detiene.
 
-Las instancias Fabric, NeoForge, Forge y Quilt conservan la gestión de mods, pero su instalación y lanzamiento quedan para la siguiente entrega. El launcher lo indica al intentar jugar.
+Fabric ya se prepara y lanza mediante su perfil oficial para la versión concreta elegida. Quilt, Forge y NeoForge conservan la gestión de mods; sus instaladores siguen pendientes.
 
 ## Archivos guardados
 
 En Windows los datos están en `%APPDATA%\Icaro`; en Linux, en `$XDG_DATA_HOME/Icaro` o `~/.local/share/Icaro`.
 
 - `instances/<id>/instance.json`: datos de la instancia.
-- `instances/<id>/.icaro-minecraft`: cliente, bibliotecas, nativos, assets, metadatos y marca de instalación.
+- `instances/<id>/.icaro`: nativos extraídos y perfil instalado; assets, bibliotecas y clientes están en el almacén compartido.
 - `instances/<id>/minecraft`: mundos, configuración, capturas y registros del usuario.
 - `java`: runtimes oficiales gestionados y sus manifiestos de comprobación.
 
@@ -64,3 +64,49 @@ Validación del 11 de octubre de 2026: 65 pruebas del núcleo, 49 de la bibliote
 
 
 Reorganización del 13-10-2026: `instance.json` de esquema 2 conserva identidad y ajustes de cada instancia; `estado.json` guarda preferencias globales. El CFG anterior se archiva dentro del JSON antes de retirarlo. Eliminar usa la papelera del sistema, y Almacenamiento muestra tamaños reales y permite limpiar solo la caché, recuperar operaciones interrumpidas y trasladar papeleras internas antiguas. Las capturas reales conectan eliminación y Deshacer con el sistema.
+
+## Fabric (13-10-2026)
+
+La preparación hereda los assets, cliente y nativos de Minecraft e incorpora la clase de arranque, argumentos y bibliotecas del [perfil oficial de Fabric](https://meta.fabricmc.net/). Guarda el perfil en `meta/fabric/<minecraft>/<loader>/perfil.json`; las bibliotecas entran en el almacén compartido y se verifican por tamaño y SHA-1. Si el perfil no incluye el hash de una biblioteca, se consulta su archivo `.sha1` en el Maven oficial. Se conserva la versión elegida en `loader.json`; cambiarla invalida el perfil instalado anterior.
+
+La compatibilidad de Java resulta de las versiones admitidas por Minecraft y el mínimo publicado por Fabric. Crear e Instalar/Jugar usan el mismo instalador; después de Cambiar versión, el siguiente arranque prepara el nuevo perfil. La cancelación y los errores conservan el marcador anterior. La validación incluye argumentos oficiales, memoria, perfil fijado, reutilización y descarga oficial de bibliotecas. El arranque con cuenta y un mod real necesita validación manual.
+
+```powershell
+cargo test -j 1 -p icaro-core fabric_oficial_descarga_verifica_y_reutiliza_perfil --lib -- --ignored --nocapture
+cargo test -j 1 -p icaro-core instala_fabric_real_y_reutiliza_sin_descargas --lib -- --ignored --nocapture
+```
+
+Validación del 13-10-2026 para Fabric: instalación completa de Minecraft 1.21.1/Fabric 0.16.14 en una carpeta temporal y segunda preparación sin descargas, perfil oficial y bibliotecas verificadas. El renombre de la instancia local a `.icaro` conservó el estado listo. El usuario también confirmó el arranque de Fabric 26.3 con un mod compatible en Windows; Linux sigue pendiente.
+
+Comprobaciones de esta entrega: 121 pruebas del núcleo y 35 del launcher aprobadas, además de las dos pruebas de red de Fabric (bibliotecas oficiales e instalación completa). Ejecutable de desarrollo compilado.
+
+### Versiones sin ofuscación
+
+A partir de Minecraft 26.1, el perfil oficial de Fabric omite Intermediary. El API utiliza la referencia `net.fabricmc:intermediary:0.0.0` como marcador; el instalador acepta su ausencia únicamente cuando coinciden el perfil y los metadatos oficiales. Los perfiles antiguos conservan la comprobación de Intermediary para la versión exacta. Los perfiles cacheados anteriores mantienen ese requisito.
+
+La auditoría del catálogo consulta todos los perfiles publicados, incluyendo releases y snapshots, y valida identidad, herencia, bibliotecas y mínimo de Java. Es una comprobación de metadatos; no equivale a arrancar cada versión con todos sus mods.
+
+```powershell
+cargo test -j 1 -p icaro-core fabric_catalogo_completo_respeta_contrato_oficial --lib -- --ignored --nocapture
+```
+
+Validación ampliada del 13-10-2026: los 531 perfiles del catálogo oficial de Fabric pasaron la auditoría con Fabric 0.19.5. Se corrigió también la validación de nombres históricos con espacios, como `1.14.2 Pre-Release 4`, en la configuración y las rutas Maven. La instancia local Fabric 26.3/0.19.5 completó su preparación, guardó el perfil Java 25 y reutilizó los componentes. Esta comprobación no arranca el juego ni accede a cuentas.
+
+El usuario confirmó el arranque de Fabric 26.3 y la carga de un mod real en Windows el 13-10-2026. Las comprobaciones de otras versiones y plataformas siguen su alcance de validación independiente.
+
+En Descargas, las filas completadas o con error tienen **Quitar de Descargas**. La acción retira únicamente la fila visible; conserva la instancia, sus archivos, Java y los registros. Las descargas activas mantienen Pausar/Cancelar; una cancelación debe terminar antes de retirar su fila. El asistente muestra el selector de versión de loader únicamente en la tarjeta seleccionada.
+
+El menú de instancia separa **Cambiar versión** (Minecraft) y **Cambiar versión del loader**. Cambiar Minecraft conserva la familia del loader y prepara su versión oficial compatible para el destino. Cambiar el loader permite elegir su versión para el Minecraft actual, conserva los mods y mundos, y ofrece respaldo antes de publicar `loader.json`. La nueva selección invalida el perfil preparado; el próximo arranque lo verifica e instala. Vanilla no muestra esta acción. La eliminación utiliza **Continuar con la eliminación** y tiene **Cancelar** en la pantalla de confirmación por pulsación mantenida.
+
+## Modpacks de Modrinth
+
+La ficha tiene **Instalar modpack** y cada fila de Versiones ofrece su acción de instalación mediante un icono. La acción revisa el MRPACK oficial y crea una instancia independiente, sin comparar el pack con la instancia seleccionada. La revisión toma Minecraft y el loader de `modrinth.index.json` y permite incluir o excluir los archivos opcionales de cliente. En este momento se preparan packs Vanilla y Fabric; Quilt, Forge y NeoForge muestran su dependencia pendiente antes de crear la instancia.
+
+Los archivos referenciados se verifican con SHA-512 y SHA-1, se omiten los exclusivos de servidor y se aplican `overrides` y después `client-overrides`. La descarga sigue los orígenes definidos por la [especificación MRPACK](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack), con redirecciones acotadas y comprobadas. Las rutas, enlaces, colisiones por mayúsculas y tamaños de extracción se validan antes de instalar. Un archivo local modificado se conserva; una instalación completa conserva también la configuración modificada al jugar. La cola existente administra pausa, cancelación y reintento. La importación local de archivos y las actualizaciones de modpack permanecen pendientes.
+
+```powershell
+cargo test -j 1 -p icaro-core modpacks::tests --lib
+cargo test -j 1 -p icaro-core modpack_oficial_crea_instancia_instala_y_reutiliza --lib -- --ignored --nocapture
+```
+
+Validación nativa del 13-10-2026: Fabulously Optimized 14.1.1, Minecraft 26.2 y Fabric 0.19.5, con archivos y perfil completos y segunda preparación sin descargas. La prueba no usa cuentas ni arranca el juego.

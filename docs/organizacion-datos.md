@@ -1,6 +1,6 @@
 # Organización de datos y configuración
 
-Investigación del **12-10-2026**. La reorganización funcional está implementada para las funciones existentes del launcher. La validación nativa en Linux y el arranque del juego con la estructura nueva siguen pendientes.
+Investigación del **12-10-2026**. La reorganización funcional está implementada para las funciones existentes del launcher. El usuario confirmó el funcionamiento de Vanilla con la estructura nueva en Windows. La validación nativa en Linux sigue pendiente.
 
 ## Qué hace Prism Launcher
 
@@ -22,7 +22,7 @@ Fuentes primarias consultadas:
 
 Las carpetas de instancia tienen nombres legibles y un ID interno estable. `instance.json` de esquema 2 es la única fuente editable: identidad y ajustes Java/memoria. Los CFG antiguos se leen durante la migración, sus claves se conservan en `legacy_cfg` y se retira el archivo CFG después de publicar el JSON. Los campos desconocidos de JSON y configuración se conservan al guardar. Los ajustes de instancias se trasladan desde `estado.json` por ID; el estado global conserva apariencia, grupos y preferencias globales.
 
-El instalador Vanilla comparte `assets/`, `libraries/<sha1>/<ruta Maven>` y `meta/minecraft/` en la raíz de datos. Los índices de assets incluyen su SHA-1 en el nombre; el cliente y los metadatos también se separan por identidad verificada. Cada instancia conserva su marcador `instalado.json` y sus nativos extraídos en `.icaro-minecraft`. Java se administra en `Icaro/java`, y los registros del juego pertenecen a `minecraft/logs`.
+El instalador Vanilla comparte `assets/`, `libraries/<sha1>/<ruta Maven>` y `meta/minecraft/` en la raíz de datos. Los índices de assets incluyen su SHA-1 en el nombre; el cliente y los metadatos también se separan por identidad verificada. Cada instancia conserva su marcador `instalado.json` y sus nativos extraídos en `.icaro`. Java se administra en `Icaro/java`, y los registros del juego pertenecen a `minecraft/logs`.
 
 Al preparar una instalación antigua, se verifican tamaño y SHA-1 de sus copias contra el manifiesto actual, se publican archivos completos en el almacén común y se guarda el marcador de esquema 2. Solo después se eliminan las copias antiguas verificadas que ya tienen un destino válido, retirando sus carpetas si quedan vacías. Una cancelación previa a la publicación conserva esas copias. Las instancias de esquema 1 siguen siendo legibles hasta prepararse. Un bloqueo del sistema operativo coordina las preparaciones del mismo almacén, incluso entre procesos; la espera se puede cancelar. El archivo de bloqueo permanece en disco, pero el SO libera el bloqueo al cerrar el proceso.
 
@@ -46,6 +46,7 @@ Icaro/
   libraries/<sha1>/         # Bibliotecas verificadas, con su ruta Maven
   java/                     # Runtimes administrados seleccionados según el perfil
   meta/minecraft/           # Catálogo, metadatos por versión/hash y clientes por hash
+  meta/fabric/              # Perfiles oficiales por versión de Minecraft y Fabric
   cache/                    # Respuestas y descargas temporales recuperables
   logs/                     # Registros del launcher con rotación
   estado.json               # Preferencias globales, sin configuraciones activas por instancia
@@ -54,8 +55,9 @@ Icaro/
       instance.json         # Identidad y configuración por instancia, esquema 2
       icon.png
       icono.json
-      .icaro-minecraft/
+      .icaro/
         instalado.json      # Perfil instalado local, esquema 2
+        modpack.json        # Plan y estado del MRPACK, cuando corresponde
         natives-<id>/       # Nativos extraídos de esta instancia
       minecraft/
         mods/
@@ -113,6 +115,12 @@ La integración de loaders debe apoyarse en estas rutas compartidas. La migraci�
 
 Almacenamiento mide archivos reales fuera del hilo de dibujo, muestra todas las categorías de la raíz y ofrece Actualizar, Limpiar caché, Recuperar operaciones y traslado de papeleras antiguas. La limpieza se limita a `cache/`; no retira assets, bibliotecas, runtimes, mundos, mods, iconos ni configuración. El recorrido tiene límites y rechaza enlaces y uniones de carpetas. El registro `logs/launcher.log` rota al superar 1 MiB y conserva tres archivos anteriores. No se registran tokens ni datos de cuentas.
 
-Las exportaciones de Ícaro incluyen los ajustes portables conocidos; una selección manual de Java conserva una marca que obliga a resolverla en el PC de destino. No se exportan rutas absolutas de Java ni campos locales desconocidos. El ZIP no incluye el almacén común ni los marcadores de instalación. La importación completa y los instaladores de loaders siguen siendo funciones independientes pendientes, como se indica en `pendientes-implementacion.md`.
+Las exportaciones de Ícaro incluyen los ajustes portables conocidos; una selección manual de Java conserva una marca que obliga a resolverla en el PC de destino. No se exportan rutas absolutas de Java ni campos locales desconocidos. El ZIP no incluye el almacén común ni los marcadores de instalación. La importación completa y los instaladores de Quilt, Forge y NeoForge siguen siendo funciones independientes pendientes, como se indica en `pendientes-implementacion.md`.
 
 Migración local del 13-10-2026: se trasladaron 15 elementos de las papeleras internas a la papelera del sistema; `instances/.papelera` quedó retirado. No había instancias activas al ejecutar este mantenimiento.
+
+### Nombre de la carpeta interna
+
+La carpeta privada de cada instancia se llama `.icaro`. Al cargar las instancias o prepararlas, se migra `.icaro-minecraft` mediante renombre y se actualizan sus referencias en `instalado.json`, preservando campos adicionales, nativos y archivos del juego. Si existen ambos nombres, la migración se detiene con un error para conservar ambos perfiles. `instance.json` sigue siendo la configuración de la instancia: cambiar su extensión a `.cfg` no aporta rendimiento ni compatibilidad por sí solo.
+
+Fabric comparte las mismas rutas de assets y bibliotecas; sus metadatos están en `meta/fabric/<minecraft>/<loader>`. Quilt, Forge y NeoForge todavía requieren sus instaladores.

@@ -222,6 +222,9 @@ pub enum Accion {
     CopiarInforme,
     DetalleTecnico,
     CambiarVersion(usize),
+    CambiarVersionLoader(usize),
+    CambiarLoaderVersion(String),
+    AplicarVersionLoader,
     CambiarCancelar,
     CambiarConfirmar(usize),
     CambiarTipo(usize),
@@ -232,6 +235,7 @@ pub enum Accion {
     CambiarActualizar(bool),
     CambiarModo(bool),
     CambiarDetalle,
+    #[allow(dead_code)] // Rechaza eventos antiguos de cambio de familia.
     CambiarLoader(String),
     CambiarCopia,
     VerInstalados,
@@ -320,6 +324,8 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             Accion::CambiarCopia => return crate::instancias_reales::cambiar(app, true),
             Accion::CambiarRevisar => return crate::instancias_reales::revisar_cambio(app),
             Accion::CambiarVersion(i) => return crate::instancias_reales::abrir_cambio(app, *i),
+            Accion::CambiarVersionLoader(i) => return crate::instancias_reales::abrir_cambio_loader(app,*i),
+            Accion::AplicarVersionLoader => return crate::instancias_reales::aplicar_cambio_loader(app),
             Accion::Importar | Accion::ImportarConfirmar | Accion::Duplicar(_) => {
                 app.avisar("La importación y duplicación todavía están en preparación.".into());
                 return Task::none();
@@ -759,6 +765,8 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     .to_owned(),
             );
         }
+        Accion::CambiarVersionLoader(i) => {return crate::instancias_reales::abrir_cambio_loader(app,i);}
+        Accion::AplicarVersionLoader | Accion::CambiarLoaderVersion(_) => {}
         Accion::CambiarVersion(i) => {
             app.menu = None;
             app.cambiar = Some(i);
@@ -1453,18 +1461,9 @@ fn selector_loader_completo<'a>(
                     .align_y(Alignment::Center),
             );
         }
-        let version = if !selected && index > 0 {
-            versions.first().cloned().unwrap_or_default()
-        } else {
-            String::new()
-        };
         let row = row![
             componentes::rombo(p, selected, disabled),
             contenido,
-            text(version)
-                .font(fuentes::MONO)
-                .size(texto::MONO_SM.0)
-                .color(p.text_muted)
         ]
         .spacing(espacio::S4)
         .align_y(Alignment::Center);
@@ -2025,6 +2024,7 @@ pub fn cambiar_version<'a>(app: &'a App, i: usize) -> Element<'a, Mensaje> {
     else {
         return Space::new(0, 0).into();
     };
+    if c.solo_loader {return selector_cambio::loader(app);}
     let occupied = app.servicios.instancias.operando;
     if !c.confirmando || c.revision.is_none() {
         return selector_cambio::vista(app);

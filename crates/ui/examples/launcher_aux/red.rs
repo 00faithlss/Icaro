@@ -29,6 +29,7 @@ pub enum Mensaje {
     Cancelar(usize),
     Seguir(usize),
     Reintentar(usize),
+    QuitarRegistro(usize),
     AlternarHistorial,
     LimpiarHistorial,
     /// Devuelve la lista de servidores a como estaba antes del último cambio.
@@ -257,6 +258,11 @@ impl Estado {
                 } else {
                     let nombre = self.cola.remove(i).nombre;
                     return Some(format!("Se canceló la descarga de {nombre}."));
+                }
+            }
+            Mensaje::QuitarRegistro(i) => {
+                if self.cola.get(i).is_some_and(|d|matches!(d.modo,Modo::Completada|Modo::Fallo)) {
+                    self.cola.remove(i);
                 }
             }
             Mensaje::Seguir(i) => {

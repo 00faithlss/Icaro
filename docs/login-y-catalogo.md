@@ -1,6 +1,6 @@
 # Inicio de sesión y catálogo
 
-El ejemplo `launcher` conecta Microsoft, guarda instancias, instala Minecraft Vanilla y Java, ejecuta el juego, consulta Modrinth, instala y actualiza mods compatibles y exporta ZIP. La instalación de loaders y modpacks todavía está pendiente. Las secciones usan datos reales; los ejemplos se conservan únicamente con `ICARO_DEMO=1`. El recorrido del juego se describe en [Vanilla y Java](vanilla-y-java.md).
+El ejemplo `launcher` conecta Microsoft, guarda instancias, instala Minecraft Vanilla/Fabric y prepara Java según el perfil, ejecuta el juego, consulta Modrinth, instala y actualiza mods compatibles y exporta ZIP. Fabric y los MRPACK de Modrinth Vanilla/Fabric están conectados; Quilt, Forge y NeoForge siguen pendientes. Las secciones usan datos reales; los ejemplos se conservan únicamente con `ICARO_DEMO=1`. El recorrido del juego se describe en [Vanilla y Java](vanilla-y-java.md).
 
 ## Iniciar sesión
 
@@ -65,13 +65,13 @@ El asistente guarda la versión y familia de loader. Una instancia Vanilla nueva
 
 Cada instancia tiene un identificador propio y guarda sus metadatos en `%APPDATA%/Icaro/instances/<id>/instance.json` en Windows; sus archivos de juego pertenecen a la subcarpeta `minecraft`. Cambiar el nombre desde el editor no cambia esa carpeta. El nombre se guarda al salir del editor o cerrar desde el botón del launcher. Los grupos y ajustes de Java se guardan en `estado.json`, asociados al identificador de la instancia. Las instancias cuyo archivo de metadatos no se pueda leer se omiten de la lista y se notifica el problema, conservando sus archivos en disco.
 
-**Eliminar** desde el menú confirma el nombre de la instancia elegida. La carpeta completa se mueve a `instances/.papelera/<id>` y se retira de la lista activa. **Deshacer** recupera la última eliminación de esa apertura, con sus archivos, grupo y ajustes de Java. Mantener Supr sobre una instancia seleccionada conserva la animación de eliminación y utiliza la misma papelera. Al reiniciar, las instancias eliminadas permanecen fuera de la lista; sus carpetas siguen en la papelera local. Si la operación falla, la instancia continúa en la lista y se muestra el error.
+**Eliminar** desde el menú confirma el nombre de la instancia elegida. La carpeta completa se envía a la papelera del sistema y se retira de la lista activa. **Deshacer** recupera la última eliminación de esa apertura, con sus archivos, grupo y ajustes de Java. Mantener Supr sobre una instancia seleccionada conserva la animación de eliminación y utiliza la misma papelera. Al reiniciar, las instancias eliminadas permanecen fuera de la lista; sus carpetas siguen en la papelera del sistema. Si la operación falla, la instancia continúa en la lista y se muestra el error.
 
 Para probar el guardado, crea dos instancias con nombres y portadas distintos, cambia el nombre de una desde el editor y vuelve a Instancias. Cierra Ícaro y ábrelo otra vez: deben aparecer las mismas instancias y sus ajustes de Java y grupos. **Abrir carpeta** debe mostrar una carpeta distinta para cada una. La comprobación de Microsoft al abrir es independiente de esta carga local.
 
 ## Modrinth
 
-La sección **Modpacks** consulta packs del catálogo público. **Agregar mods** abre `TiendaMods`, con los filtros laterales y la lista de instalación del System Design, limitada a la versión de Minecraft y el loader de la instancia. **Volver a mis mods** regresa a sus archivos instalados. Vanilla no muestra la pestaña ni el contador de mods. La instalación de modpacks y recursos sigue pendiente.
+La sección **Modpacks** consulta packs del catálogo público. **Agregar mods** abre `TiendaMods`, con los filtros laterales y la lista de instalación del System Design, limitada a la versión de Minecraft y el loader de la instancia. **Volver a mis mods** regresa a sus archivos instalados. Vanilla no muestra la pestaña ni el contador de mods. Los MRPACK de Modrinth crean una instancia nueva con Minecraft y el loader definidos por el pack; admiten Vanilla/Fabric, revisión de opcionales, verificación y reintento. Los recursos y shaders ZIP se instalan desde sus tiendas. La importación de archivos locales y los demás loaders siguen pendientes.
 
 Las consultas se realizan en segundo plano, con una breve espera al escribir, paginación y descarte de respuestas anteriores. El catálogo de modpacks permite filtrar por versión estable de Minecraft y loader, y ordenar por relevancia, descargas, actualización o fecha de publicación. Las opciones proceden de Modrinth y los filtros se conservan al volver de una ficha. Una respuesta HTTP 429 impone una espera antes de consultar de nuevo.
 
@@ -146,3 +146,9 @@ Las pruebas del catálogo comprueban la combinación de filtros, el descarte de 
 Las pruebas automatizadas no modifican las cuentas guardadas del launcher: usan un almacén en memoria o una entrada de prueba aislada en Windows.
 
 La prueba opcional del visor consulta la imagen «FPS in high render distance» de Fabulously Optimized y comprueba que se seleccione el original y que la decodificación conserve sus dimensiones. El 11 de octubre de 2026 verificó una vista previa de 349×185 y un original de 1920×1017.
+
+## Instalación y registros de descargas
+
+Crear Vanilla o Fabric prepara sus archivos oficiales con Java según el perfil. La familia se elige al crear la instancia; sus versiones solo se muestran al seleccionar ese loader. Cambiar versión modifica Minecraft; Cambiar versión del loader modifica únicamente la versión del mismo loader.
+
+Instalar modpack revisa el MRPACK, permite elegir archivos opcionales y crea una instancia independiente con la versión de Minecraft y el loader del pack. La cola permite pausar, cancelar y reintentar. Quitar de Descargas en un registro completado o fallido oculta ese registro; conserva la instancia y sus archivos. El historial todavía no se guarda entre sesiones.

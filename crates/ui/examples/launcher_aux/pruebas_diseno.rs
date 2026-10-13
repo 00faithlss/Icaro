@@ -40,6 +40,13 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
                 portada: 0,
             })
         }
+        "cambiar-loader" => {
+            preparar_cambio(&mut a,"cambiar-version");
+            let mc=a.servicios.instancias.registros[0].minecraft.clone();
+            let c=a.servicios.instancias.cambio.as_mut().unwrap();
+            c.solo_loader=true;c.destino=mc.clone();c.loader_version_destino=Some("0.16.8".into());c.confirmando=false;
+            a.servicios.instancias.loaders.get_mut(&mc).unwrap().versiones[1].push("0.16.8".into());
+        }
         s if s.starts_with("cambiar-version") => preparar_cambio(&mut a, &scene),
         "exportar" => {
             a.exportar = Some(pantallas::Exportar {
@@ -244,6 +251,8 @@ pub(crate) fn preparar_cambio(a: &mut App, scene: &str) {
         errores_compatibilidad: BTreeMap::new(),
         loader_destino: "fabric".into(),
         loader_actual_version: Some("0.16.9".into()),
+        solo_loader: false,
+        loader_version_destino: None,
         actualizar_mods: true,
         copia: false,
         detalle_desactivar: scene == "cambiar-version-detalle",
@@ -416,6 +425,14 @@ pub(crate) fn preparar_mods(a: &mut App, scene: &str) {
                     )
                     .unwrap(),
                 );
+            }
+            if scene.starts_with("pagina-modpack") {
+                p.project_type="modpack".into();p.title="Fabulously Optimized".into();
+                p.license.name="BSD 3-Clause \"New\" or \"Revised\" License".into();p.license.url=None;
+                p.game_versions=["26.3","26.2","26.1.2","26.1.1","26.1","1.21.11","1.21.10","1.20.6","1.18.2","1.17.1","1.16.5"].iter().map(|v|v.to_string()).collect();
+                p.loaders=vec!["fabric".into()];
+                if scene=="pagina-modpack-detalles" {p.game_versions.clear();p.loaders.clear();p.client_side.clear();p.server_side.clear();p.source_url=None;p.issues_url=None;}
+                a.editor=None;a.seccion=Seccion::Modpacks;
             }
             a.servicios.ficha = ficha::Estado::nuevo(None, &versions[..1]);
             a.servicios.ficha.minecraft = "1.21.4".into();

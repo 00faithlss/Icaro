@@ -26,11 +26,9 @@ pub struct Loaders {
 }
 
 fn version_segura(v: &str) -> bool {
-    !v.is_empty()
-        && v.len() < 128
-        && v.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    crate::minecraft::version_minecraft_valida(v)
 }
+
 fn ordenar(versiones: &mut Vec<String>) {
     versiones.sort_by(|a, b| partes(b).cmp(&partes(a)).then_with(|| b.cmp(a)));
     versiones.dedup();
@@ -530,6 +528,14 @@ pub struct Resultado {
     pub respaldo: Option<PathBuf>,
 }
 
+/// Cambia únicamente la versión del loader y conserva Minecraft, familia y mods.
+pub fn cambiar_solo_loader(store:&Almacen,i:&Instancia,version:&str,respaldo:bool)->Result<Resultado,String> {
+    if i.loader=="vanilla" || !version_segura(version) {return Err("Selecciona una versión válida del loader de esta instancia.".into());}
+    if store.leer(&i.id).map_err(|e|e.to_string())? != *i {return Err("La instancia cambió; vuelve a abrir el selector.".into());}
+    let revision=Revision{mundos:0,desactivar:vec![],nombres:vec![],baja:false,loader_version:Some(version.into()),loader:i.loader.clone(),compatibilidad:Compatibilidad::default()};
+    aplicar(store,i,&i.minecraft,&revision,false,respaldo)
+}
+
 /// Nunca borra archivos: respalda primero; retiene los mods sin compatibilidad como `.disabled`.
 pub fn aplicar(
     store: &Almacen,
@@ -539,7 +545,11 @@ pub fn aplicar(
     copia: bool,
     respaldo_antes: bool,
 ) -> Result<Resultado, String> {
-    if !version_segura(destino) || destino == i.minecraft {
+    let cambio_solo_loader = destino == i.minecraft && revision.loader == i.loader
+        && i.loader != "vanilla" && revision.desactivar.is_empty()
+        && revision.loader_version.is_some()
+        && revision.loader_version != leer_loader(store, i);
+    if !version_segura(destino) || (destino == i.minecraft && !cambio_solo_loader) {
         return Err("Selecciona una versión diferente de Minecraft.".into());
     }
     if !copia && !respaldo_antes && (revision.baja || baja(&[], &i.minecraft, destino)) {
@@ -915,6 +925,28 @@ mod tests {
         let root = std::env::temp_dir().join(format!("icaro-version-test-{}", nonce().unwrap()));
         (Almacen::nuevo(&root), root)
     }
+    #[test]
+    fn cambiar_loader_conserva_minecraft_familia_mods_y_mundos() {
+        let root=std::env::temp_dir().join(format!("icaro-loader-pin-{}",nonce().unwrap()));
+        let store=Almacen::nuevo(root.join("instances"));
+        let i=store.crear_con_loader("Fabric","26.3","fabric",0).unwrap();
+        guardar_loader(&store,&i,"0.19.4").unwrap();
+        let game=store.juego(&i.id).unwrap();
+        fs::create_dir_all(game.join("saves/world")).unwrap();fs::create_dir_all(game.join("mods")).unwrap();
+        fs::write(game.join("saves/world/level.dat"),b"mundo").unwrap();fs::write(game.join("mods/mod.jar"),b"mod").unwrap();
+        let original=fs::read(store.carpeta(&i.id).unwrap().join("instance.json")).unwrap();
+        let result=cambiar_solo_loader(&store,&i,"0.19.5",true).unwrap();
+        assert_eq!(result.instancia.minecraft,"26.3");assert_eq!(result.instancia.loader,"fabric");
+        assert_eq!(leer_loader(&store,&i).as_deref(),Some("0.19.5"));
+        assert_eq!(fs::read(game.join("mods/mod.jar")).unwrap(),b"mod");
+        assert_eq!(fs::read(game.join("saves/world/level.dat")).unwrap(),b"mundo");
+        assert_eq!(fs::read(result.respaldo.unwrap().join("saves/world/level.dat")).unwrap(),b"mundo");
+        assert_eq!(fs::read(store.carpeta(&i.id).unwrap().join("instance.json")).unwrap(),original);
+        assert!(cambiar_solo_loader(&store,&i,"0.19.5",false).is_err());
+        assert!(cambiar_solo_loader(&store,&i,"../escape",false).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn respaldo_precede_cambio_y_copia_conserva_original() {
         let (s, root) = store();

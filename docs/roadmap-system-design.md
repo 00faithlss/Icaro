@@ -14,7 +14,7 @@ Las siguientes entregas deben conectar y completar esos diseños, conservando su
 | Pendiente | Falta implementar o integrar el componente indicado. |
 | A evaluar | Hay una diferencia con la referencia o una decisión de alcance que debe revisarse con el usuario. |
 
-Una vista puede estar implementada visualmente y tener su función pendiente. Por ejemplo, el asistente instala Vanilla, pero todavía no instala loaders; el diálogo de exportación genera ZIP, pero no MRPACK.
+Una vista puede estar implementada visualmente y tener su función pendiente. Por ejemplo, el asistente instala Vanilla y Fabric; Quilt, Forge y NeoForge siguen pendientes; el diálogo de exportación genera ZIP, pero no MRPACK.
 
 ## Avances recientes
 
@@ -26,7 +26,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 - [x] Tiendas de mods, resourcepacks y shaders con composición y cesta compartidas; filtros de entorno distinguen cliente, servidor y ambos.
 - [x] Apariencia, insignias, progreso y toasts recuperan los componentes originales y sus estados reales.
 - [x] Servidores muestra EnConstruccion en modo real; la maqueta de servidores permanece separada.
-- [x] Rutas legibles y `instance.cfg`, migración conservadora e identificación de archivos no verificados.
+- [x] Rutas legibles e `instance.json` de esquema 2, migración conservadora de CFG e identificación de archivos no verificados.
 - [x] ExportarInstancia nuevo con árbol, selección por grupos, presets y ZIP Ícaro/Prism.
 - [x] IconoInstancia: editor y menú, imagen/capturas/generado, recorte, estilos y guardado reversible.
 - [x] ExportarListaMods: seis formatos, selección, campos, plantilla y metadatos consultados sin instalar.
@@ -91,14 +91,14 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 
 | Referencia original | Estado | Lo que tenemos y lo que falta |
 | --- | --- | --- |
-| `TarjetaInstancia`, `PanelLateral` | Parcial | Lista, selección, grupos y metadatos guardados. Vanilla pasa de instalación a lista y ejecución con datos reales. Los loaders quedan **Por instalar**. Falta tiempo jugado acumulado y lanzamiento de loaders. |
-| `Asistente`, `SelectorVersion`, `SelectorLoader` | Parcial | Selectores separados por paso, fechas, búsqueda y versiones antiguas; catálogo oficial de versiones de loaders y elección persistida. Crear Vanilla instala Minecraft y Java. Falta instalar y lanzar los loaders. |
+| `TarjetaInstancia`, `PanelLateral` | Parcial | Lista, selección, grupos y metadatos guardados. Vanilla pasa de instalación a lista y ejecución con datos reales. Fabric usa el perfil oficial y el usuario confirmó su arranque con un mod real en Windows. Quilt, Forge y NeoForge quedan pendientes. Falta tiempo jugado acumulado. |
+| `Asistente`, `SelectorVersion`, `SelectorLoader` | Parcial | Selectores separados por paso, fechas, búsqueda y versiones antiguas; catálogo oficial de versiones de loaders y elección persistida. Crear Vanilla o Fabric prepara Minecraft, Java y el perfil oficial. Faltan Quilt, Forge y NeoForge y la validación de Fabric con un mod real. |
 | `EditorInstancia` | Parcial | Encabezado y pestañas existentes; nombre, grupo y Java guardados; Vanilla omite Mods. Java, memoria y argumentos aplicados al juego. General requiere icono/color, notas y guardado completo de resolución/servidor. |
 | `AccionesInstancia` | Parcial | Abrir carpeta, eliminar a papelera y Deshacer conectados. Exportación ZIP real con diálogo original. Duplicar, importar y otras acciones aún necesitan núcleo. |
-| `CambioVersionInstancia`, `CambiarVersion` | Parcial | Selector nuevo con compatibilidad de todos los mods instalados por SHA512, recomendación desde 95 %, loader elegible, actualizaciones opcionales y desactivación desplegable. Respaldo obligatorio al bajar, copia independiente, preparación aislada y recuperación si falla; conserva mods inactivos. Minecraft se instala después mediante Instalar; instalación de loaders pendiente. |
+| `CambioVersionInstancia`, `CambiarVersion` | Parcial | Selector nuevo con compatibilidad de todos los mods instalados por SHA512, recomendación desde 95 %, familia de loader conservada, cambio separado de su versión, actualizaciones opcionales y desactivación desplegable. Respaldo obligatorio al bajar, copia independiente, preparación aislada y recuperación si falla; conserva mods inactivos. Minecraft y Fabric se preparan después mediante Instalar; Quilt, Forge y NeoForge siguen pendientes. |
 | `ImportarClonar` | Maqueta | Selector de orígenes y composición disponibles. Falta leer packs, detectar otros launchers, mostrar datos reales e importar/clonar archivos. |
 | `ExportarModpack` | Pendiente | Falta el flujo completo MRPACK: nombre, versión, autor, referencias de mods y archivos incluidos. El selector MRPACK del diálogo de instancia permanece deshabilitado. |
-| `ArchivosInstancia`, `Explorador` | Parcial | Barra con iconos, árbol y tamaños, abrir/copiar ruta/renombrar, vista previa de texto y papelera. Falta Deshacer/eliminación definitiva, navegación completa por flechas y previews de imágenes, JAR y mundos. |
+| `ArchivosInstancia`, `Explorador` | Parcial | Barra con iconos, árbol y tamaños, abrir/copiar ruta/renombrar, vista previa de texto y papelera. Eliminación mediante papelera del sistema; falta recuperación desde esta pestaña y navegación completa por flechas y previews de imágenes, JAR y mundos. |
 | `RecursosInstancia` | Parcial | Por petición del usuario, resourcepacks y nueva pestaña Shaders reutilizan filas y controles de `ModsInstancia`: búsqueda, filtros, selección, activación, actualizaciones y retirada. ZIP e inventarios reales; recursos activos en `options.txt`, shaders en configuración existente de Iris. Versiones no declaradas requieren confirmación. Falta prioridad de resourcepacks por arrastre y soporte de otros motores de shaders. |
 | `MundosInstancia` | Maqueta | Lista y panel de copias disponibles. Falta leer mundos, gestionar copias/restauración y conectar sus acciones al juego y disco. |
 | `Capturas` | Parcial | Galería original conectada a las PNG que Minecraft guarda por instancia, filtros por identidad, refresco en segundo plano y visor con el original. Copiar imagen/archivos y abrir carpeta funcionan en Windows. Falta eliminación reversible y copia de imágenes en Linux. |
@@ -113,7 +113,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `ModsInstancia` | Implementado | Inventario real, filtros, selección múltiple, activar/desactivar, actualizaciones con confirmación, quitar a papelera y Deshacer. |
 | `TiendaMods` | Parcial | Composición original, filtros laterales, contexto de Minecraft/loader, búsqueda, filas y lista inferior de instalación. Modrinth conectado; CurseForge visible pero deshabilitado. |
 | `FichaMod` | Implementado | Panel rápido con acciones, miniaturas, versiones compatibles, nombres/estado de dependencias y selección de opcionales. Ver página y Volver conservan la navegación anterior. |
-| `PaginaMod` (ZIP nuevo, 12-10) | Parcial | Cabecera de 64 px, autor/categorías/lado y resumen, columna 320 px con InfoProyecto y tres mods reales del dueño; galería 3 columnas 16:9, filtros, canales, compatibilidad y grupos de dependencias. Perfil interno del creador requiere diseño; motivos de incompatibilidad y datos no publicados se omiten. Instalar modpacks sigue pendiente. |
+| `PaginaMod` (ZIP nuevo, 12-10) | Parcial | Cabecera de 64 px, autor/categorías/lado y resumen, columna 320 px con InfoProyecto y tres mods reales del dueño; galería 3 columnas 16:9, filtros, canales, compatibilidad y grupos de dependencias. Perfil interno del creador requiere diseño; motivos de incompatibilidad y datos no publicados se omiten. MRPACK de Modrinth instala en nuevas instancias Vanilla/Fabric con revisión y cola; los otros loaders e importación local siguen pendientes. |
 | `InfoProyecto` (ZIP nuevo, 12-10) | Parcial | Versiones mono, tres filas, snapshots opcionales, `.x` solo con manifiesto que prueba toda la familia; plataformas, entornos, enlaces, etiquetas, creadores y detalles reales, compartidos con el panel rápido. Faltan conteos de contenido del MRPACK y datos fiables de rendimiento/mínimos de shaders; no se simulan. |
 | `VisorCaptura` | Parcial | Compartido entre capturas locales y galería de proyectos; originales, zoom, arrastre, flechas y Escape. Conserva barra de búsqueda, arrastre y controles de ventana. Copiar y abrir carpeta conectados en Windows; eliminación reversible pendiente. |
 | `BibliotecaMods` | A evaluar | El original reúne un mod y todas las instancias que lo usan. La sección actual es **Modpacks**, según el alcance trabajado, y los mods se gestionan por instancia. Esa biblioteca global no está implementada; evaluar su ubicación antes de añadir una sección. |
@@ -122,7 +122,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 
 | Referencia original | Estado | Lo que tenemos y lo que falta |
 | --- | --- | --- |
-| `PantallaDescargas`, `ColaDescargas` | Parcial | Cola real de Vanilla/Java con pausa, reanudación, cancelación y reintento en las filas originales. Falta historial persistente y unificar mods y demás instaladores en la cola global. |
+| `PantallaDescargas`, `ColaDescargas` | Parcial | Cola real de MRPACK/Vanilla/Fabric/Java con pausa, reanudación, cancelación y reintento en las filas originales. Quitar un registro terminado o fallido oculta su progreso sin borrar la instancia ni sus archivos. Falta historial persistente y unificar mods y demás instaladores en la cola global. |
 | `PantallaConsola`, `Consola` | Implementado | Barra interior del diseño con filtros independientes y conteos, búsqueda con resaltado, autoscroll con pausa al subir e Ir al final, copiar/limpiar e iconos. Render de filas visibles, selector por instancia, último registro desde latest.log, exportación TXT y vacío con San Jerónimo. Registros en vivo acotados y credenciales ocultas. |
 | `PantallaServidores`, `TarjetaServidor` | Maqueta | Lista, tarjetas y reordenación disponibles. Falta añadir/guardar servidores reales, consultar su estado y jugar con la instancia elegida. |
 | `RedPrivada`, `SincronizarMods` | Maqueta | Pantallas originales disponibles. Falta conectar red, comparación de manifiestos y sincronización real. |
@@ -131,8 +131,8 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `PantallaAjustes`, `FilaAjuste` | Parcial | Índice y filas existentes; los ajustes de Java por instancia se guardan. Falta persistir las preferencias generales y conectar los controles que todavía describen servicios no implementados. |
 | `AjustesGenerales` | Parcial | Controles disponibles, abrir carpeta real y mantener/minimizar al iniciar Java. Faltan persistencia general, idioma completo, inicio con el sistema y bandeja para cerrar launcher conservando el juego. |
 | `Apariencia` | Implementado | Tinta/Piedra/Sistema, Mármol/Plata/Bronce, escala de 80 a 150 % y reducir movimiento guardados; seguimiento del tema de Windows. Validación manual de escritorios Linux pendiente. |
-| `AjustesJava` | Parcial | Configuración por instancia guardada y aplicada; selección automática según metadatos, detección de Java del sistema y descarga verificada del runtime oficial. Ajustes/editor muestran runtimes reales guardados; sliders limitados por la RAM real. Faltan agregar/probar rutas manuales desde Ajustes y completar las recomendaciones de memoria. |
-| `AjustesAlmacenamiento`, `Almacenamiento` | Maqueta | Pantalla disponible con cifras de muestra. Faltan tamaños reales, barra por tramas, limpieza y traslado seguro de la carpeta de instancias. Los tamaños reales del diálogo ZIP no completan esta pantalla. |
+| `AjustesJava` | Parcial | Configuración por instancia guardada y aplicada; selección automática según metadatos, detección de Java del sistema y descarga verificada del runtime oficial. Ajustes/editor muestran runtimes reales guardados; sliders limitados por la RAM real. Selección global y por instancia, rutas manuales, detección acotada de runtimes del launcher oficial y prueba con memoria/argumentos conectadas. Faltan completar recomendaciones de memoria y validación nativa en Linux. |
+| `AjustesAlmacenamiento`, `Almacenamiento` | Parcial | Tamaños reales fuera del hilo de dibujo, limpieza limitada a caché, rotación de registros, traslado explícito de papeleras antiguas y recuperación de transacciones. Falta traslado de la raíz de datos y validación nativa en Linux. |
 | `ActualizacionLauncher` | Parcial | Pantalla y banner con versiones y notas reales; consulta GitHub, verifica tamaño/SHA-256 y aplica ahora o al cerrar con recuperación del ejecutable anterior. Requiere release portable y `latest.json` publicados; automático para Windows x86-64. |
 | `Integridad` | Maqueta | Cuadrícula y progreso de ejemplo disponibles. Falta revisar/reparar todos los archivos reales de una instancia; la verificación de mods descargados ya existe en otro flujo. |
 | `ArchivosNoVerificados` | Implementado | Lista real con SHA-512, identificación por Modrinth, caché, confiar y quitar/deshacer. Sin evidencia de malware no se inventa una acusación. Integración con futuros importes pendiente. |
@@ -144,10 +144,10 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 
 El [detalle de implementación pendiente](pendientes-implementacion.md) define el alcance de instalación oficial de loaders, importación de modpacks y las comprobaciones que faltan.
 
-Antes de extender los instaladores, resolver la [organización de datos](organizacion-datos.md): assets y bibliotecas compartidos, migración de `.icaro-minecraft`, configuración por instancia y sustitución de papeleras internas por la del sistema con recuperación de los datos anteriores.
+Los nuevos instaladores deben conservar la [organización de datos](organizacion-datos.md) ya implementada: assets y bibliotecas compartidos, migración de `.icaro`, configuración por instancia y sustitución de papeleras internas por la del sistema con recuperación de los datos anteriores.
 
 1. **Instancia jugable:** extender el instalador a loaders manteniendo los componentes ya conectados; repetir en Linux el recorrido de Vanilla confirmado en Windows. Completar historial de descargas y unificar los instaladores en la cola global.
-2. **Editor y acciones:** completar General/Java, recuperación de Archivos/Capturas, prioridad de Recursos y Mundos; importar/clonar y exportar MRPACK. El cambio de versión con respaldo/copia ya está conectado; falta instalar el loader elegido.
+2. **Editor y acciones:** completar General/Java, recuperación de Archivos/Capturas, prioridad de Recursos y Mundos; importar/clonar y exportar MRPACK. El cambio de versión con respaldo/copia ya está conectado; Fabric ya se prepara con la versión elegida; faltan los instaladores de Quilt, Forge y NeoForge.
 3. **Cuenta:** evaluar la diferencia de PantallaCuenta y conectar su composición original junto con EstudioSkin y todos los estados de sesión.
 4. **Servicios adicionales:** servidores, red/sincronización, integridad, integración de archivos sin verificar con futuros importes, almacenamiento y bandeja. Publicar los artefactos para validar la actualización del launcher ya implementada.
 5. **Revisión transversal:** ventanas angostas, escala, metales, foco y teclado, tooltips, virtualización y movimientos pendientes; comprobar ambas paletas.
