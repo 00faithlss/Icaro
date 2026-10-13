@@ -134,7 +134,7 @@ fn esqueleto<'a>(app: &App) -> Element<'a, Mensaje> {
             / 1.4
     };
     iced::widget::canvas(Esqueleto {
-        p: app.modo.paleta(),
+        p: app.paleta(),
         fase,
     })
     .width(Length::Fill)
@@ -150,7 +150,7 @@ fn fila_version<'a>(
     actual: &str,
     recomendada: Option<&str>,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let c = app.servicios.instancias.cambio.as_ref().unwrap();
     let es_actual = version == actual;
     let selected = version == c.destino && !es_actual;
@@ -230,7 +230,7 @@ fn fila_version<'a>(
 }
 
 fn lista<'a>(app: &'a App, actual: &str) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let c = app.servicios.instancias.cambio.as_ref().unwrap();
     let consulta = c.busqueda.trim().to_lowercase();
     let filtradas: Vec<_> = crate::instancias_reales::versiones_cambio(app, c.tipo)
@@ -381,7 +381,7 @@ fn aviso<'a>(p: Paleta, label: String, riesgo: usize) -> Element<'a, Mensaje> {
 }
 
 fn resumen<'a>(app: &'a App, record: &icaro_core::instancias::Instancia) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let c = app.servicios.instancias.cambio.as_ref().unwrap();
     let datos = c.compatibilidades.get(&c.destino);
     let angosto = app.ventana.width < 1050.;
@@ -634,7 +634,7 @@ fn resumen<'a>(app: &'a App, record: &icaro_core::instancias::Instancia) -> Elem
 }
 
 pub(super) fn vista<'a>(app: &'a App) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let Some(c) = app.servicios.instancias.cambio.as_ref() else {
         return Space::new(0, 0).into();
     };

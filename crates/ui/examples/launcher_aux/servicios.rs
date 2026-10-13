@@ -438,14 +438,14 @@ pub fn buscar(app: &mut App, offset: u32, debounce: bool) -> Task<Mensaje> {
     app.servicios.busy = true;
     app.servicios.error = None;
     let catalog = app.servicios.catalog.clone();
-    let categories = if app.editor == Some(2) {
+    let categories = if matches!(app.editor, Some(2 | 3 | 8)) {
         app.tienda_cat.clone()
     } else {
         vec![]
     };
     let environment = if app.editor == Some(2) {
         match app.tienda_lado {
-            0 => None,
+            0 => Some("client_and_server"),
             1 => Some("client_only"),
             _ => None,
         }
@@ -1459,7 +1459,7 @@ pub fn preparar_creadores_diseno(app: &mut App) {
 }
 
 pub fn welcome_status(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let status = if app.servicios.restoring {
         app.servicios
             .progress
@@ -1481,7 +1481,7 @@ pub fn welcome_status(app: &App) -> Element<'_, Mensaje> {
 }
 
 pub fn login_view(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let paso = app.servicios.progress.and_then(FaseAcceso::paso);
     let mut content = column![
         text(if paso.is_some() {
@@ -1554,7 +1554,7 @@ pub fn login_view(app: &App) -> Element<'_, Mensaje> {
     )
 }
 pub fn account_view(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios;
     let mut content = column![text("CUENTA")
         .font(fuentes::DISPLAY)
@@ -1618,7 +1618,7 @@ pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, M
     if !app.sesion.menu {
         return window;
     }
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let gestionar = Mensaje::Ses(crate::sesion::Accion::Gestionar);
     let activa = app.servicios.session.is_some();
     let mut cuentas = Vec::new();
@@ -1684,7 +1684,7 @@ pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, M
 }
 
 pub fn store_view(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios;
     let kind = context(app).kind;
     let mut content = column![].spacing(espacio::S4);
@@ -1693,7 +1693,7 @@ pub fn store_view(app: &App) -> Element<'_, Mensaje> {
             return ficha::vista(app, project, versions, kind);
         }
     }
-    if kind == Kind::Mod && app.editor == Some(2) {
+    if matches!(kind, Kind::Mod | Kind::Resourcepack | Kind::Shader) && matches!(app.editor, Some(2 | 3 | 8)) {
         return crate::diseno_mods::tienda(app);
     }
     if s.hay_anterior() {
@@ -2480,33 +2480,28 @@ mod tests {
         assert!(real.editor.is_none());
         // El menú elimina su propia instancia, aunque la selección sea otra.
         real.seleccionada = Some(0);
-        real.menu = Some(1);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::PedirEliminar);
-        assert!(real.dialogo);
-        assert_eq!(
-            real.servicios.instancias.eliminar.as_deref(),
-            Some(second.id.as_str())
-        );
-        let _ = crate::vista(&real);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::CerrarDialogo);
-        assert_eq!(store.cargar().unwrap().instancias.len(), 3);
-        assert!(real.servicios.instancias.eliminar.is_none());
-        real.menu = Some(1);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::PedirEliminar);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Eliminar);
+        real.menu=Some(1);
+        let _=crate::actualizar_estado(&mut real,Mensaje::PedirEliminar);
+        let seq=real.picar_solicitud;
+        let _=crate::actualizar_estado(&mut real,Mensaje::Picar(crate::picar_real::Accion::Revisada(second.id.clone(),seq-1,Ok(crate::picar_real::Revision::default()))));
+        assert!(real.picar_revision.is_none());
+        let _=crate::actualizar_estado(&mut real,Mensaje::Picar(crate::picar_real::Accion::Revisada(second.id.clone(),seq,Ok(crate::picar_real::Revision{mundos:1,sin_respaldo:1}))));
+        let _=crate::actualizar_estado(&mut real,Mensaje::PicarEmpezar);
+        assert!(real.picar.is_none());
+        let _=crate::actualizar_estado(&mut real,Mensaje::Eliminar);
+        let _=crate::actualizar_estado(&mut real,Mensaje::PicarEmpezar);
+        let start=real.picar.as_ref().unwrap().inicio;
+        let _=crate::actualizar_estado(&mut real,Mensaje::PicarSoltar);
+        let _=crate::actualizar_estado(&mut real,Mensaje::Cuadro(start+std::time::Duration::from_secs(2)));
+        assert!(real.picar.is_none()&&!real.servicios.instancias.operando);
+        let _=crate::actualizar_estado(&mut real,Mensaje::PicarEmpezar);
+        let start=real.picar.as_ref().unwrap().inicio;
+        let broken=start+std::time::Duration::from_secs(2);
+        let _=crate::actualizar_estado(&mut real,Mensaje::Cuadro(broken));
+        let _=crate::actualizar_estado(&mut real,Mensaje::Cuadro(broken+std::time::Duration::from_secs(2)));
         assert!(real.servicios.instancias.operando);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::CerrarDialogo);
-        assert!(real.dialogo);
-        let _ = crate::actualizar_estado(
-            &mut real,
-            Mensaje::Instancias(crate::instancias_reales::Accion::Eliminada(
-                second.id.clone(),
-                Err("Disco no disponible".into()),
-            )),
-        );
-        assert_eq!(crate::instancias().len(), 3);
-        assert!(!real.servicios.instancias.operando && real.dialogo);
-        let _ = crate::actualizar_estado(&mut real, Mensaje::Eliminar);
+        let _=crate::actualizar_estado(&mut real,Mensaje::CerrarDialogo);
+        assert_eq!(real.picar_objetivo,Some(1));
         store.eliminar(&second.id).unwrap();
         let _ = crate::actualizar_estado(
             &mut real,
@@ -2521,7 +2516,7 @@ mod tests {
         assert_eq!(real.servicios.instancias.registros[1].id, created.id);
         assert_eq!(real.configs[0].memoria_max, 8192);
         assert_eq!(real.seleccionada, Some(0));
-        assert!(real.aviso.as_ref().unwrap().accion.is_some());
+        assert!(real.avisos.entradas().last().unwrap().aviso.accion.is_some());
         let _ = crate::actualizar_estado(&mut real, Mensaje::DeshacerAviso);
         let restored = store.restaurar(&second.id).unwrap();
         let _ = crate::actualizar_estado(
@@ -2539,6 +2534,10 @@ mod tests {
         assert_eq!(store.cargar().unwrap().instancias.len(), 3);
         real.seleccionada = Some(2);
         let _ = crate::actualizar_estado(&mut real, Mensaje::PicarEmpezar);
+        assert!(real.picar.is_none());
+        let seq=real.picar_solicitud;
+        let _=crate::actualizar_estado(&mut real,Mensaje::Picar(crate::picar_real::Accion::Revisada(created.id.clone(),seq,Ok(crate::picar_real::Revision::default()))));
+        let _=crate::actualizar_estado(&mut real,Mensaje::PicarEmpezar);
         let started = real.picar.as_ref().unwrap().inicio;
         let broken = started + std::time::Duration::from_secs(5);
         let _ = crate::actualizar_estado(&mut real, Mensaje::Cuadro(broken));

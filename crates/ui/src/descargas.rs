@@ -116,6 +116,7 @@ fn fila_descarga<'a, M: Clone + 'a>(
     i: usize,
     d: &Descarga,
     a: &AccionesCola<M>,
+    animacion: Option<(bool, bool, Option<(usize, usize)>)>,
 ) -> Element<'a, M> {
     let titulo = row![
         text(d.nombre.clone())
@@ -146,7 +147,12 @@ fn fila_descarga<'a, M: Clone + 'a>(
                 .spacing(espacio::S1)
                 .into(),
                 column![
-                    barra(p, *av, if pausada { p.text_muted } else { p.text }),
+                    match animacion {
+                        Some((reducir, _, Some((total, hechos)))) if !pausada => crate::progreso::bloques(p, total, hechos, reducir),
+                        Some((reducir, true, _)) if !pausada => crate::progreso::indeterminado(p, reducir),
+                        Some((reducir, false, _)) if !pausada => crate::progreso::continuo(p, *av, reducir),
+                        _ => barra(p, *av, if pausada { p.text_muted } else { p.text }),
+                    },
                     mono_sm(p, d.detalle.clone()),
                 ]
                 .spacing(espacio::S2)
@@ -226,7 +232,22 @@ pub fn cola_descargas<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let mut filas = column![regla(borde::MEDIO, p.text)];
     for (i, d) in descargas.iter().enumerate() {
-        filas = filas.push(fila_descarga(p, i, d, acciones));
+        filas = filas.push(fila_descarga(p, i, d, acciones, None));
+    }
+    filas.into()
+}
+
+/// Misma cola del System Design con la animación de Progreso. Las filas
+/// indeterminadas no publican porcentajes ni cantidades que no se conocen.
+pub fn cola_descargas_animada<'a, M: Clone + 'a>(
+    p: Paleta, descargas: &[Descarga], acciones: &AccionesCola<M>,
+    reducir: bool, indeterminadas: &[usize],
+    contables: &[(usize, usize, usize)],
+) -> Element<'a, M> {
+    let mut filas = column![regla(borde::MEDIO, p.text)];
+    for (i, d) in descargas.iter().enumerate() {
+        let partes = contables.iter().find(|(fila, _, _)| *fila == i).map(|(_, total, hechos)| (*total, *hechos));
+        filas = filas.push(fila_descarga(p, i, d, acciones, Some((reducir, indeterminadas.contains(&i), partes))));
     }
     filas.into()
 }

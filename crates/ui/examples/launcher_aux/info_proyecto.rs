@@ -169,7 +169,7 @@ fn creator<'a>(
     avatar: Option<&str>,
     owner: bool,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     button(
         row![
             app.servicios.images.vista(p, avatar, 32.),
@@ -201,7 +201,7 @@ fn creator<'a>(
     .into()
 }
 pub fn vista<'a>(app: &'a App, project: &'a Project, width: f32) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios.ficha;
     let mut sections = column![].spacing(28).width(Length::Fill);
     if !project.game_versions.is_empty() {
@@ -518,7 +518,7 @@ pub fn vista<'a>(app: &'a App, project: &'a Project, width: f32) -> Element<'a, 
     sections.push(section(p, "Detalles", details.into())).into()
 }
 pub fn mas_creador<'a>(app: &'a App) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios.ficha;
     if s.relacionados.is_empty() && !s.relacionados_busy && s.relacionados_error.is_none() {
         return Space::with_height(0).into();

@@ -77,6 +77,8 @@ iconos! {
     Usuario => "user",
     UsuarioMas => "user-plus",
     Monitor => "monitor",
+    Luna => "moon",
+    Sol => "sun",
     Bug => "bug",
     Codigo => "code",
     Notas => "notes",

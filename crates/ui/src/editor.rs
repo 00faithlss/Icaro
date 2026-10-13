@@ -105,6 +105,10 @@ pub fn encabezado_editor_accion<'a, M: Clone + 'a>(
     mostrar_mods: bool,
     jugar: Element<'a, M>,
 ) -> Element<'a, M> {
+    encabezado_editor_icono(p,d,m,mostrar_mods,jugar,None)
+}
+
+pub fn encabezado_editor_icono<'a,M:Clone+'a>(p:Paleta,d:&DatosEditor,m:MensajesEncabezado<M>,mostrar_mods:bool,jugar:Element<'a,M>,imagen:Option<Element<'a,M>>)->Element<'a,M>{
     let acciones = row![
         crate::descargas::boton_icono(p, Icono::Carpeta, m.abrir_carpeta),
         crate::descargas::boton_icono(p, Icono::Acciones, m.mas),
@@ -124,9 +128,7 @@ pub fn encabezado_editor_accion<'a, M: Clone + 'a>(
             column![
                 migas(p, &["Instancias", &d.nombre], move |_| m.volver.clone()),
                 row![
-                    container(icono(Icono::Instancias, Tam::Lg, p.text))
-                        .padding(espacio::S3)
-                        .style(estilo::marco(p)),
+                    imagen.unwrap_or_else(||container(icono(Icono::Instancias,Tam::Lg,p.text)).padding(espacio::S3).style(estilo::marco(p)).into()),
                     datos,
                     Space::with_width(Length::Fill),
                     acciones,

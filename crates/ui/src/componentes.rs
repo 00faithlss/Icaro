@@ -13,6 +13,57 @@ use crate::fuentes;
 use crate::iconos::{Icono, Tam};
 use crate::tema::{espacio, medida, texto, Paleta};
 
+/// Apariencia fiel al sistema: temas con iconos, muestras de 56 px y escala.
+pub fn apariencia<'a, M: Clone + 'a>(
+    p: Paleta, tema: usize, metal: usize, escala: i32,
+    al_tema: impl Fn(usize) -> M,
+    al_metal: impl Fn(usize) -> M,
+    al_escala: impl Fn(i32) -> M,
+) -> Element<'a, M> {
+    let mut temas = row![];
+    for (i, (titulo, glifo)) in [("Tinta", Icono::Luna), ("Piedra", Icono::Sol), ("Sistema", Icono::Monitor)].into_iter().enumerate() {
+        temas = temas.push(button(container(row![crate::iconos::icono_texto(glifo, Tam::Base),
+            text(titulo.to_uppercase()).font(fuentes::ETIQUETA).size(texto::LABEL.0)]
+            .spacing(8).align_y(iced::Alignment::Center)).center_y(32))
+            .height(32).padding([0., 16.]).on_press(al_tema(i)).style(estilo::segmento(p, tema == i)));
+        if i < 2 { temas = temas.push(container(Space::new(1, 32)).style(estilo::bloque(p.text))); }
+    }
+    let mut muestras = row![].spacing(10);
+    for (i, metal_actual) in [crate::tema::Metal::Marmol, crate::tema::Metal::Plata, crate::tema::Metal::Bronce].into_iter().enumerate() {
+        let tono = p.modo.paleta().con_metal(metal_actual).accent;
+        let seleccionada = i == metal;
+        let muestra: Element<'a, M> = container(Space::new(56, 56))
+            .style(move |_| container::Style { background: Some(tono.into()), border: iced::Border {
+                width: 2., color: p.border_strong, ..Default::default() }, ..Default::default() }).into();
+        let muestra = if seleccionada {
+            iced::widget::stack![muestra,
+                container(container(Space::new(14, 14)).style(estilo::bloque(p.text)))
+                    .width(56).height(56).align_right(56).align_bottom(56)].into()
+        } else { muestra };
+        let muestra = button(container(muestra).padding(3).style(move |_| container::Style {
+            border: iced::Border { width: 2., color: if seleccionada { p.text } else { iced::Color::TRANSPARENT }, ..Default::default() },
+            ..Default::default()
+        })).padding(0).on_press(al_metal(i)).style(estilo::sin_estilo(p.text));
+        muestras = muestras.push(column![muestra, text(metal_actual.nombre()).size(texto::BODY_SM.0).color(p.text)]
+            .spacing(8).align_x(iced::Alignment::Center));
+    }
+    let escala = escala.clamp(80, 150);
+    let control_escala = container(row![
+        button(crate::iconos::icono_texto(Icono::Menos, Tam::Base)).padding(4).height(32)
+            .on_press_maybe((escala > 80).then(|| al_escala(escala - 10))).style(estilo::boton_fantasma(p)),
+        container(text(format!("{escala} %")).font(fuentes::MONO).size(texto::MONO.0).color(p.text))
+            .width(86).height(32).center_x(86).center_y(32),
+        button(crate::iconos::icono_texto(Icono::Mas, Tam::Base)).padding(4).height(32)
+            .on_press_maybe((escala < 150).then(|| al_escala(escala + 10))).style(estilo::boton_fantasma(p)),
+    ].align_y(iced::Alignment::Center)).style(estilo::marco(p));
+    column![column![etiqueta(p, "Tema"), container(temas).style(estilo::marco(p))].spacing(8),
+        row![column![etiqueta(p, "Metal de acento"), muestras].spacing(8),
+            column![etiqueta(p, "Escala"), control_escala,
+                text("80 a 150 %").size(texto::BODY_SM.0).color(p.text_muted)].spacing(8)
+        ].spacing(48)
+    ].spacing(48).into()
+}
+
 /// Variante visual de un botón.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variante {
@@ -309,18 +360,29 @@ pub fn insignia<'a, M: 'a>(p: Paleta, estado: Estado, palabra: &str) -> Element<
         Estado::Error => (p.error_soft, p.error),
         Estado::Info => (p.info_soft, p.info),
     };
-    container(
+    let glifo = match estado { Estado::Exito => Icono::Check, Estado::Aviso => Icono::Aviso,
+        Estado::Error => Icono::Cerrar, Estado::Info => Icono::Info };
+    container(row![crate::iconos::icono(glifo, Tam::Sm, tinta),
         text(palabra.to_uppercase())
             .font(fuentes::ETIQUETA)
             .size(10)
             .line_height(iced::widget::text::LineHeight::Relative(1.0))
             .wrapping(iced::widget::text::Wrapping::None),
-    )
+    ].spacing(4).align_y(iced::Alignment::Center))
     .height(20)
     .align_y(iced::alignment::Vertical::Center)
     .padding(Padding::from([0., 6.]))
     .style(estilo::insignia(fondo, tinta))
     .into()
+}
+
+/// Estado neutro destacado (NUEVA, ACTIVA) con tinta invertida.
+pub fn insignia_solida<'a, M: 'a>(p: Paleta, palabra: &str) -> Element<'a, M> {
+    container(text(palabra.to_uppercase()).font(fuentes::ETIQUETA).size(10)
+        .line_height(iced::widget::text::LineHeight::Relative(1.))
+        .wrapping(iced::widget::text::Wrapping::None))
+        .height(20).center_y(20).padding([0., 6.])
+        .style(estilo::insignia(p.text, p.bg)).into()
 }
 
 /// Insignia neutra: solo contorno de tinta, sin color de estado.
@@ -633,19 +695,29 @@ fn colores_estado(p: Paleta, estado: Estado) -> (iced::Color, iced::Color) {
 /// Aviso en línea: bloque suave con contorno del color del estado, icono y
 /// mensaje. El estado nunca va solo en color: lleva icono y texto.
 pub fn aviso<'a, M: 'a>(p: Paleta, estado: Estado, mensaje: &str) -> Element<'a, M> {
+    aviso_detallado(p, estado, mensaje, "")
+}
+
+/// Aviso del componente Insignia: icono, título y explicación por separado.
+pub fn aviso_detallado<'a, M: 'a>(p: Paleta, estado: Estado, titulo: &str, explicacion: &str) -> Element<'a, M> {
     let (fondo, tinta) = colores_estado(p, estado);
     let glifo = match estado {
         Estado::Exito => crate::iconos::Icono::Check,
-        Estado::Aviso | Estado::Error => crate::iconos::Icono::Aviso,
+        Estado::Aviso => crate::iconos::Icono::Aviso,
+        Estado::Error => crate::iconos::Icono::Alerta,
         Estado::Info => crate::iconos::Icono::Info,
     };
+    let mut detalle = column![text(titulo.to_owned()).font(fuentes::CUERPO_NEGRITA)
+        .size(texto::HEADING.0).color(p.text)].spacing(4);
+    if !explicacion.is_empty() {
+        detalle = detalle.push(text(explicacion.to_owned()).size(texto::BODY_SM.0).color(p.text));
+    }
     container(
         row![
             crate::iconos::icono(glifo, crate::iconos::Tam::Base, tinta),
-            text(mensaje.to_owned()).size(texto::BODY.0).color(p.text),
+            detalle,
         ]
-        .spacing(espacio::S3)
-        .align_y(iced::Alignment::Center),
+        .spacing(espacio::S4),
     )
     .padding(Padding::from([espacio::S4, espacio::S5]))
     .width(Length::Fill)
@@ -1070,7 +1142,7 @@ pub struct Parte {
 
 /// Pantalla provisional de una sección que aún no existe: la rueda de
 /// bloques a medio levantar, el nombre de la sección y el plan de partes.
-/// Solo para la maqueta; se retira cuando el núcleo esté completo.
+/// Estado de una sección pendiente de implementación.
 pub fn en_construccion<'a, M: 'a>(p: Paleta, seccion: &str, partes: &[Parte]) -> Element<'a, M> {
     let mut lista = column![].spacing(espacio::S2);
     for parte in partes {
@@ -1104,7 +1176,7 @@ pub fn en_construccion<'a, M: 'a>(p: Paleta, seccion: &str, partes: &[Parte]) ->
                     .font(fuentes::DISPLAY)
                     .size(texto::DISPLAY.0)
                     .color(p.text),
-                text(format!("{} todavía no existe en esta maqueta.", seccion))
+                text(format!("{} está en desarrollo.", seccion))
                     .size(texto::BODY.0)
                     .color(p.text_muted),
                 lista,

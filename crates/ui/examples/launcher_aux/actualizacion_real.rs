@@ -212,7 +212,7 @@ pub fn al_cerrar(app: &mut App) -> bool {
 /// Banner info discreto; nunca abre la actualización por su cuenta.
 pub fn banner(app: &App) -> Option<Element<'_, Mensaje>> {
     let d = app.actualizacion.disponible.as_ref()?;
-    let p = app.modo.paleta();
+    let p = app.paleta();
     if app.pantalla == Some(pantallas::Pantalla::Actualizacion) {
         return None;
     }
@@ -244,7 +244,7 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
     iced::widget::responsive(move |tam| vista_ancho(app, tam.width)).into()
 }
 fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let e = &app.actualizacion;
     let titulo = e
         .disponible

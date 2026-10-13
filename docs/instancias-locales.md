@@ -1,0 +1,42 @@
+# Instancias locales y archivos sin verificar
+
+Las instancias nuevas usan `Icaro/instances/<nombre>/minecraft`, bajo el directorio de datos del usuario. Por ejemplo, una instancia llamada `boys` queda en `%APPDATA%\Icaro\instances\boys\minecraft` en Windows. El identificador interno sigue siendo estable: cuentas, preferencias, trabajos y registros no dependen del nombre de la carpeta.
+
+Los caracteres reservados del sistema de archivos se sustituyen por `_`. Los nombres reservados de Windows reciben el prefijo `Instancia`, y las colisiones entre nombres saneados reciben `(2)`, `(3)`, etc. No se sobrescriben carpetas ajenas que ocupen ese nombre. Dos instancias con el mismo nombre visible, ignorando mayúsculas, siguen rechazándose.
+
+## Metadatos y migración
+
+Cada carpeta contiene `instance.json` y `instance.cfg`. El CFG es un INI de Ícaro, con sección `[General]` y campos `Id`, `Name`, `Minecraft`, `Loader`, `Cover` y `Created`. Las cadenas están escapadas como JSON para conservar acentos y caracteres especiales. No es un archivo de configuración intercambiable con Prism Launcher.
+
+`instance.json` conserva la lectura compatible de versiones anteriores. Cuando no existe, se puede recuperar la instancia desde `instance.cfg`; un JSON presente pero corrupto no se sustituye silenciosamente. El icono personalizado se guarda por separado, dentro de la misma carpeta.
+
+Al cargar el almacén, las carpetas antiguas cuyo nombre es el ID se migran mediante un cambio de nombre dentro del mismo almacén. No se copian ni borran mundos. El JSON legado se conserva byte a byte, incluyendo campos desconocidos. Si el sistema bloquea la carpeta o falla la escritura del CFG, la instancia sigue usando su carpeta anterior. La siguiente carga puede volver a intentar la migración.
+
+Renombrar una instancia cambia su carpeta y conserva el ID y todos sus archivos. Si falla la publicación de los metadatos, se revierte el cambio de carpeta y la configuración anterior. Mientras Minecraft o una instalación usan la instancia, la interfaz debe impedir este cambio. Eliminar conserva los datos en la papelera del almacén y restaurar elige de nuevo un nombre de carpeta disponible.
+
+## ArchivosNoVerificados
+
+La pantalla usa el componente y el grabado `TorreReja` del sistema de diseño. La revisión calcula SHA-512 en segundo plano y consulta los hashes exactos en Modrinth. Los resultados se cachean por contenido durante un día; una sustitución del archivo obliga a revisar el contenido nuevo. Se revisan también los JAR registrados cuyo contenido no coincide con su hash guardado.
+
+- **Buscar en Modrinth** abre una búsqueda por nombre; no elige ni descarga automáticamente el primer resultado.
+- **Confiar** guarda una decisión para ese SHA-512 exacto, sin convertirla en una verificación de Modrinth.
+- **Quitar** retira el archivo de forma reversible y actualiza su registro si lo tenía. **Deshacer** no sobrescribe un archivo nuevo con el mismo nombre y comprueba que el respaldo conserve su hash.
+- **Desactivar** está disponible para que un importador aplique una decisión o evidencia concreta del proveedor; conserva el JAR con extensión `.disabled`.
+
+Una consulta fallida deja los archivos como procedencia desconocida y muestra el error. No desactiva archivos ni afirma que sean maliciosos. El endpoint de hashes utilizado no proporciona una marca de malware, por lo que esa fila del diseño sólo podrá mostrarse si una fuente futura entrega evidencia explícita. La pantalla está conectada a los mods locales actuales y preparada para que futuros importadores la reutilicen; no sustituye la implementación del importador.
+
+Las pruebas de migración, colisiones, renombrado, rollback, confianza, retirada y restauración utilizan exclusivamente carpetas temporales aisladas.
+
+## Icono de instancia
+
+Haz clic en el icono del editor o elige **Cambiar icono** en sus acciones. Admite PNG, JPG, WebP o GIF de hasta 10 MB; recorta en cuadrado con arrastre, flechas, zoom de 100 a 400 % y estilos Original/Píxeles 32/Píxeles 16. También puedes elegir una captura de la instancia o una de doce variaciones procedurales. Se guarda `icon.png` de 256 × 256 junto a `icono.json`; Deshacer recupera el anterior durante la sesión.
+
+## Exportar
+
+ExportarInstancia muestra un árbol con carpetas, casillas mixtas, tamaños y selecciones Recomendada/Todo/Para compartir/Solo mundos. Genera ZIP de Ícaro o Prism/MultiMC; el segundo necesita la versión concreta del loader y usa `mmc-pack.json` con el esquema oficial. Sus contenidos se verifican con pruebas; la importación en las aplicaciones externas sigue pendiente de comprobación manual. MRPACK pertenece a otro componente.
+
+En **Mods → más opciones → Exportar lista…** se exporta todo o la selección actual, con **Solo mods activos** marcado inicialmente. HTML, Markdown, texto, JSON, CSV y plantilla personalizada no copian los JAR. Nombre es obligatorio; versión, autores, URL y archivo son opcionales. Buscar actualizaciones completa metadatos mediante SHA-512 y Modrinth sin instalar. Un JAR reemplazado pierde la identificación antigua hasta reconocer su contenido actual. Copiar comprueba el portapapeles; Guardar abre el selector del sistema y muestra un aviso con acceso a la carpeta.
+
+## Validación del 12-10-2026
+
+Pasaron 104 pruebas del núcleo, 52 de componentes y 31 del launcher; siete pruebas que requieren servicios o condiciones externas quedaron ignoradas. Las pruebas de regresión cubren el cambio de pestañas y de anchura en páginas de mods, recursos y shaders, además de revisión de respaldos y cancelación de Picar. Se generaron e inspeccionaron capturas del ejecutable para exportación de instancia, iconos, Picar y exportación de lista. La importación manual del ZIP en Prism/MultiMC continúa pendiente.

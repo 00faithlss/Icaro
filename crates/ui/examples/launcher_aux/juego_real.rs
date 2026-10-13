@@ -52,6 +52,8 @@ pub struct Trabajo {
     pausando: bool,
     reanudar: bool,
     preparando: bool,
+    partes: Option<(u64, u64)>,
+    bytes: bool,
 }
 pub struct Proceso {
     generacion: u64,
@@ -134,6 +136,8 @@ impl Estado {
         } else {
             (done as f32 / total as f32).clamp(0., 1.)
         };
+        t.partes = (total > 0).then_some((done, total));
+        t.bytes = text == "Descargando Java";
         t.etapa = if total > 0 && text == "Descargando Java" {
             format!("{text} · {} de {} MB", decimal_mb(done), decimal_mb(total))
         } else if total > 0 {
@@ -492,6 +496,8 @@ pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
             pausando: false,
             reanudar: false,
             preparando: true,
+            partes: None,
+            bytes: false,
         },
     );
     s.pendientes.push_back(Solicitud {
@@ -1552,7 +1558,7 @@ pub fn boton(app: &App, index: usize) -> Element<'_, Mensaje> {
             .as_millis()
     };
     componentes::boton_jugar_estado_animado(
-        app.modo.paleta(),
+        app.paleta(),
         state,
         Some(&meta),
         message,
@@ -1563,7 +1569,7 @@ pub fn indicador(app: &App) -> Option<icaro_ui::shell::DescargasActivas> {
     app.servicios.juego.indicador_descarga()
 }
 pub fn descargas(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let entries: Vec<_> = app
         .servicios
         .juego
@@ -1577,12 +1583,20 @@ pub fn descargas(app: &App) -> Element<'_, Mensaje> {
             detalle: t.etapa.clone(),
         })
         .collect();
+    let indeterminadas: Vec<usize> = app.servicios.juego.orden.iter()
+        .filter_map(|id| app.servicios.juego.trabajos.get(id))
+        .enumerate().filter_map(|(i, t)| t.partes.is_none().then_some(i)).collect();
+    let contables: Vec<(usize, usize, usize)> = app.servicios.juego.orden.iter()
+        .filter_map(|id| app.servicios.juego.trabajos.get(id)).enumerate()
+        .filter_map(|(i, t)| if t.bytes { None } else {
+            t.partes.map(|(hechos, total)| (i, total.min(usize::MAX as u64) as usize, hechos.min(usize::MAX as u64) as usize))
+        }).collect();
     let resumen = format!(
         "{} activa · {} en cola",
         usize::from(app.servicios.juego.activa.is_some()),
         app.servicios.juego.pendientes.len()
     );
-    let cuerpo = column![descargas::cola_descargas(
+    let cuerpo = column![descargas::cola_descargas_animada(
         p,
         &entries,
         &descargas::AccionesCola {
@@ -1590,7 +1604,7 @@ pub fn descargas(app: &App) -> Element<'_, Mensaje> {
             cancelar: |n| m(Accion::Cancelar(n)),
             reintentar: |n| m(Accion::Reintentar(n)),
             seguir: |n| m(Accion::Reintentar(n))
-        }
+        }, app.reducir, &indeterminadas, &contables
     )]
     .spacing(espacio::S8)
     .padding(Padding::from([espacio::S8, espacio::S12]));
@@ -1630,7 +1644,7 @@ pub fn consola(app: &App) -> Element<'_, Mensaje> {
         botones::{boton, TamBoton},
         componentes::Variante,
     };
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let id = id_consola(app);
     let instancia = id.as_ref().and_then(|id| registro(app, id));
     let nombre = instancia
@@ -1794,7 +1808,7 @@ pub fn consola(app: &App) -> Element<'_, Mensaje> {
     .into()
 }
 pub fn fallo(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let error = app
         .servicios
         .juego
@@ -2076,6 +2090,8 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
                         pausando: pausa,
                         reanudar: false,
                         preparando: false,
+                        partes: if n == 0 { Some((48, 100)) } else { None },
+                        bytes: false,
                     },
                 );
                 if n == 2 {
@@ -2195,6 +2211,8 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
                     pausando: false,
                     reanudar: false,
                     preparando: false,
+                    partes: Some((34, 100)),
+                    bytes: false,
                 },
             );
         }
@@ -2335,6 +2353,8 @@ mod tests {
             pausando: false,
             reanudar: false,
             preparando: false,
+            partes: Some((40, 100)),
+            bytes: false,
         }
     }
     fn estado() -> Estado {
@@ -2426,6 +2446,7 @@ mod tests {
             .progreso("a", 7, "Verificando Java".into(), 0, 0)
             .is_some());
         assert!(estado.trabajos["a"].preparando);
+        assert!(estado.trabajos["a"].partes.is_none());
         estado.trabajos.get_mut("a").unwrap().generacion = 8;
         assert!(estado
             .progreso("a", 7, "Mensaje de la generación retirada".into(), 99, 100)
@@ -2435,6 +2456,8 @@ mod tests {
             .is_some());
         assert_eq!(estado.trabajos["a"].estado, EstadoDescarga::Activa(0.4));
         assert!(!estado.trabajos["a"].preparando);
+        assert_eq!(estado.trabajos["a"].partes, Some((4, 10)));
+        assert!(estado.trabajos["a"].bytes);
     }
 
     #[test]

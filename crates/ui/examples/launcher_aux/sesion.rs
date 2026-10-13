@@ -285,7 +285,7 @@ fn progreso_menu(app: &App) -> f32 {
 
 pub fn vista_cuenta(app: &App) -> Element<'_, Mensaje> {
     if !app.servicios.demo { return crate::servicios::account_view(app); }
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.sesion;
     let nombre = s.estado.nombre();
     let correo = if s.estado == EstadoSesion::Activa { "mineral7@outlook.com" } else { "forjador@outlook.com" };
@@ -314,7 +314,7 @@ pub fn vista_cuenta(app: &App) -> Element<'_, Mensaje> {
 }
 
 pub fn vista_estudio(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.sesion;
     let subiendo = s
         .subiendo
@@ -348,7 +348,7 @@ pub fn con_selector<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<
     if !app.sesion.menu {
         return ventana;
     }
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let menu = cuenta::selector_cuenta(
         p,
         app.sesion.estado,
@@ -379,7 +379,7 @@ pub fn banner_jugar(app: &App) -> Option<Element<'_, Mensaje>> {
     if !app.sesion.banner_jugar || !matches!(app.sesion.estado, EstadoSesion::Vencida | EstadoSesion::CodigoVencido) {
         return None;
     }
-    let p = app.modo.paleta();
+    let p = app.paleta();
     Some(
         column![cuenta::banner_vencida(
             p,

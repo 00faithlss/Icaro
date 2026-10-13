@@ -21,6 +21,8 @@ use crate::{arrancar, config_por_defecto, instancias, lista_instancias, App, Men
 
 #[path = "selector_cambio.rs"]
 mod selector_cambio;
+#[path = "exportacion_nueva.rs"]
+pub mod exportacion_nueva;
 
 /// Pantallas que reemplazan el contenido de la ventana.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,6 +59,7 @@ pub struct Ajustes {
     pub copias_mundos: bool,
     pub limite_mb: i32,
     pub escala: i32,
+    pub metal: usize,
     pub cache_limpia: bool,
 }
 
@@ -72,6 +75,7 @@ impl Default for Ajustes {
             copias_mundos: true,
             limite_mb: 0,
             escala: 100,
+            metal: 0,
             cache_limpia: false,
         }
     }
@@ -144,12 +148,14 @@ pub struct Exportar {
     pub nombre: String,
 
 
-    pub carpetas: [bool; 4],
     pub formato: usize,
     pub destino: String,
-    pub medidas: Option<icaro_core::exportar::Medidas>,
     pub error: Option<String>,
     pub guardando: bool,
+    pub arbol: Option<icaro_core::exportar::Arbol>,
+    pub preset: usize,
+    pub hechos: u64,
+    pub total: u64,
 }
 
 /// Todo lo que cambian estas pantallas.
@@ -163,6 +169,7 @@ pub enum Accion {
     AlJugar(String),
     Limite(i32),
     Escala(i32),
+    Metal(usize),
     LimpiarCache,
     AbrirCarpetaDatos,
     // Asistente
@@ -191,14 +198,18 @@ pub enum Accion {
     ImportarConfirmar,
     // Exportar
     Exportar(usize),
+    ExportarArbol(String, Result<icaro_core::exportar::Arbol, String>),
+    ExportarPreset(usize),
+    ExportarNodo(String),
+    ExportarExpandir(String),
+    ExportarArchivo(Option<std::path::PathBuf>),
+    ExportarProgreso(u64,u64),
+    MostrarExportacion(std::path::PathBuf),
+    AbrirListaEnlace(String),
 
-    ExportarCarpeta(usize),
     ExportarCancelar,
     ExportarConfirmar,
     ExportarFormato(usize),
-    ExportarDestino(String),
-    ExportarCambiar,
-    ExportarMedidas(String, Result<icaro_core::exportar::Medidas, String>),
     Exportada(Result<std::path::PathBuf, String>),
     // Cuenta y errores
     CopiarCodigo,
@@ -303,6 +314,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     crate::servicios::Accion::ContinuarInvitado,
                 );
             }
+            Accion::Abrir(Pantalla::NoVerificados) => return crate::verificacion_real::actualizar(app,crate::verificacion_real::Accion::Abrir),
             Accion::AsistenteCrear => return crate::instancias_reales::crear(app),
             Accion::CambiarConfirmar(_) => return crate::instancias_reales::cambiar(app, false),
             Accion::CambiarCopia => return crate::instancias_reales::cambiar(app, true),
@@ -357,6 +369,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::Limite(n) => app.aj.limite_mb = n.clamp(0, 100),
         Accion::Escala(n) => app.aj.escala = n.clamp(80, 150),
+        Accion::Metal(i) => app.aj.metal = i.min(2),
         Accion::LimpiarCache => {
             app.aj.cache_limpia = true;
             app.avisar("Caché limpiada: se liberaron 380 MB.".into());
@@ -598,153 +611,121 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             }
         }
         // ---- Exportar
-        Accion::Exportar(i) => {
-            let d = &instancias()[i];
+        Accion::Exportar(index) => {
+            if app.exportar.as_ref().is_some_and(|s|s.guardando) {
+                app.avisar("Ya hay una exportación en curso; puedes verla en Descargas.".into());
+                return Task::none();
+            }
+            let Some(d) = instancias().get(index).cloned() else { return Task::none(); };
             app.exportar = Some(Exportar {
-                instancia: i,
-                nombre: d.nombre.clone(),
-
-                carpetas: [true, true, false, false],
-                formato: 0,
-                destino: std::env::var_os("USERPROFILE")
-                    .map(std::path::PathBuf::from)
-                    .map(|p| p.join("Downloads"))
-                    .unwrap_or_else(std::env::temp_dir)
-                    .to_string_lossy()
-                    .into_owned(),
-                medidas: None,
-                error: None,
-                guardando: false,
+                instancia:index, nombre:d.nombre, formato:0,
+                destino:std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).map(|p|p.join("Downloads")).unwrap_or_else(std::env::temp_dir).to_string_lossy().into_owned(),
+                error:None,guardando:false,arbol:None,preset:0,hechos:0,total:0,
             });
-            app.menu = None;
+            app.menu=None;
             if !app.servicios.demo {
-                if let Some(i) = app.servicios.instancias.registros.get(i).cloned() {
-                    let store = app.servicios.instancias.almacen.clone();
-                    let id = i.id.clone();
-                    return Task::perform(
-                        async move {
-                            tokio::task::spawn_blocking(move || {
-                                icaro_core::exportar::medir(&store, &i.id)
-                            })
-                            .await
-                            .unwrap_or_else(|_| {
-                                Err("No se pudo calcular el tamaño de la instancia.".into())
-                            })
-                        },
-                        move |r| m(Accion::ExportarMedidas(id.clone(), r)),
-                    );
+                if let Some(i)=app.servicios.instancias.registros.get(index).cloned() {
+                    let store=app.servicios.instancias.almacen.clone(); let id=i.id.clone();
+                    return Task::perform(async move {
+                        tokio::task::spawn_blocking(move ||icaro_core::exportar::arbol(&store,&i.id)).await.unwrap_or_else(|_|Err("No se pudo leer el contenido de la instancia.".into()))
+                    },move |r|m(Accion::ExportarArbol(id.clone(),r)));
+                }
+            }
+            if let Some(s)=app.exportar.as_mut() { s.arbol=Some(exportacion_nueva::demo()); }
+        }
+        Accion::ExportarArbol(id,result) => {
+            if let Some(s)=app.exportar.as_mut().filter(|s|!s.guardando) {
+                if app.servicios.instancias.registros.get(s.instancia).is_some_and(|i|i.id==id) {
+                    match result {Ok(a)=>s.arbol=Some(a),Err(e)=>s.error=Some(e)}
+                }
+            }
+        }
+        Accion::ExportarPreset(n) => {
+            if let Some(s)=app.exportar.as_mut().filter(|s|!s.guardando) {
+                if let Some(a)=s.arbol.as_mut() {a.seleccionar(exportacion_nueva::preset(n)); s.preset=n.min(4);}
+            }
+        }
+        Accion::ExportarNodo(path) => {
+            if let Some(s)=app.exportar.as_mut().filter(|s|!s.guardando) {
+                if let Some(a)=s.arbol.as_mut() {a.alternar(&path);s.preset=4;}
+            }
+        }
+        Accion::ExportarExpandir(path) => {
+            if let Some(s)=app.exportar.as_mut().filter(|s|!s.guardando) {
+                if let Some(a)=s.arbol.as_mut() {
+                    if let Some(n)=a.nodos.iter_mut().find(|n|n.carpeta&&n.ruta==path){n.abierto=!n.abierto;}
                 }
             }
         }
         Accion::ExportarFormato(f) => {
-            if let Some(s) = app.exportar.as_mut().filter(|s| !s.guardando) {
-                s.formato = f.min(1);
-            }
+            if let Some(s)=app.exportar.as_mut().filter(|s|!s.guardando){s.formato=f.min(1);s.error=None;}
         }
-        Accion::ExportarDestino(path) => {
-            if let Some(s) = app.exportar.as_mut().filter(|s| !s.guardando) {
-                s.destino = path;
-            }
+        Accion::ExportarCancelar => {
+            if !app.exportar.as_ref().is_some_and(|s|s.guardando){app.exportar=None;}
         }
-        Accion::ExportarCambiar => {
-            if let Some(s) = app.exportar.as_ref().filter(|s| !s.guardando) {
-                let path = s.destino.clone();
-                return Task::perform(
-                    async move {
-                        rfd::AsyncFileDialog::new()
-                            .set_directory(path)
-                            .pick_folder()
-                            .await
-                            .map(|f| f.path().to_string_lossy().into_owned())
-                    },
-                    |p| p.map_or(Mensaje::Nada, |p| m(Accion::ExportarDestino(p))),
-                );
+        Accion::ExportarConfirmar => {
+            let Some(s)=app.exportar.as_ref().filter(|s|!s.guardando&&s.arbol.as_ref().is_some_and(|a|a.resumen().0>0||a.nodos.is_empty())) else {return Task::none();};
+            if app.servicios.demo {app.exportar=None;app.avisar("Modo demostración: no se exportaron archivos.".into());return Task::none();}
+            if app.servicios.mods.busy.is_some() || app.servicios.instancias.operando {return Task::none();}
+            let Some(i)=app.servicios.instancias.registros.get(s.instancia).cloned() else {return Task::none();};
+            if app.servicios.juego.ocupada(&i.id) {
+                app.exportar.as_mut().unwrap().error=Some("Espera a que termine la instalación o cierra el juego antes de exportar.".into());return Task::none();
             }
+            let mut directory=std::path::PathBuf::from(&s.destino);if directory.extension().is_some_and(|e|e.eq_ignore_ascii_case("zip")){if let Some(parent)=directory.parent(){directory=parent.to_owned();}}let name=icaro_core::exportar::nombre_sugerido(&i);
+            return Task::perform(async move {
+                rfd::AsyncFileDialog::new().set_directory(directory).set_file_name(name).add_filter("Instancia ZIP", &["zip"]).save_file().await.map(|f|f.path().to_path_buf())
+            },|r|m(Accion::ExportarArchivo(r)));
         }
-        Accion::ExportarMedidas(id, result) => {
-            if let Some(s) = app.exportar.as_mut() {
-                if app
-                    .servicios
-                    .instancias
-                    .registros
-                    .get(s.instancia)
-                    .is_some_and(|i| i.id == id)
-                {
-                    match result {
-                        Ok(m) => s.medidas = Some(m),
-                        Err(e) => s.error = Some(e),
-                    }
-                }
+        Accion::ExportarArchivo(Some(path)) => {
+            let Some(s)=app.exportar.as_mut().filter(|s|!s.guardando) else {return Task::none();};
+            let Some(i)=app.servicios.instancias.registros.get(s.instancia).cloned() else {return Task::none();};
+            if app.servicios.mods.busy.is_some() || app.servicios.instancias.operando || app.servicios.juego.ocupada(&i.id) {
+                s.error=Some("La instancia está ocupada; espera o cierra el juego antes de exportar.".into());return Task::none();
+            }
+            let Some(tree)=s.arbol.clone() else {return Task::none();};
+            s.guardando=true;s.error=None;s.destino=path.to_string_lossy().into_owned();s.total=tree.resumen().1;s.hechos=0;
+            let formato=if s.formato==0 {icaro_core::exportar::Formato::Icaro}else{icaro_core::exportar::Formato::Prism};
+            let store=app.servicios.instancias.almacen.clone();
+            return Task::run(iced::stream::channel(16, move |mut output|async move {
+                use iced::futures::{StreamExt,SinkExt};
+                let (tx,mut rx)=iced::futures::channel::mpsc::unbounded();
+                let export=tokio::task::spawn_blocking(move || {
+                    let mut last=std::time::Instant::now();
+                    icaro_core::exportar::archivo(&store,&i,&tree,formato,&path,move |n,t| {
+                        if n==0 || n>=t || last.elapsed()>=std::time::Duration::from_millis(80){last=std::time::Instant::now();let _=tx.unbounded_send(m(Accion::ExportarProgreso(n,t)));}
+                    })
+                });
+                tokio::pin!(export);
+                let r=loop {tokio::select! {r=&mut export=>break r.unwrap_or_else(|_|Err("No se pudo exportar la instancia.".into())),Some(a)=rx.next()=>{let _=output.send(a).await;}}};
+                let _=output.send(m(Accion::Exportada(r))).await;
+            }),|a|a);
+        }
+        Accion::ExportarArchivo(None) => {}
+        Accion::ExportarProgreso(n,total) => {
+            if let Some(s)=app.exportar.as_mut().filter(|s|s.guardando){s.hechos=n;s.total=total;}
+        }
+        Accion::MostrarExportacion(path) => {
+            #[cfg(windows)]
+            let result=std::process::Command::new("explorer.exe").arg(format!("/select,{}",path.display())).spawn().map(|_|());
+            #[cfg(not(windows))]
+            let result=path.parent().ok_or(()).and_then(|p|std::process::Command::new("xdg-open").arg(p).spawn().map(|_|()).map_err(|_|()));
+            if result.is_err(){app.avisar("No se pudo mostrar el archivo en su carpeta.".into());}
+        }
+        Accion::AbrirListaEnlace(url) => {
+            if url.starts_with("https://modrinth.com/mod/") {
+                return crate::servicios::actualizar(app,crate::servicios::Accion::Enlace(url));
             }
         }
         Accion::Exportada(result) => match result {
-            Ok(path) => {
-                app.exportar = None;
-                app.avisar(format!("Instancia exportada: {}", path.display()));
-            }
-            Err(e) => {
-                if let Some(s) = app.exportar.as_mut() {
-                    s.guardando = false;
-                    s.error = Some(e);
-                }
-            }
+            Ok(path)=>{
+                let size=std::fs::metadata(&path).map_or(0,|m|m.len());
+                let name=app.exportar.as_ref().map(|s|s.nombre.clone()).unwrap_or_else(||"Instancia".into());
+                app.red.historial.push(icaro_ui::descargas::EntradaHistorial{nombre:format!("{name} exportada"),destino:path.display().to_string(),tamano:exportacion_nueva::tam(size),fecha:"Ahora".into()});
+                app.exportar=None;
+                app.avisar_con(format!("{name} exportada · {}",exportacion_nueva::tam(size)),"Mostrar en carpeta",m(Accion::MostrarExportacion(path)));
+            },
+            Err(e)=>{if let Some(s)=app.exportar.as_mut(){s.guardando=false;s.error=Some(e);}}
         },
-        Accion::ExportarCarpeta(i) => {
-            if let Some(s) = app.exportar.as_mut() {
-                if s.guardando {
-                    return Task::none();
-                }
-                if let Some(c) = s.carpetas.get_mut(i) {
-                    *c = !*c;
-                }
-            }
-        }
-        Accion::ExportarCancelar => {
-            if !app.exportar.as_ref().is_some_and(|s| s.guardando) {
-                app.exportar = None;
-            }
-        }
-        Accion::ExportarConfirmar => {
-            if !app.servicios.demo {
-                if app.servicios.mods.busy.is_some() || app.servicios.instancias.operando {
-                    return Task::none();
-                }
-                let Some(s) = app
-                    .exportar
-                    .as_mut()
-                    .filter(|s| !s.guardando && s.formato == 0)
-                else {
-                    return Task::none();
-                };
-                let Some(i) = app.servicios.instancias.registros.get(s.instancia).cloned() else {
-                    return Task::none();
-                };
-                if app.servicios.juego.ocupada(&i.id) {
-                    s.error = Some(
-                        "Espera a que termine la instalación o cierra el juego antes de exportar."
-                            .into(),
-                    );
-                    return Task::none();
-                }
-                let store = app.servicios.instancias.almacen.clone();
-                let options = s.carpetas;
-                let target = std::path::PathBuf::from(&s.destino);
-                s.guardando = true;
-                s.error = None;
-                return Task::perform(
-                    async move {
-                        tokio::task::spawn_blocking(move || {
-                            icaro_core::exportar::zip(&store, &i, options, &target)
-                        })
-                        .await
-                        .unwrap_or_else(|_| Err("No se pudo exportar la instancia.".into()))
-                    },
-                    |r| m(Accion::Exportada(r)),
-                );
-            }
-            app.exportar = None;
-            app.avisar("Modo demostración: no se exportaron archivos.".into());
-        }
         // ---- Cuenta y errores
         Accion::CopiarCodigo => return iced::clipboard::write("F7K2-9QXM".to_owned()),
         Accion::AbrirPaginaMicrosoft => {
@@ -954,17 +935,13 @@ pub(crate) fn con_lamina<'a>(p: Paleta, lamina: Lamina, derecha: Element<'a, Men
 }
 
 pub fn vista_pantalla<'a>(app: &'a App, pantalla: Pantalla) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     match pantalla {
         Pantalla::Primera => primera(app, p),
         Pantalla::Codigo => codigo(app, p),
         Pantalla::Fallo => fallo(app, p),
         Pantalla::ErrorTienda => error_tienda(app, p),
-        Pantalla::NoVerificados => con_lamina(
-            p,
-            Lamina::TorreReja,
-            crate::desplazable_pub(no_verificados(p)),
-        ),
+        Pantalla::NoVerificados => crate::verificacion_real::vista(app),
         Pantalla::Sincronizar => {
             con_lamina(p, Lamina::Hidra, crate::desplazable_pub(sincronizar(p)))
         }
@@ -1225,6 +1202,9 @@ fn cabecera_pasos<'a>(p: Paleta, actual: usize) -> Element<'a, Mensaje> {
 }
 
 /// Dialogo y pie de AccionesInstancia/Asistente, sin agregar otra composición.
+pub(crate) fn formulario_icono<'a>(p: Paleta, titulo: &str, cuerpo: Element<'a, Mensaje>, pie: Element<'a, Mensaje>, ancho: f32, alto: f32, cerrar: Mensaje) -> Element<'a, Mensaje> {
+    formulario(p,titulo,cuerpo,pie,ancho,alto,cerrar)
+}
 fn formulario<'a>(p: Paleta, titulo: &str, cuerpo: Element<'a, Mensaje>, pie: Element<'a, Mensaje>, ancho: f32, alto: f32, cerrar: Mensaje) -> Element<'a, Mensaje> {
     let cabeza = row![text(titulo.to_owned()).font(fuentes::TITULO).size(texto::TITLE.0).color(p.text), Space::with_width(Length::Fill), iced::widget::button(icaro_ui::iconos::icono_texto(Icono::Cerrar, Tam::Base)).padding(espacio::S2).on_press(cerrar).style(icaro_ui::estilo::boton_fantasma(p))].align_y(Alignment::Center);
     container(container(column![container(cabeza).padding(Padding::from([espacio::S4, espacio::S6])), container(cuerpo).padding(Padding::from([espacio::S2, espacio::S6])).height(Length::Fill), container(Space::new(Length::Fill, 1)).style(icaro_ui::estilo::bloque(p.border)), container(pie).padding(Padding::from([espacio::S4, espacio::S6]))]).padding(2)).width(ancho).height(alto).style(icaro_ui::estilo::flotante(p)).into()
@@ -1237,7 +1217,7 @@ fn selector_version_completo<'a>(
     seleccion: &str,
     cambio: bool,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let versiones = crate::instancias_reales::versiones(app, tipo);
     // Las tarjetas ya guardan el estado tras instalar. Leer y comprobar todos
     // los archivos de Minecraft durante cada frame bloqueaba el selector.
@@ -1413,7 +1393,7 @@ fn selector_loader_completo<'a>(
     s: &Asistente,
     minecraft: &str,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let catalog = app.servicios.instancias.loaders.get(minecraft);
     let tarjeta = |index: usize| -> Element<'a, Mensaje> {
         let (nombre, ayuda, muestra) = LOADERS[index];
@@ -1509,7 +1489,7 @@ fn selector_loader_completo<'a>(
 }
 
 pub fn asistente<'a>(app: &'a App, s: &'a Asistente) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let versiones = crate::instancias_reales::versiones(app, s.tipo_version);
     let version = versiones.get(s.version).cloned().unwrap_or_default();
     let selector_version =
@@ -1639,7 +1619,7 @@ pub fn asistente<'a>(app: &'a App, s: &'a Asistente) -> Element<'a, Mensaje> {
 }
 
 pub fn importar<'a>(app: &'a App, s: &'a Importar) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let cuerpo: Element<Mensaje> = match s.origen {
         0 => {
             let contenido: Element<Mensaje> = match s.archivo {
@@ -1706,143 +1686,7 @@ pub fn importar<'a>(app: &'a App, s: &'a Importar) -> Element<'a, Mensaje> {
 }
 
 pub fn exportar<'a>(app: &'a App, s: &'a Exportar) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
-    let size = |n: usize| {
-        s.medidas
-            .as_ref()
-            .map_or("—".into(), |m| tam_exportado(m.bytes[n]))
-    };
-    let mut rows = column![row![
-        iced::widget::checkbox("Mods y configuración", true)
-            .icon(componentes::icono_casilla())
-            .size(20)
-            .style(icaro_ui::estilo::casilla(p))
-            .width(Length::Fill),
-        text(size(0))
-            .font(fuentes::MONO)
-            .size(texto::MONO_SM.0)
-            .color(p.text_muted)
-    ]
-    .align_y(Alignment::Center)]
-    .spacing(12);
-    let worlds = s
-        .medidas
-        .as_ref()
-        .map_or("Mundos".into(), |m| format!("Mundos ({})", m.mundos));
-    let captures = s
-        .medidas
-        .as_ref()
-        .map_or("Capturas".into(), |m| format!("Capturas ({})", m.capturas));
-    for (n, label) in [
-        worlds,
-        "Opciones del juego y atajos".into(),
-        captures,
-        "Registros".into(),
-    ]
-    .iter()
-    .enumerate()
-    {
-        rows = rows.push(
-            row![
-                container(casilla(p, label, s.carpetas[n], move |_| m(
-                    Accion::ExportarCarpeta(n)
-                )))
-                .width(Length::Fill),
-                text(size(n + 1))
-                    .font(fuentes::MONO)
-                    .size(texto::MONO_SM.0)
-                    .color(p.text_muted)
-            ]
-            .align_y(Alignment::Center),
-        );
-    }
-    let total = s.medidas.as_ref().map_or("Calculando…".into(), |m| {
-        tam_exportado(
-            m.bytes[0]
-                + s.carpetas
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, b)| **b)
-                    .map(|(n, _)| m.bytes[n + 1])
-                    .sum::<u64>(),
-        )
-    });
-    let mut body = column![
-        componentes::segmentado(p, &["Instancia .zip", "Modpack .mrpack"], s.formato, |f| m(
-            Accion::ExportarFormato(f)
-        )),
-        rows,
-        etiqueta(p, "Guardar en"),
-        row![
-            container(componentes::campo_con_icono(
-                p,
-                Icono::Carpeta,
-                "Carpeta de destino",
-                &s.destino,
-                |p| m(Accion::ExportarDestino(p))
-            ))
-            .width(Length::Fill),
-            componentes::boton(
-                p,
-                "Cambiar",
-                Variante::Secundario,
-                (!s.guardando).then(|| m(Accion::ExportarCambiar))
-            )
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-    ]
-    .spacing(20);
-    if s.formato == 1 {
-        body=body.push(text("La exportación .mrpack estará disponible cuando se pueda instalar Minecraft y su loader.").size(texto::BODY_SM.0).color(p.text_muted));
-    }
-    if let Some(e) = &s.error {
-        body = body.push(text(e).size(texto::BODY_SM.0).color(p.warning));
-    }
-    let pie = row![
-        text(format!("Tamaño estimado · {total}"))
-            .font(fuentes::MONO)
-            .size(texto::MONO_SM.0)
-            .color(p.text_muted)
-            .width(Length::Fill),
-        componentes::boton(
-            p,
-            "Cancelar",
-            Variante::Secundario,
-            (!s.guardando).then(|| m(Accion::ExportarCancelar))
-        ),
-        componentes::boton_con_icono(
-            p,
-            Icono::Subir,
-            if s.guardando {
-                "Exportando…"
-            } else {
-                "Exportar"
-            },
-            Variante::Primario,
-            (!s.guardando && s.formato == 0 && app.servicios.mods.busy.is_none())
-                .then(|| m(Accion::ExportarConfirmar)),
-            false
-        )
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center);
-    formulario(
-        p,
-        &format!("Exportar {}", s.nombre),
-        body.into(),
-        pie.into(),
-        560.,
-        if s.formato == 1 || s.error.is_some() {
-            490.
-        } else {
-            450.
-        },
-        m(Accion::ExportarCancelar),
-    )
-}
-fn tam_exportado(n:u64) -> String {
-    if n>=1_073_741_824 { format!("{:.1} GB",n as f64/1_073_741_824.) } else if n>=1_048_576 { format!("{:.1} MB",n as f64/1_048_576.) } else { format!("{} KB",n.div_ceil(1024)) }
+    exportacion_nueva::vista(app,s)
 }
 
 // ------------------------------------------------------------- ajustes
@@ -1852,7 +1696,7 @@ pub const SECCIONES: [&str; 8] = [
 ];
 
 pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let a = &app.aj;
     let ajustes = app.ajuste.min(SECCIONES.len() - 1);
     let titulo = SECCIONES[ajustes];
@@ -1872,16 +1716,12 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
                     componentes::boton(p, "Abrir carpeta", Variante::Secundario, Some(m(Accion::AbrirCarpetaDatos)))));
         }
         1 => {
-            col = col
-                .push(fila_ajuste(p, "Tema", "Tinta es oscuro, Piedra es claro. Sistema sigue a tu equipo.",
-                    componentes::segmentado(p, &["Tinta", "Piedra", "Sistema"], app.tema, Mensaje::Tema)))
-                .push(fila_ajuste(p, "Reducir movimiento", "Quita animaciones; el Umbral pasa a ser un fundido.",
-                    componentes::interruptor(p, app.reducir, Mensaje::Reducir)))
-                .push(fila_ajuste(p, "Escala de la interfaz", "De 80 a 150 %. Se aplica al reiniciar.",
-                    row![
-                        componentes::contador(p, a.escala, m(Accion::Escala(a.escala - 10)), m(Accion::Escala(a.escala + 10))),
-                        text(format!("{} %", a.escala)).font(fuentes::MONO).size(texto::MONO.0).color(p.text),
-                    ].spacing(espacio::S3).align_y(Alignment::Center).into()));
+            col = col.push(
+                componentes::apariencia(p, app.tema, a.metal, a.escala,
+                    Mensaje::Tema, |i| m(Accion::Metal(i)), |n| m(Accion::Escala(n))),
+            ).push(Space::with_height(espacio::S6))
+             .push(fila_ajuste(p, "Reducir movimiento", "Quita animaciones; el Umbral pasa a ser un fundido.",
+                    componentes::interruptor(p, app.reducir, Mensaje::Reducir)));
         }
         2 => {
             col = col
@@ -1989,61 +1829,6 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
 
 fn regla<'a>(p: Paleta) -> Element<'a, Mensaje> {
     container(Space::new(Length::Fill, 1.0)).style(icaro_ui::estilo::bloque(p.border)).into()
-}
-
-fn no_verificados<'a>(p: Paleta) -> Element<'a, Mensaje> {
-    let archivo = |nombre: &str, meta: &str, accion: &str| -> Element<'a, Mensaje> {
-        column![
-            row![
-                column![
-                    text(nombre.to_owned()).font(fuentes::MONO).size(texto::MONO.0).color(p.text),
-                    text(meta.to_owned()).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
-                ]
-                .spacing(espacio::S1)
-                .width(Length::Fill),
-                componentes::boton(p, accion, Variante::Secundario, Some(Mensaje::Nada)),
-                componentes::boton(p, "Confiar", Variante::Fantasma, Some(Mensaje::Nada)),
-            ]
-            .spacing(espacio::S3)
-            .align_y(Alignment::Center),
-            regla(p),
-        ]
-        .spacing(espacio::S3)
-        .into()
-    };
-    let malicioso = container(
-        row![
-            column![
-                text("free-cosmetics.jar").font(fuentes::MONO).size(texto::MONO.0).color(p.error),
-                text("Modrinth lo marcó como malicioso. Lo desactivamos.").size(texto::BODY_SM.0).color(p.error),
-            ]
-            .spacing(espacio::S1)
-            .width(Length::Fill),
-            insignia(p, Estado::Error, "Desactivado"),
-            componentes::boton(p, "Quitar", Variante::Peligro, Some(Mensaje::Nada)),
-        ]
-        .spacing(espacio::S3)
-        .align_y(Alignment::Center),
-    )
-    .padding(espacio::S3)
-    .width(Length::Fill)
-    .style(move |_: &iced::Theme| iced::widget::container::Style {
-        background: Some(iced::Background::Color(p.error_soft)),
-        ..Default::default()
-    });
-    column![
-        text("3 ARCHIVOS SIN\nVERIFICAR").font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
-        text("No pudimos verificar el origen de estos mods. Pueden ser legítimos (copiados a mano), pero conviene reemplazarlos por la versión de Modrinth.")
-            .size(texto::BODY.0)
-            .color(p.text_muted),
-        regla(p),
-        archivo("custom-hud-1.4.jar", "412 KB · sha1 8f2c…a91e · copiado a mano", "Buscar en Modrinth"),
-        archivo("optifine-1.21.4.jar", "7,1 MB · sha1 03be…77d0 · optifine.net", "Buscar alternativa"),
-        malicioso,
-        row![componentes::boton(p, "Volver", Variante::Fantasma, Some(m(Accion::Cerrar)))],
-    ]
-    .spacing(espacio::S4)
-    .into()
 }
 
 fn sincronizar<'a>(p: Paleta) -> Element<'a, Mensaje> {
@@ -2222,7 +2007,7 @@ fn integridad<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
 
 /// Diálogo para cambiar la versión de una instancia, con aviso de riesgo.
 pub fn cambiar_version<'a>(app: &'a App, i: usize) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let Some(c) = app.servicios.instancias.cambio.as_ref() else {
         return Space::new(0, 0).into();
     };

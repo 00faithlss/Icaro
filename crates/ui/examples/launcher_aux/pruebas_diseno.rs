@@ -16,6 +16,10 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
     a.umbral = None;
     let scene = std::env::var("ICARO_VISTA_DISENO").unwrap_or_else(|_| "asistente".into());
     match scene.as_str() {
+        s if s.starts_with("exportar-lista-") => crate::exportar_lista_mods::preparar_diseno(&mut a,s),
+        "icono-generado" | "icono-imagen" => crate::icono_instancia::preparar_diseno(&mut a,&scene),
+        "exportar-lista-html" | "exportar-lista-json" | "exportar-lista-personalizado" => crate::exportar_lista_mods::preparar_diseno(&mut a,&scene),
+        "noverif" => crate::verificacion_real::preparar_diseno(&mut a),
         "actualizacion" => crate::actualizacion_real::preparar_diseno(&mut a),
         "actualizacion-al-cerrar" => crate::actualizacion_real::preparar_diseno_al_cerrar(&mut a),
         s if s.starts_with("recursos-") || s.starts_with("shaders-") => {
@@ -38,22 +42,14 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
             a.exportar = Some(pantallas::Exportar {
                 instancia: 0,
                 nombre: "Supervivencia".into(),
-                carpetas: [true, true, false, false],
                 formato: 0,
                 destino: "C:\\Users\\Mineral\\Descargas".into(),
-                medidas: Some(icaro_core::exportar::Medidas {
-                    bytes: [
-                        312 * 1048576,
-                        1_600_000_000,
-                        48 * 1024,
-                        412 * 1048576,
-                        22 * 1048576,
-                    ],
-                    mundos: 3,
-                    capturas: 41,
-                }),
                 error: None,
                 guardando: false,
+                arbol: Some(pantallas::exportacion_nueva::demo()),
+                preset: 0,
+                hechos: 0,
+                total: 0,
             })
         }
         "archivos" | "archivos-renombrar" => {
@@ -67,14 +63,27 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
         }
         _ => preparar_mods(&mut a, &scene),
     }
+    let cambiar_versiones = scene.starts_with("pagina-versiones-");
+    if cambiar_versiones {
+        a.reducir=false;
+        a.servicios.ficha.tab=crate::ficha::Pestana::Descripcion;
+        let (tab,kind,loader)=if scene.contains("recursos"){(3,"resourcepack","minecraft")}else if scene.contains("shaders"){(8,"shader","iris")}else{(2,"mod","fabric")};
+        a.editor=Some(tab);
+        if let Some((project,versions))=&mut a.servicios.detail {
+            project.project_type=kind.into();
+            for v in versions {v.loaders=vec![loader.into()];}
+        }
+    }
+    crate::componentes_nuevos_qa::preparar(&mut a,&scene);
+    let transicion = if cambiar_versiones {Task::perform(async {tokio::time::sleep(std::time::Duration::from_millis(200)).await;}, |_|Mensaje::Servicio(crate::servicios::Accion::FichaPestana(crate::ficha::Pestana::Versiones)))} else {Task::none()};
     (
         a,
-        Task::perform(
+        Task::batch([transicion,Task::perform(
             async {
                 tokio::time::sleep(std::time::Duration::from_millis(800)).await;
             },
             |_| Mensaje::CapturarDiseno,
-        ),
+        )]),
     )
 }
 
@@ -229,7 +238,7 @@ pub(crate) fn preparar_cambio(a: &mut App, scene: &str) {
         a.ventana = Size::new(940., 720.);
     }
 }
-fn preparar_mods(a: &mut App, scene: &str) {
+pub(crate) fn preparar_mods(a: &mut App, scene: &str) {
     use icaro_core::{
         instancias::Instancia,
         modrinth::{Hit, Project, Version},

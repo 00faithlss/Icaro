@@ -1,6 +1,6 @@
 # Roadmap del System Design
 
-Actualizado el **12-10-2026**. Referencias: `icaro-design-system.rar` y `icaro-componentes-nuevos.zip` (`CambioVersionInstancia`, `InfoProyecto` y `PaginaMod`), sus componentes, definiciones y previews originales. Este archivo sigue la implementación del diseño; el [roadmap general](../README.md#roadmap) sigue las funciones del launcher.
+Actualizado el **12-10-2026**. Referencias: `icaro-design-system.rar` y `icaro-componentes-nuevos.zip` (`CambioVersionInstancia`, `InfoProyecto` y `PaginaMod`), `icaro-exportar-instancia.zip`, `icaro-icono-instancia.zip` e `icaro-exportar-lista-mods.zip`, sus componentes, definiciones y previews originales. Este archivo sigue la implementación del diseño; el [roadmap general](../README.md#roadmap) sigue las funciones del launcher.
 
 Las siguientes entregas deben conectar y completar esos diseños, conservando sus composiciones, iconos, tipografías, colores y controles. Las diferencias conocidas se registran para evaluación antes de sustituir una vista.
 
@@ -17,6 +17,16 @@ Las siguientes entregas deben conectar y completar esos diseños, conservando su
 Una vista puede estar implementada visualmente y tener su función pendiente. Por ejemplo, el asistente instala Vanilla, pero todavía no instala loaders; el diálogo de exportación genera ZIP, pero no MRPACK.
 
 ## Avances recientes
+
+- [x] Tiendas de mods, resourcepacks y shaders con composición y cesta compartidas; filtros de entorno distinguen cliente, servidor y ambos.
+- [x] Apariencia, insignias, progreso y toasts recuperan los componentes originales y sus estados reales.
+- [x] Servidores muestra EnConstruccion en modo real; la maqueta de servidores permanece separada.
+- [x] Rutas legibles y `instance.cfg`, migración conservadora e identificación de archivos no verificados.
+- [x] ExportarInstancia nuevo con árbol, selección por grupos, presets y ZIP Ícaro/Prism.
+- [x] IconoInstancia: editor y menú, imagen/capturas/generado, recorte, estilos y guardado reversible.
+- [x] ExportarListaMods: seis formatos, selección, campos, plantilla y metadatos consultados sin instalar.
+- [x] Corregido el cierre al cambiar a Versiones: la página reconcilia correctamente el tipo del panel desplazable al cambiar de pestaña o tamaño de ventana.
+
 
 - [x] Paso 1 con `SelectorVersion` y paso 2 con `SelectorLoader`, separados; versiones oficiales de Fabric, Quilt, NeoForge y Forge, sin valores de muestra en modo real.
 - [x] `CambioVersionInstancia` del ZIP nuevo: lista virtualizada, compatibilidad de todos los mods por lotes en segundo plano, caché, recomendación desde 95 %, loader seleccionable y actualizaciones opcionales. Respaldo obligatorio al bajar, copia y recuperación si falla la publicación de los cambios.
@@ -47,11 +57,11 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | Iconografía Pixelarticons | Implementado | Iconos originales de secciones y acciones; los botones restaurados usan el mismo sistema. |
 | `Boton`, `Campo`, `Selector`, `Interruptores` | Implementado | Controles compartidos, variantes, casillas cuadradas, interruptores y rayado de deshabilitados. |
 | `Chips`, `Insignia`, `Pestanas`, `Contador`, `Senal` | Implementado | Filtros, estados acompañados de texto, pestañas y contadores usados en las vistas. |
-| `Progreso`, `BloqueCodigo` | Parcial | Progreso real en autenticación, mods, Vanilla y Java. Falta la pantalla completa de integridad y otras tareas. |
+| `Progreso`, `BloqueCodigo` | Parcial | Bloques por conteos, continuo por bytes, indeterminado, spinner y esqueleto con animación y movimiento reducido. Operaciones reales de mods, Vanilla y Java conectadas; integridad completa pendiente. |
 | `Tabla` | Parcial | Tabla de versiones en la página del proyecto. Falta completar su uso y navegación en las demás tablas del diseño. |
 | `Tarjeta`, `Avatar` | Parcial | Tarjetas y representaciones de respaldo disponibles; iconos de proyectos y creadores desde Modrinth. Falta la textura real de la cuenta y los datos de servidores. |
 | `DeslizadorMemoria` | Parcial | Configuración por instancia guardada; memoria mínima/máxima y Metaspace aplicados al proceso; límites según RAM real en Windows/Linux. Java compatible detectado o descargado. Falta completar recomendaciones y advertencias de reserva para sistema/otras instancias. |
-| `Dialogo`, `MenuContextual`, `Toast` | Implementado | Diálogos con velo, menús y avisos; acciones de instancia y confirmación de actualizaciones. Aviso de Deshacer de mods de diez segundos. |
+| `Dialogo`, `MenuContextual`, `Toast` | Implementado | Diálogos con velo y menús. Cola de hasta tres toasts con entrada, fundido, pausa al pasar el cursor, Escape y acciones. Errores con detalle; Deshacer de mods de diez segundos. |
 | `Tooltip` | Parcial | Ayudas disponibles en algunos controles; falta cubrir todos los botones de solo icono y el modo angosto. |
 | `Banda`, `Detalle`, `Lamina`, `Cover` | Implementado | Grabados, recortes, portadas de respaldo y composición de títulos sobre bloques propios. Las capturas reales como portada siguen pendientes. |
 | `Lupa` | Parcial | Utilidades existentes y zoom del visor. La lupa sobre las láminas del launcher todavía no está aplicada. |
@@ -88,7 +98,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `MundosInstancia` | Maqueta | Lista y panel de copias disponibles. Falta leer mundos, gestionar copias/restauración y conectar sus acciones al juego y disco. |
 | `Capturas` | Parcial | Galería original conectada a las PNG que Minecraft guarda por instancia, filtros por identidad, refresco en segundo plano y visor con el original. Copiar imagen/archivos y abrir carpeta funcionan en Windows. Falta eliminación reversible y copia de imágenes en Linux. |
 | `BotonJugar`, `Umbral` | Parcial | Estados originales conectados a instalación, preparación y ejecución Vanilla; Jugar sin MB, Preparando al verificar archivos guardados e Instalando solo al descargar archivos. En Windows el Umbral espera la ventana del proceso Minecraft y retira la capa completa con fundido, sin cortina ni remontar la vista, según la corrección solicitada por el usuario. Falta detección equivalente en Linux y cerrar launcher conservando juego mediante bandeja. |
-| `Picar` | Parcial | Animación y eliminación de instancia con papelera conectadas. Faltan los recorridos de eliminación de mundos y archivos previstos en el diseño. |
+| `Picar` | Parcial | Diez etapas y eliminación de instancia/modpack instalado manteniendo el botón; soltar cancela. Revisa respaldos de mundos y exige confirmación si no hay copia vigente. Papelera y Deshacer. Faltan los recorridos de mundos y archivos individuales. |
 
 ## Mods y modpacks
 
@@ -115,12 +125,12 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `EstudioSkin` | Maqueta | Composición y controles disponibles; faltan textura, modelo/capas reales, validación de PNG y aplicación a Microsoft/Minecraft. |
 | `PantallaAjustes`, `FilaAjuste` | Parcial | Índice y filas existentes; los ajustes de Java por instancia se guardan. Falta persistir las preferencias generales y conectar los controles que todavía describen servicios no implementados. |
 | `AjustesGenerales` | Parcial | Controles disponibles, abrir carpeta real y mantener/minimizar al iniciar Java. Faltan persistencia general, idioma completo, inicio con el sistema y bandeja para cerrar launcher conservando el juego. |
-| `Apariencia` | Parcial | Tinta/Piedra y reducir movimiento disponibles. Falta completar seguir el tema del sistema, Mármol/Plata/Bronce y aplicar/validar escala de 80 a 150 %. |
+| `Apariencia` | Implementado | Tinta/Piedra/Sistema, Mármol/Plata/Bronce, escala de 80 a 150 % y reducir movimiento guardados; seguimiento del tema de Windows. Validación manual de escritorios Linux pendiente. |
 | `AjustesJava` | Parcial | Configuración por instancia guardada y aplicada; selección automática según metadatos, detección de Java del sistema y descarga verificada del runtime oficial. Ajustes/editor muestran runtimes reales guardados; sliders limitados por la RAM real. Faltan agregar/probar rutas manuales desde Ajustes y completar las recomendaciones de memoria. |
 | `AjustesAlmacenamiento`, `Almacenamiento` | Maqueta | Pantalla disponible con cifras de muestra. Faltan tamaños reales, barra por tramas, limpieza y traslado seguro de la carpeta de instancias. Los tamaños reales del diálogo ZIP no completan esta pantalla. |
 | `ActualizacionLauncher` | Parcial | Pantalla y banner con versiones y notas reales; consulta GitHub, verifica tamaño/SHA-256 y aplica ahora o al cerrar con recuperación del ejecutable anterior. Requiere release portable y `latest.json` publicados; automático para Windows x86-64. |
 | `Integridad` | Maqueta | Cuadrícula y progreso de ejemplo disponibles. Falta revisar/reparar todos los archivos reales de una instancia; la verificación de mods descargados ya existe en otro flujo. |
-| `ArchivosNoVerificados` | Maqueta | Composición disponible; se preservan los mods locales ajenos a Ícaro. Falta identificación por hash, lista real y acciones de buscar, confiar o quitar. |
+| `ArchivosNoVerificados` | Implementado | Lista real con SHA-512, identificación por Modrinth, caché, confiar y quitar/deshacer. Sin evidencia de malware no se inventa una acusación. Integración con futuros importes pendiente. |
 | `PantallaError`, `InformeFallo` | Parcial | Fallos reales del juego con código de salida, causa desconocida cuando corresponde, registro y copia de informe en la composición original. Falta diagnóstico específico de conflictos y exportación del informe a archivo. |
 | `Gabinete` | Parcial | Mosaico y visor integrados en Acerca de. Faltan sus usos originales como fondo de bienvenida en ventanas grandes y selector completo de portada, además del acercamiento y Lupa previstos. |
 | `Movimiento`, `TransicionesPantalla` | A evaluar | Losa, avisos, Picar y Umbral implementados parcialmente. El launcher cambia contenido con fundido; Muro/Rastrillo/Prensa y Lupa no están aplicados como establece la referencia. Reducir movimiento existe; falta revisar el recorrido completo. |
@@ -130,7 +140,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 1. **Instancia jugable:** extender el instalador a loaders manteniendo los componentes ya conectados; repetir en Linux el recorrido de Vanilla confirmado en Windows. Completar historial de descargas y unificar los instaladores en la cola global.
 2. **Editor y acciones:** completar General/Java, recuperación de Archivos/Capturas, prioridad de Recursos y Mundos; importar/clonar y exportar MRPACK. El cambio de versión con respaldo/copia ya está conectado; falta instalar el loader elegido.
 3. **Cuenta:** evaluar la diferencia de PantallaCuenta y conectar su composición original junto con EstudioSkin y todos los estados de sesión.
-4. **Servicios adicionales:** servidores, red/sincronización, integridad, archivos sin verificar, almacenamiento y bandeja. Publicar los artefactos para validar la actualización del launcher ya implementada.
+4. **Servicios adicionales:** servidores, red/sincronización, integridad, integración de archivos sin verificar con futuros importes, almacenamiento y bandeja. Publicar los artefactos para validar la actualización del launcher ya implementada.
 5. **Revisión transversal:** ventanas angostas, escala, metales, foco y teclado, tooltips, virtualización y movimientos pendientes; comprobar ambas paletas.
 
 ## Diferencias para evaluar

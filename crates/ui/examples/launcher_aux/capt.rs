@@ -384,7 +384,7 @@ fn prensa(app: &App) -> f32 {
 /// Contexto de pintura de los estados vacíos de una pantalla.
 pub fn contexto(app: &App) -> Contexto {
     Contexto {
-        p: app.modo.paleta(),
+        p: app.paleta(),
         ventana: app.ventana.width,
         prensa: prensa(app),
     }
@@ -762,7 +762,7 @@ fn ancho_contenido(app: &App) -> f32 {
 
 /// Galería (o su estado vacío), limitada a una instancia si se indica.
 fn cuerpo<'a>(app: &'a App, instancia: Option<String>, con_filtro: bool) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let ctx = contexto(app);
     let est = &app.capt;
     if est.vacio || est.capturas.is_empty() {
@@ -814,7 +814,7 @@ fn cuerpo<'a>(app: &'a App, instancia: Option<String>, con_filtro: bool) -> Elem
 
 /// Pantalla Capturas.
 pub fn pantalla(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let nombre = instancia_actual(app);
     let contenido = column![
         container(
@@ -840,7 +840,7 @@ pub fn pestana(app: &App) -> Element<'_, Mensaje> {
 
 /// Gabinete de grabados, con su encabezado.
 pub fn pared(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     column![
         gabinete::encabezado(p),
         gabinete::gabinete(
@@ -861,7 +861,7 @@ pub fn pared(app: &App) -> Element<'_, Mensaje> {
 
 /// El visor reemplaza la ventana para excluir el fondo de los eventos.
 pub fn capa<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let mut resultado = ventana;
     if let Some(v) = &app.capt.visor {
         if let Some(c) = captura_del_visor(app).and_then(|i| app.capt.capturas.get(i)) {
@@ -996,7 +996,7 @@ fn con_banda<'a>(
     titulo: &str,
     vacio: Element<'a, Mensaje>,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     column![
         icaro_ui::laminas::banda(p, lamina, titulo, Some(0)),
         crate::suave(app, container(vacio).padding(vacios::margen())),
@@ -1053,7 +1053,7 @@ pub fn vacio_descargas(app: &App) -> Element<'_, Mensaje> {
 }
 
 pub fn vacio_consola(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     column![
         container(
             text("CONSOLA")

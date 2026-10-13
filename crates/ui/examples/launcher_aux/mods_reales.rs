@@ -14,7 +14,7 @@ use icaro_ui::{
 };
 use iced::futures::SinkExt;
 use iced::{
-    widget::{column, text},
+    widget::{column, row, text},
     Element, Task,
 };
 use std::collections::BTreeMap;
@@ -298,7 +298,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 }
                 Err(e) => {
                     app.servicios.mods.errores.insert(i.id, e.clone());
-                    app.avisar(e);
+                    app.avisar_error(e);
                 }
             }
         }
@@ -384,7 +384,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 }
                 Err(e) => {
                     app.servicios.mods.errores.insert(id, e.clone());
-                    app.avisar(e);
+                    app.avisar_error(e);
                 }
             }
         }
@@ -407,7 +407,7 @@ pub fn accion_proyecto<'a>(
     project: &str,
     version: Option<&str>,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let old = lista(app).iter().find(|m| m.project_id == project);
     let update =
         version.is_none() && old.is_some() && updates(app).iter().any(|v| v.project_id == project);
@@ -444,13 +444,18 @@ pub fn vista_recursos(app: &App) -> Element<'_, Mensaje> {
 }
 
 pub fn estado_operacion(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let mut body = column![].spacing(espacio::S2);
     if app.servicios.mods.busy.is_some() {
-        body = body.push(text(&app.servicios.mods.progreso).color(p.text_muted));
+        body = body.push(row![icaro_ui::progreso::spinner(p, app.reducir),
+            text(&app.servicios.mods.progreso).color(p.text_muted)]
+            .spacing(espacio::S3).align_y(iced::Alignment::Center))
+            .push(icaro_ui::progreso::indeterminado(p, app.reducir));
     }
     if instancia(app).is_some_and(|i| app.servicios.mods.comprobando.contains_key(&i.id)) {
-        body = body.push(text("Comprobando actualizaciones…").color(p.text_muted));
+        body = body.push(row![icaro_ui::progreso::spinner(p, app.reducir),
+            text("Comprobando actualizaciones…").color(p.text_muted)]
+            .spacing(espacio::S3).align_y(iced::Alignment::Center));
     }
     if let Some(error) = instancia(app).and_then(|i| app.servicios.mods.errores.get(&i.id)) {
         body = body.push(text(error).color(p.warning));
@@ -464,7 +469,7 @@ pub fn capa<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, Mensa
     let Some((i, versions)) = &app.servicios.mods.confirmacion else {
         return window;
     };
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let body = column![text(format!("Se actualizarán {} mods de {}.", versions.len(), i.nombre)).color(p.text), text("Las nuevas versiones pueden ser incompatibles con otros mods. ¿Quieres continuar?").color(p.warning), text("Los archivos actuales se conservan si falla la descarga o no se pueden resolver las dependencias.").color(p.text_muted)].spacing(espacio::S4);
     crate::con_velo_losa(
         p,

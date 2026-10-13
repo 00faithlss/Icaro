@@ -16,7 +16,7 @@ use icaro_ui::{
     tema::{espacio, texto},
 };
 use iced::{
-    widget::{button, column, container, keyed_column, row, Space},
+    widget::{button, column, container, row, Space},
     Element, Length, Padding,
 };
 
@@ -263,7 +263,7 @@ fn lateral<'a>(app: &'a App, project: &'a Project) -> Element<'a, Mensaje> {
     column![crate::info_proyecto::vista(app, project, 287.),crate::info_proyecto::mas_creador(app)].spacing(28).width(Length::Fill).into()
 }
 fn filtros<'a>(app: &'a App, project: &Project) -> Element<'a, Mensaje> {
-    let p=app.modo.paleta(); let s=&app.servicios.ficha;
+    let p=app.paleta(); let s=&app.servicios.ficha;
     let bound=app.editor.is_some() && !s.mostrar_todas;
     let (mc,current_loader)=if app.editor.is_some() {crate::mods_reales::instancia(app).map(|i|(i.minecraft.clone(),i.loader.clone())).unwrap_or_else(||crate::juego_de_instancia(app))}else{(s.minecraft.clone(),s.loader.clone())};
     let mut games=if bound {vec![mc.clone()]} else {vec!["Todas las versiones".to_owned()]};
@@ -292,7 +292,7 @@ fn versiones_tabla<'a>(
     project: &Project,
     versions: &'a [Version],
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios.ficha;
     let visible = s.visibles(versions);
     let cabecera = |label: &str| text(label.to_uppercase()).font(fuentes::ETIQUETA)
@@ -465,7 +465,7 @@ fn versiones_tabla<'a>(
     .into()
 }
 fn dependencias<'a>(app:&'a App,versions:&'a [Version])->Element<'a,Mensaje>{
-    let p=app.modo.paleta();let s=&app.servicios.ficha;
+    let p=app.paleta();let s=&app.servicios.ficha;
     let pack=app.servicios.detail.as_ref().is_some_and(|(p,_)|matches!(p.project_type.as_str(),"resourcepack"|"shader"));
     let Some(version)=versions.iter().find(|v|Some(&v.id)==s.seleccionada.as_ref())else{return text("No hay una versión seleccionada.").color(p.text_muted).into();};
     if version.dependencies.is_empty(){return text("Esta versión no declara dependencias en Modrinth.").color(p.text_muted).into();}
@@ -498,7 +498,7 @@ fn cambios<'a>(
     versions: &'a [Version],
     dependencias: bool,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios.ficha;
     let visibles = s.visibles(versions);
     let opciones: Vec<_> = visibles.iter().map(|v| opcion(v)).collect();
@@ -629,7 +629,7 @@ fn cambios<'a>(
     body.into()
 }
 fn galeria<'a>(app: &'a App, project: &'a Project) -> Element<'a, Mensaje> {
-    let p=app.modo.paleta(); let s=&app.servicios.ficha;
+    let p=app.paleta(); let s=&app.servicios.ficha;
     let start=s.galeria/GALLERY_PAGE*GALLERY_PAGE;
     let cell_width=((app.ventana.width-220.-96.-320.-48.).max(240.)-32.)/3.;
     let mut body=column![].spacing(16).width(Length::Fill);
@@ -701,7 +701,7 @@ pub fn vista<'a>(
     versions: &'a [Version],
     kind: Kind,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios.ficha;
     let mut tabs = vec![
         Pestana::Descripcion,
@@ -741,7 +741,9 @@ pub fn vista<'a>(
         Pestana::Cambios => cambios(app, project, versions, false),
         Pestana::Dependencias => dependencias(app, versions),
     };
-    let main = container(crate::con_entrada(app, body)).width(Length::Fill).max_width(if s.tab==Pestana::Descripcion { 680 } else { 10000 });
+    // Un contenido desplazable tiene altura intrínseca; el velo y las reglas
+    // de filas no deben convertirlo en Fill al cambiar de pestaña.
+    let main = container(crate::con_entrada(app, body)).height(Length::Shrink).width(Length::Fill).max_width(if s.tab==Pestana::Descripcion { 680 } else { 10000 });
     let side = lateral(app, project);
     let mut metadata=row![].spacing(6).align_y(iced::Alignment::Center);
     let creator=s.organizacion.as_ref().map(|o|(o.name.as_str(),format!("https://modrinth.com/organization/{}",o.id))).or_else(||s.miembros.iter().find(|m|m.is_owner).or_else(||s.miembros.first()).map(|m|(m.user.name.as_deref().unwrap_or(&m.user.username),format!("https://modrinth.com/user/{}",m.user.id))));
@@ -806,13 +808,16 @@ pub fn vista<'a>(
     let contenido_principal = if s.tab==Pestana::Versiones && ancho<680. {
         // Una sola área de desplazamiento conserva la medida mínima de las
         // columnas sin partir encabezados, fechas o acciones en dos líneas.
-        iced::widget::scrollable(container(main).padding(Padding {top:28.,..Padding::ZERO}).width(680))
-            .direction(iced::widget::scrollable::Direction::Both {
+        iced::widget::scrollable::Scrollable::with_direction(container(main).padding(Padding {top:28.,..Padding::ZERO}).width(680).height(Length::Shrink),
+            iced::widget::scrollable::Direction::Both {
                 vertical:iced::widget::scrollable::Scrollbar::new().width(0).scroller_width(0),
                 horizontal:iced::widget::scrollable::Scrollbar::new().width(8).scroller_width(8),
             }).width(Length::Fill).height(Length::Fill).into()
     }else{crate::desplazable_pub(container(main).padding(Padding {top:28.,..Padding::ZERO}).width(Length::Fill).into())};
-    let contenido = keyed_column([(s.tab,contenido_principal)])
+    // Column::diff comprueba el tag del hijo. keyed_column en iced 0.13
+    // difiere directamente el widget y conserva un estado de otro tipo cuando
+    // el panel cambia de Suave a Scrollable; su overlay hacía downcast y fallaba.
+    let contenido = column![contenido_principal]
     .width(Length::Fill)
     .height(Length::Fill);
     let left = column![cabecera, contenido]
@@ -909,6 +914,28 @@ pub fn vista<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pestañas_y_redimensionado_reconcilian_el_tipo_del_panel_desplazable() {
+        use iced::advanced::widget::Tree;
+        fn comparar(a:&Tree,b:&Tree) {
+            assert_eq!(a.tag,b.tag,"Un widget recibió estado de otro tipo");
+            assert_eq!(a.children.len(),b.children.len());
+            for (a,b) in a.children.iter().zip(&b.children){comparar(a,b);}
+        }
+        for (tab,tipo,loader) in [(2,"mod","fabric"),(3,"resourcepack","minecraft"),(8,"shader","iris")] {
+            let (mut a,_)=crate::iniciar_con_guardado(icaro_ui::shell::Seccion::Instancias,false,None,false,crate::servicios::Estado::nuevo(true),None);
+            crate::pruebas_diseno::preparar_mods(&mut a,"pagina");
+            a.editor=Some(tab);
+            let (project,versions)=a.servicios.detail.as_mut().unwrap();project.project_type=tipo.into();for v in versions {v.loaders=vec![loader.into()];}
+            a.servicios.ficha.tab=Pestana::Descripcion;
+            let mut tree={let (p,v)=a.servicios.detail.as_ref().unwrap();Tree::new(vista(&a,p,v,Kind::Mod).as_widget())};
+            for (pestana,ancho) in [(Pestana::Versiones,1280.),(Pestana::Versiones,1700.),(Pestana::Versiones,940.),(Pestana::Descripcion,940.),(Pestana::Versiones,1280.)] {
+                a.servicios.ficha.tab=pestana;a.ventana.width=ancho;
+                let (p,v)=a.servicios.detail.as_ref().unwrap();let actual=vista(&a,p,v,Kind::Mod);
+                tree.diff(actual.as_widget());comparar(&tree,&Tree::new(actual.as_widget()));
+            }
+        }
+    }
     fn version(id: &str, channel: &str) -> Version {
         serde_json::from_value(serde_json::json!({
             "id": id, "project_id": "pack", "name": id, "version_number": "1.0", "version_type": channel,

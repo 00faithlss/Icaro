@@ -11,7 +11,7 @@ use sha2::{Digest, Sha512};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -1363,6 +1363,7 @@ pub struct Retirados {
     instancia: String,
     carpeta: PathBuf,
     mods: Vec<Instalado>,
+    hashes: BTreeMap<String, String>,
 }
 
 fn guardar_registros(game: &Path, list: &[Instalado]) -> Result<(), Error> {
@@ -1377,6 +1378,41 @@ fn guardar_registros(game: &Path, list: &[Instalado]) -> Result<(), Error> {
 }
 
 pub fn retirar(store: &Almacen, id: &str, files: &BTreeSet<String>) -> Result<Retirados, Error> {
+    retirar_con_hash(store, id, files, &BTreeMap::new())
+}
+
+fn hash_archivo(path: &Path) -> Result<String, Error> {
+    if regular(path, false)?.len() > MAX_FILE {
+        return Err(Error::Datos);
+    }
+    let mut file = fs::File::open(path)
+        .map_err(|_| Error::Disco)?
+        .take(MAX_FILE + 1);
+    let mut hash = Sha512::new();
+    let mut buf = [0; 64 * 1024];
+    let mut size = 0;
+    loop {
+        let n = file.read(&mut buf).map_err(|_| Error::Disco)?;
+        if n == 0 {
+            break;
+        }
+        size += n as u64;
+        if size > MAX_FILE {
+            return Err(Error::Datos);
+        }
+        hash.update(&buf[..n]);
+    }
+    Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Revisión y retirada comparten bloqueo; un resultado visual antiguo nunca
+/// puede retirar el nuevo contenido de un archivo con el mismo nombre.
+pub(crate) fn retirar_con_hash(
+    store: &Almacen,
+    id: &str,
+    files: &BTreeSet<String>,
+    hashes: &BTreeMap<String, String>,
+) -> Result<Retirados, Error> {
     if files.is_empty() {
         return Err(Error::Datos);
     }
@@ -1390,6 +1426,14 @@ pub fn retirar(store: &Almacen, id: &str, files: &BTreeSet<String>) -> Result<Re
         .collect();
     if selected.len() != files.len() {
         return Err(Error::Datos);
+    }
+    let dir = game.join("mods");
+    for item in &selected {
+        if let Some(expected) = hashes.get(&item.archivo) {
+            if hash_archivo(&ruta_mod(&dir, item))? != *expected {
+                return Err(Error::Archivo(item.archivo.clone()));
+            }
+        }
     }
     let root = game.join(".icaro-mods-trash");
     if !root.exists() {
@@ -1426,6 +1470,7 @@ pub fn retirar(store: &Almacen, id: &str, files: &BTreeSet<String>) -> Result<Re
         instancia: id.into(),
         carpeta: trash,
         mods: selected,
+        hashes: hashes.clone(),
     })
 }
 
@@ -1459,6 +1504,11 @@ pub fn restaurar(store: &Almacen, id: &str, ticket: &Retirados) -> Result<(), Er
             return Err(Error::Archivo(item.archivo.clone()));
         }
         regular(&ruta_mod(&ticket.carpeta, item), false)?;
+        if let Some(expected) = ticket.hashes.get(&item.archivo) {
+            if hash_archivo(&ruta_mod(&ticket.carpeta, item))? != *expected {
+                return Err(Error::Archivo(item.archivo.clone()));
+            }
+        }
     }
     let mut moved = vec![];
     for item in &ticket.mods {

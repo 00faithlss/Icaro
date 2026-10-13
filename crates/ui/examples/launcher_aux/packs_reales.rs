@@ -29,9 +29,16 @@ pub struct Estado {
     consultas: BTreeMap<(String, TipoPack), u64>,
     operacion: Option<u64>,
     iris: BTreeMap<String, bool>,
+    cestas: BTreeMap<(String, TipoPack), Vec<Version>>,
+    pendientes_cesta: BTreeMap<(String, TipoPack, String), u64>,
 }
 #[derive(Debug, Clone)]
 pub enum Accion {
+    AgregarCesta(TipoPack, String, Option<String>),
+    CestaPreparada(Instancia, TipoPack, String, u64, Result<Version, String>),
+    QuitarCesta(TipoPack, String),
+    VaciarCesta(TipoPack),
+    InstalarCesta(TipoPack),
     Revisada(
         String,
         TipoPack,
@@ -105,7 +112,7 @@ fn recargar(app: &mut App, id: &str, tipo: TipoPack) {
                 .listas
                 .insert((id.into(), tipo), list);
         }
-        Err(e) => app.avisar(e.to_string()),
+        Err(e) => app.avisar_error(e.to_string()),
     }
 }
 pub fn cargar(app: &mut App, tipo: TipoPack) -> Task<Mensaje> {
@@ -242,6 +249,55 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         return Task::none();
     }
     match a {
+        Accion::AgregarCesta(t, project, version) => {
+            if !disponible(app) { return Task::none(); }
+            let Some(i) = mods_reales::instancia(app).cloned() else { return Task::none(); };
+            let state = &mut app.servicios.mods.packs;
+            state.generation += 1;
+            let g = state.generation;
+            state.pendientes_cesta.insert((i.id.clone(), t, project.clone()), g);
+            let requested = project.clone();
+            let minecraft = i.minecraft.clone();
+            return Task::perform(async move {
+                let catalog = Catalog::new().map_err(|e| e.to_string())?;
+                let p = catalog.project(&requested).await.map_err(|e|e.to_string())?;
+                if p.project_type != if t == TipoPack::Recursos { "resourcepack" } else { "shader" } { return Err("El proyecto no corresponde a esta tienda.".into()); }
+                let mut versions = catalog.versions(&requested, None, None).await.map_err(|e|e.to_string())?;
+                versions.sort_by(|a,b|b.date_published.cmp(&a.date_published));
+                versions.iter().find(|v| version.as_ref().is_some_and(|id| id == &v.id))
+                    .or_else(|| version.is_none().then(|| versions.iter().find(|v|v.version_type=="release" && mods::recurso_compatible(v,&minecraft)).or_else(||versions.iter().find(|v|v.version_type=="release"))).flatten())
+                    .cloned().ok_or_else(||"No hay un archivo instalable para este proyecto.".to_owned())
+            }, move |r|m(Accion::CestaPreparada(i.clone(),t,project.clone(),g,r)));
+        }
+        Accion::CestaPreparada(i,t,project,g,r) => {
+            let pending = (i.id.clone(),t,project.clone());
+            if app.servicios.mods.packs.pendientes_cesta.get(&pending)!=Some(&g) {return Task::none();}
+            app.servicios.mods.packs.pendientes_cesta.remove(&pending);
+            match r {
+                Ok(v) if v.project_id==project => {
+                    let basket=app.servicios.mods.packs.cestas.entry((i.id,t)).or_default();
+                    basket.retain(|old|old.project_id!=project); basket.push(v);
+                }
+                Ok(_) => app.avisar("La versión recibida corresponde a otro proyecto.".into()),
+                Err(e) => app.avisar_error(e),
+            }
+        }
+        Accion::QuitarCesta(t,project) => {
+            if let Some(k)=key(app,t) {
+                app.servicios.mods.packs.pendientes_cesta.remove(&(k.0.clone(),t,project.clone()));
+                if let Some(b)=app.servicios.mods.packs.cestas.get_mut(&k){b.retain(|v|v.project_id!=project);}
+            }
+        }
+        Accion::VaciarCesta(t) => {
+            if let Some(k)=key(app,t){app.servicios.mods.packs.cestas.remove(&k);app.servicios.mods.packs.pendientes_cesta.retain(|(id,kind,_),_|id!=&k.0||*kind!=t);}
+        }
+        Accion::InstalarCesta(t) => {
+            if !disponible(app) {return Task::none();}
+            if let Some(i)=mods_reales::instancia(app).cloned(){
+                let versions=cesta(app,t).to_vec();
+                if !versions.is_empty(){app.servicios.mods.packs.confirmacion=Some((i,t,versions,false));}
+            }
+        }
         Accion::Revisada(id, t, g, r) => {
             if app.servicios.mods.packs.consultas.get(&(id.clone(), t)) != Some(&g) {
                 return Task::none();
@@ -261,7 +317,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     }
                     return crate::servicios::cargar_imagenes(app, urls);
                 }
-                Err(e) => app.avisar(e),
+                Err(e) => app.avisar_error(e),
             }
         }
         Accion::Seleccionar(t, f) => {
@@ -360,7 +416,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                         return ejecutar(app, i, t, vec![v]);
                     }
                 }
-                Err(e) => app.avisar(e),
+                Err(e) => app.avisar_error(e),
             }
         }
         Accion::Actualizar(t, p) => {
@@ -421,8 +477,11 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 selected.retain(|f| existing.contains(f));
             }
             match r {
-                Ok(()) => app.avisar(format!("Cambios de {} guardados.", t.etiqueta())),
-                Err(e) => app.avisar(e),
+                Ok(()) => {
+                    app.servicios.mods.packs.cestas.remove(&(id.clone(),t));
+                    app.avisar(format!("Cambios de {} guardados.", t.etiqueta()));
+                }
+                Err(e) => app.avisar_error(e),
             }
             if mods_reales::instancia(app).is_some_and(|i| i.id == id) {
                 return cargar(app, t);
@@ -441,7 +500,7 @@ pub fn accion_instalar<'a>(
         .iter()
         .any(|m| m.project_id == project && version.is_none_or(|v| v == m.version_id));
     componentes::boton(
-        app.modo.paleta(),
+        app.paleta(),
         if installed { "Instalado" } else { "Instalar" },
         Variante::Primario,
         (!installed && app.servicios.mods.busy.is_none()).then(|| {
@@ -453,8 +512,27 @@ pub fn accion_instalar<'a>(
         }),
     )
 }
+pub fn cesta(app: &App, tipo: TipoPack) -> &[Version] {
+    key(app,tipo).and_then(|k|app.servicios.mods.packs.cestas.get(&k)).map_or(&[],Vec::as_slice)
+}
+pub fn accion_cesta<'a>(app:&'a App,tipo:TipoPack,project:&str,version:Option<&str>)->Element<'a,Mensaje>{
+    let p=app.paleta();
+    if lista(app,tipo).iter().any(|i|i.project_id==project && version.is_none_or(|v|i.version_id==v)){return componentes::insignia(p,Senal::Exito,"Instalado");}
+    let selected=cesta(app,tipo).iter().any(|v|v.project_id==project && version.is_none_or(|id|v.id==id));
+    let pending=key(app,tipo).is_some_and(|k|app.servicios.mods.packs.pendientes_cesta.contains_key(&(k.0,tipo,project.into())));
+    componentes::boton_con_icono(p,if selected{Icono::Check}else{Icono::Mas},if pending{"Preparando"}else if selected{"En la lista"}else{"Agregar"},Variante::Secundario,
+        (!pending&&app.servicios.mods.busy.is_none()).then(||if selected{m(Accion::QuitarCesta(tipo,project.into()))}else{m(Accion::AgregarCesta(tipo,project.into(),version.map(str::to_owned)))}),true)
+}
+pub fn barra_cesta(app:&App,tipo:TipoPack)->Element<'_,Mensaje>{
+    let p=app.paleta();let basket=cesta(app,tipo);
+    if basket.is_empty(){return iced::widget::Space::with_height(0).into();}
+    let bytes:u64=basket.iter().filter_map(|v|v.files.iter().find(|f|f.primary).or_else(||v.files.first())).map(|f|f.size).sum();
+    let names=basket.iter().map(|v|app.servicios.mods.diseno.proyectos.get(&v.project_id).map(|(p,_)|p.title.clone()).or_else(||app.servicios.results.as_ref().and_then(|r|r.hits.iter().find(|h|h.project_id==v.project_id).map(|h|h.title.clone()))).unwrap_or_else(||v.name.clone())).collect::<Vec<_>>().join(", ");
+    let mut inv=p;inv.bg=p.text;inv.text=p.bg;inv.border=p.bg;inv.border_strong=p.bg;inv.accent=p.bg;inv.on_accent=p.text;
+    container(row![text(format!("{} en la lista",basket.len())).font(fuentes::TITULO).color(p.bg),text(format!("{names} · {:.1} MB",bytes as f64/1048576.)).size(12).color(p.bg).width(Length::Fill),componentes::boton_compacto(inv,"Vaciar",Variante::Secundario,Some(m(Accion::VaciarCesta(tipo)))),componentes::boton_con_icono(inv,icaro_ui::iconos::Icono::Descargas,&format!("Instalar {}",basket.len()),Variante::Primario,(app.servicios.mods.busy.is_none()).then(||m(Accion::InstalarCesta(tipo))),true)].spacing(16).align_y(Alignment::Center)).padding([12,24]).width(Length::Fill).style(icaro_ui::estilo::bloque(p.text)).into()
+}
 pub fn vista(app: &App, tipo: TipoPack) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let installed = lista(app, tipo);
     let selected = seleccion(app, tipo);
     let busy = app.servicios.mods.busy.is_some();
@@ -736,8 +814,8 @@ pub fn capa<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, Mensa
     let Some((i, t, versions, update)) = &app.servicios.mods.packs.confirmacion else {
         return window;
     };
-    let p = app.modo.paleta();
-    let body=column![text(if *update{format!("Se actualizarán {} {} de {}.",versions.len(),t.etiqueta(),i.nombre)}else{format!("El paquete no declara compatibilidad con Minecraft {}.",i.minecraft)}).color(p.text),text(if *update{"Las nuevas versiones pueden cambiar el resultado o tener incompatibilidades. ¿Quieres continuar?"}else{"Puedes probarlo igualmente y desactivarlo si presenta problemas."}).color(p.warning),text("Los archivos anteriores se conservan si la descarga o la verificación falla.").color(p.text_muted)].spacing(16);
+    let p = app.paleta();
+    let body=column![text(if *update{format!("Se actualizarán {} {} de {}.",versions.len(),t.etiqueta(),i.nombre)}else{format!("Se instalarán {} {} en {}. {} no declaran Minecraft {}.",versions.len(),t.etiqueta(),i.nombre,versions.iter().filter(|v|!mods::recurso_compatible(v,&i.minecraft)).count(),i.minecraft)}).color(p.text),text(if *update{"Las nuevas versiones pueden cambiar el resultado o tener incompatibilidades. ¿Quieres continuar?"}else{"Puedes probarlo igualmente y desactivarlo si presenta problemas."}).color(p.warning),text("Los archivos anteriores se conservan si la descarga o la verificación falla.").color(p.text_muted)].spacing(16);
     crate::con_velo_losa(
         p,
         window,

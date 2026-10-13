@@ -22,6 +22,8 @@ struct JavaGuardado {
 #[derive(Serialize, Deserialize)]
 pub struct Guardado {
     #[serde(default)]
+    pub apariencia: AparienciaGuardada,
+    #[serde(default)]
     pub ids: Vec<String>,
     pub lista_grupos: Vec<String>,
     pub grupos: Vec<Option<String>>,
@@ -30,6 +32,28 @@ pub struct Guardado {
     #[serde(default)]
     pub modpacks: Vec<String>,
     configs: Vec<JavaGuardado>,
+}
+
+/// Preferencias de Apariencia compatibles con estados anteriores.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AparienciaGuardada {
+    pub tema: usize,
+    pub metal: usize,
+    pub escala: i32,
+    pub reducir: bool,
+}
+
+impl Default for AparienciaGuardada {
+    fn default() -> Self { Self { tema: 0, metal: 0, escala: 100, reducir: false } }
+}
+
+impl AparienciaGuardada {
+    pub fn normalizar(&mut self) {
+        self.tema = self.tema.min(2);
+        self.metal = self.metal.min(2);
+        self.escala = self.escala.clamp(80, 150);
+    }
 }
 
 pub fn directorio(demo: bool) -> PathBuf {
@@ -59,6 +83,7 @@ impl Guardado {
         modpacks: &[String],
     ) -> Self {
         Self {
+            apariencia: AparienciaGuardada::default(),
             ids: Vec::new(),
             lista_grupos: lista_grupos.to_vec(),
             grupos: grupos.to_vec(),
@@ -124,5 +149,20 @@ impl Guardado {
             let _ = fs::create_dir_all(padre);
         }
         let _ = fs::write(r, texto);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn estados_anteriores_restauran_apariencia_por_defecto() {
+        let a: Guardado = serde_json::from_str(r#"{"lista_grupos":[],"grupos":[],"cerrados":[],"configs":[]}"#).unwrap();
+        assert_eq!(a.apariencia.escala, 100);
+        assert_eq!(a.apariencia.tema, 0);
+        assert_eq!(a.apariencia.metal, 0);
+        let mut b: AparienciaGuardada = serde_json::from_str(r#"{"tema":44,"escala":300}"#).unwrap();
+        b.normalizar();
+        assert_eq!((b.tema, b.metal, b.escala), (2, 0, 150));
     }
 }

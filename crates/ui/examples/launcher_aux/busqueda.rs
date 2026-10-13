@@ -108,7 +108,7 @@ pub fn mover(actual: usize, paso: i32, total: usize) -> usize {
 }
 
 pub fn vista(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let resultados = resultados(app);
     let cantidad = resultados.len();
     let mut lista = column![].spacing(espacio::S1);

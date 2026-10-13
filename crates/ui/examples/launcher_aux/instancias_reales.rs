@@ -938,12 +938,16 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     app.menu = None;
                     app.busqueda.abierta = false;
                     app.picar = None;
+                    app.picar_objetivo = None;
+                    app.picar_revision = None;
                     app.colocada = None;
                     app.avisar(format!("{name} se movió a la papelera."));
                     crate::arrancar(app);
                 }
                 Err(error) => {
                     app.picar = None;
+                    app.picar_objetivo = None;
+                    app.picar_revision = None;
                     app.avisar(error);
                 }
             }
@@ -1040,6 +1044,7 @@ pub fn renombrar(app: &mut App, nombre: &str) -> Result<(), String> {
     if record.nombre == nombre.trim() {
         return Ok(());
     }
+    if app.servicios.juego.ocupada(&record.id) || app.servicios.mods.busy.is_some() || app.servicios.instancias.operando {return Err("Detén el juego o espera a que termine la operación antes de renombrar la carpeta de esta instancia.".into());}
     let mut record = record.clone();
     record.nombre = nombre.trim().into();
     app.servicios
@@ -1054,6 +1059,7 @@ pub fn renombrar(app: &mut App, nombre: &str) -> Result<(), String> {
     {
         d.nombre = record.nombre.clone();
     }
+    if let Ok(game)=app.servicios.instancias.almacen.juego(&record.id){app.exp=crate::Explorador::desde_ruta(game);}
     app.servicios.instancias.registros[app.editor_inst] = record;
     Ok(())
 }

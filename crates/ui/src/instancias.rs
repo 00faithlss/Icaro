@@ -142,8 +142,13 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     datos: &DatosInstancia,
     acciones: AccionesTarjeta<M>,
 ) -> Element<'a, M> {
+    tarjeta_instancia_con_icono(p,datos,acciones,None)
+}
+
+pub fn tarjeta_instancia_con_icono<'a,M:Clone+'a>(p:Paleta,datos:&DatosInstancia,acciones:AccionesTarjeta<M>,imagen:Option<Element<'a,M>>)->Element<'a,M>{
     let portada = crate::laminas::grabado_zoom(p, datos.portada, Length::Fill, ALTO_PORTADA);
 
+    let icono_grande=imagen.is_some();
     let mut cuerpo = column![
         text(datos.nombre.clone())
             .font(fuentes::TITULO)
@@ -233,13 +238,13 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     let interior = column![
         portada,
         container(cuerpo)
-            .padding(Padding { top: 36.0, right: 20.0, bottom: 16.0, left: 20.0 })
+            .padding(Padding { top: if icono_grande{44.}else{36.}, right: 20.0, bottom: 16.0, left: 20.0 })
             .height(Length::Fill),
         pie,
     ];
     let interior = iced::widget::stack![
         interior,
-        container(sello(p, &datos.nombre)).padding(Padding { top: ALTO_PORTADA - 24.0, left: 20.0, ..Padding::ZERO }),
+        container(imagen.unwrap_or_else(||sello(p,&datos.nombre))).padding(Padding { top: ALTO_PORTADA - if icono_grande{32.}else{24.}, left: 20.0, ..Padding::ZERO }),
     ];
 
     // Contorno: 1 px en reposo, 2 px seleccionada, 3 px en ejecución, tono de error.

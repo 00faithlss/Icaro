@@ -26,6 +26,10 @@ El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, com
 
 Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** está destinada a descubrir packs; instalarlos como nuevas instancias sigue pendiente.
 
+Las instancias usan carpetas legibles por nombre, mantienen su identidad interna y guardan `instance.cfg`. Las rutas anteriores se migran al recuperar las instancias, conservando sus mundos. El editor permite cambiar el icono desde su imagen o el menú de acciones, recortarlo y volver al icono generado. Consulta [instancias locales](docs/instancias-locales.md).
+
+Apariencia incluye el tema del sistema, Mármol/Plata/Bronce y escala de 80 a 150 %. Los avisos se apilan con acciones, y la eliminación utiliza Picar con revisión de respaldos. La exportación de instancia incorpora el árbol de archivos y formatos Ícaro y Prism/MultiMC. La lista de mods se exporta por separado como HTML, Markdown, texto, JSON, CSV o una plantilla personalizada.
+
 ## Compilar y probar
 
 Instala Rust estable con [rustup](https://rustup.rs/) y las herramientas de compilación correspondientes a tu sistema. Para descargar el repositorio y abrir la interfaz:

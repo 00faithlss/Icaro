@@ -5,9 +5,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -42,6 +44,7 @@ pub enum Error {
 #[derive(Debug, Clone)]
 pub struct Almacen {
     raiz: PathBuf,
+    rutas: Arc<Mutex<BTreeMap<String, PathBuf>>>,
 }
 pub struct Informe {
     pub instancias: Vec<Instancia>,
@@ -94,19 +97,222 @@ fn enlace(metadata: &fs::Metadata) -> bool {
     }
 }
 
+/// Nombres de carpetas válidos también en Windows; la identidad sigue siendo `id`.
+fn nombre_carpeta(nombre: &str) -> String {
+    let limpio: String = nombre
+        .chars()
+        .map(|c| {
+            if c.is_control() || "<>:\"/\\|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let limpio = limpio.trim().trim_matches('.').trim();
+    let mut nombre = if limpio.is_empty() {
+        "Instancia".into()
+    } else {
+        limpio.to_string()
+    };
+    let base = nombre.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((base.starts_with("COM") || base.starts_with("LPT"))
+            && base.len() == 4
+            && matches!(base.as_bytes()[3], b'1'..=b'9'))
+        || nombre.starts_with('.')
+    {
+        nombre.insert_str(0, "Instancia ");
+    }
+    nombre
+}
+
+fn regular(path: &Path, dir: bool) -> Result<(), Error> {
+    let m = fs::symlink_metadata(path).map_err(|_| Error::Disco)?;
+    if enlace(&m) || (dir && !m.is_dir()) || (!dir && (!m.is_file() || m.len() > MAX_METADATA)) {
+        return Err(Error::Datos);
+    }
+    Ok(())
+}
+
+fn leer_en(path: &Path) -> Result<Instancia, Error> {
+    regular(path, true)?;
+    let json = path.join("instance.json");
+    let i: Instancia = if json.exists() {
+        regular(&json, false)?;
+        let mut bytes = Vec::new();
+        fs::File::open(json)
+            .map_err(|_| Error::Disco)?
+            .take(MAX_METADATA + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| Error::Disco)?;
+        if bytes.len() > MAX_METADATA as usize {
+            return Err(Error::Datos);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| Error::Datos)?
+    } else {
+        let cfg = path.join("instance.cfg");
+        regular(&cfg, false)?;
+        let text = fs::read_to_string(cfg).map_err(|_| Error::Disco)?;
+        let mut valores = BTreeMap::new();
+        for line in text.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                if valores.insert(key.trim(), value.trim()).is_some() {
+                    return Err(Error::Datos);
+                }
+            }
+        }
+        let texto = |key: &str| -> Result<String, Error> {
+            serde_json::from_str(valores.get(key).ok_or(Error::Datos)?).map_err(|_| Error::Datos)
+        };
+        Instancia {
+            id: texto("Id")?,
+            nombre: texto("Name")?,
+            minecraft: texto("Minecraft")?,
+            loader: texto("Loader")?,
+            portada: valores
+                .get("Cover")
+                .ok_or(Error::Datos)?
+                .parse()
+                .map_err(|_| Error::Datos)?,
+            creada: valores
+                .get("Created")
+                .ok_or(Error::Datos)?
+                .parse()
+                .map_err(|_| Error::Datos)?,
+        }
+    };
+    validar(&i)?;
+    regular(&path.join("minecraft"), true)?;
+    Ok(i)
+}
+
+fn cfg(i: &Instancia) -> Result<Vec<u8>, Error> {
+    let string = |s: &str| serde_json::to_string(s).map_err(|_| Error::Datos);
+    Ok(format!(
+        "[General]\nId={}\nName={}\nMinecraft={}\nLoader={}\nCover={}\nCreated={}\n",
+        string(&i.id)?,
+        string(&i.nombre)?,
+        string(&i.minecraft)?,
+        string(&i.loader)?,
+        i.portada,
+        i.creada
+    )
+    .into_bytes())
+}
+
+fn escribir(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let temp = path.with_file_name(format!("{}.tmp", id_nuevo()?));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|_| Error::Disco)?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| Error::Disco)?;
+        drop(file);
+        fs::rename(&temp, path).map_err(|_| Error::Disco)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+
+fn guardar_en(path: &Path, i: &Instancia) -> Result<(), Error> {
+    let json = path.join("instance.json");
+    let config = path.join("instance.cfg");
+    for dest in [&json, &config] {
+        if fs::symlink_metadata(dest).is_ok() {
+            regular(dest, false)?;
+        }
+    }
+    let anterior = fs::read(&config).ok();
+    escribir(&config, &cfg(i)?)?;
+    if let Err(error) = escribir(
+        &json,
+        &serde_json::to_vec_pretty(i).map_err(|_| Error::Datos)?,
+    ) {
+        if let Some(bytes) = anterior {
+            let _ = escribir(&config, &bytes);
+        } else {
+            let _ = fs::remove_file(&config);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 impl Almacen {
+    fn destino(&self, nombre: &str, actual: Option<&Path>) -> Result<PathBuf, Error> {
+        let base = nombre_carpeta(nombre);
+        let ocupados: Vec<PathBuf> = fs::read_dir(&self.raiz)
+            .map_err(|_| Error::Disco)?
+            .map(|e| e.map(|e| e.path()).map_err(|_| Error::Disco))
+            .collect::<Result<_, _>>()?;
+        for n in 1..=10_000 {
+            let name = if n == 1 {
+                base.clone()
+            } else {
+                format!("{base} ({n})")
+            };
+            if !ocupados
+                .iter()
+                .filter(|p| Some(p.as_path()) != actual)
+                .any(|p| {
+                    p.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_lowercase()
+                        == name.to_lowercase()
+                })
+            {
+                return Ok(self.raiz.join(name));
+            }
+        }
+        Err(Error::Repetida)
+    }
     pub fn nuevo(raiz: impl Into<PathBuf>) -> Self {
-        Self { raiz: raiz.into() }
+        Self {
+            raiz: raiz.into(),
+            rutas: Default::default(),
+        }
     }
     pub fn carpeta(&self, id: &str) -> Result<PathBuf, Error> {
         if !id_valido(id) {
             return Err(Error::Datos);
         }
-        let path = self.raiz.join(id);
-        let metadata = fs::symlink_metadata(&path).map_err(|_| Error::Disco)?;
-        if !metadata.is_dir() || enlace(&metadata) {
-            return Err(Error::Datos);
+        if let Some(path) = self
+            .rutas
+            .lock()
+            .map_err(|_| Error::Disco)?
+            .get(id)
+            .cloned()
+        {
+            if regular(&path, true).is_ok() && leer_en(&path).is_ok_and(|i| i.id == id) {
+                return Ok(path);
+            }
         }
+        let mut encontrada = None;
+        for entry in fs::read_dir(&self.raiz).map_err(|_| Error::Disco)? {
+            let entry = entry.map_err(|_| Error::Disco)?;
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if leer_en(&entry.path()).is_ok_and(|i| i.id == id) {
+                if encontrada.is_some() {
+                    return Err(Error::Datos);
+                }
+                encontrada = Some(entry.path());
+            }
+        }
+        let path = encontrada.ok_or(Error::Disco)?;
+        self.rutas
+            .lock()
+            .map_err(|_| Error::Disco)?
+            .insert(id.into(), path.clone());
         Ok(path)
     }
     pub fn juego(&self, id: &str) -> Result<PathBuf, Error> {
@@ -118,26 +324,10 @@ impl Almacen {
         Ok(path)
     }
     fn leer(&self, id: &str) -> Result<Instancia, Error> {
-        let path = self.carpeta(id)?.join("instance.json");
-        let metadata = fs::symlink_metadata(&path).map_err(|_| Error::Disco)?;
-        if !metadata.is_file() || enlace(&metadata) || metadata.len() > MAX_METADATA {
-            return Err(Error::Datos);
-        }
-        let mut bytes = Vec::new();
-        fs::File::open(path)
-            .map_err(|_| Error::Disco)?
-            .take(MAX_METADATA + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| Error::Disco)?;
-        if bytes.len() > MAX_METADATA as usize {
-            return Err(Error::Datos);
-        }
-        let i: Instancia = serde_json::from_slice(&bytes).map_err(|_| Error::Datos)?;
-        validar(&i)?;
+        let i = leer_en(&self.carpeta(id)?)?;
         if i.id != id {
             return Err(Error::Datos);
         }
-        self.juego(id)?;
         Ok(i)
     }
     pub fn cargar(&self) -> Result<Informe, Error> {
@@ -155,17 +345,51 @@ impl Almacen {
             instancias: vec![],
             omitidas: 0,
         };
+        let mut registros = Vec::new();
+        let mut ids = std::collections::BTreeSet::new();
         for entry in entries {
             let entry = entry.map_err(|_| Error::Disco)?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !id_valido(&name) {
+            if name.starts_with('.')
+                || (!id_valido(&name)
+                    && !entry.path().join("instance.json").exists()
+                    && !entry.path().join("instance.cfg").exists())
+            {
                 continue;
             }
-            match self.leer(&name) {
-                Ok(i) => informe.instancias.push(i),
+            match leer_en(&entry.path()) {
+                Ok(i) if ids.insert(i.id.clone()) => registros.push((entry.path(), i)),
+                Ok(_) => informe.omitidas += 1,
                 Err(_) => informe.omitidas += 1,
             }
         }
+        let mut rutas = BTreeMap::new();
+        for (mut path, i) in registros {
+            // Una migración es un rename dentro del mismo almacén: no copia ni borra mundos.
+            // Si el sistema tiene la carpeta abierta, la ruta antigua sigue siendo utilizable.
+            if path.file_name() == Some(std::ffi::OsStr::new(&i.id)) {
+                if let Ok(destino) = self.destino(&i.nombre, Some(&path)) {
+                    let config = path.join("instance.cfg");
+                    let config_valida = if config.exists() {
+                        regular(&config, false)
+                    } else {
+                        Ok(())
+                    };
+                    // El JSON legado se conserva byte a byte, incluso campos de
+                    // otras versiones que este lector todavía no conoce.
+                    if config_valida
+                        .and_then(|_| escribir(&config, &cfg(&i)?))
+                        .is_ok()
+                        && fs::rename(&path, &destino).is_ok()
+                    {
+                        path = destino;
+                    }
+                }
+            }
+            rutas.insert(i.id.clone(), path);
+            informe.instancias.push(i);
+        }
+        *self.rutas.lock().map_err(|_| Error::Disco)? = rutas;
         informe
             .instancias
             .sort_by(|a, b| a.creada.cmp(&b.creada).then_with(|| a.id.cmp(&b.id)));
@@ -204,10 +428,23 @@ impl Almacen {
             return Err(Error::Repetida);
         }
         fs::create_dir_all(&self.raiz).map_err(|_| Error::Disco)?;
-        let path = self.raiz.join(&i.id);
+        let path = self.destino(&i.nombre, None)?;
         fs::create_dir(&path).map_err(|_| Error::Disco)?;
-        fs::create_dir(path.join("minecraft")).map_err(|_| Error::Disco)?;
-        self.guardar(&i)?;
+        let result = fs::create_dir(path.join("minecraft"))
+            .map_err(|_| Error::Disco)
+            .and_then(|_| guardar_en(&path, &i));
+        if let Err(error) = result {
+            // La carpeta acaba de ser creada por esta operación y aún no contiene datos de juego.
+            let _ = fs::remove_file(path.join("instance.cfg"));
+            let _ = fs::remove_file(path.join("instance.json"));
+            let _ = fs::remove_dir(path.join("minecraft"));
+            let _ = fs::remove_dir(&path);
+            return Err(error);
+        }
+        self.rutas
+            .lock()
+            .map_err(|_| Error::Disco)?
+            .insert(i.id.clone(), path);
         Ok(i)
     }
     pub fn guardar(&self, i: &Instancia) -> Result<(), Error> {
@@ -221,24 +458,25 @@ impl Almacen {
             return Err(Error::Repetida);
         }
         let path = self.carpeta(&i.id)?;
-        let destino = path.join("instance.json");
-        if let Ok(m) = fs::symlink_metadata(&destino) {
-            if !m.is_file() || enlace(&m) {
-                return Err(Error::Datos);
-            }
+        let anterior = leer_en(&path)?;
+        let destino = if anterior.nombre != i.nombre {
+            self.destino(&i.nombre, Some(&path))?
+        } else {
+            path.clone()
+        };
+        if destino != path {
+            fs::rename(&path, &destino).map_err(|_| Error::Disco)?;
         }
-        let temporal = path.join(format!("{}.tmp", id_nuevo()?));
-        let bytes = serde_json::to_vec_pretty(i).map_err(|_| Error::Datos)?;
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporal)
-            .map_err(|_| Error::Disco)?;
-        file.write_all(&bytes)
-            .and_then(|_| file.sync_all())
-            .map_err(|_| Error::Disco)?;
-        drop(file);
-        fs::rename(&temporal, &destino).map_err(|_| Error::Disco)?;
+        if let Err(error) = guardar_en(&destino, i) {
+            if destino != path {
+                let _ = fs::rename(&destino, &path);
+            }
+            return Err(error);
+        }
+        self.rutas
+            .lock()
+            .map_err(|_| Error::Disco)?
+            .insert(i.id.clone(), destino);
         Ok(())
     }
 
@@ -266,9 +504,7 @@ impl Almacen {
         self.leer(id)?;
         let root = fs::canonicalize(&self.raiz).map_err(|_| Error::Disco)?;
         let source = fs::canonicalize(self.carpeta(id)?).map_err(|_| Error::Disco)?;
-        if source.parent() != Some(root.as_path())
-            || source.file_name() != Some(std::ffi::OsStr::new(id))
-        {
+        if source.parent() != Some(root.as_path()) {
             return Err(Error::Datos);
         }
         let trash = self.papelera()?;
@@ -276,16 +512,20 @@ impl Almacen {
         if fs::symlink_metadata(&target).is_ok() {
             return Err(Error::Repetida);
         }
-        fs::rename(source, target).map_err(|_| Error::Disco)
+        fs::rename(source, target).map_err(|_| Error::Disco)?;
+        self.rutas.lock().map_err(|_| Error::Disco)?.remove(id);
+        Ok(())
     }
 
     pub fn restaurar(&self, id: &str) -> Result<Instancia, Error> {
         if !id_valido(id) {
             return Err(Error::Datos);
         }
-        let root = fs::canonicalize(&self.raiz).map_err(|_| Error::Disco)?;
         let trash = self.papelera()?;
-        let record = Almacen::nuevo(&trash).leer(id)?;
+        let record = leer_en(&trash.join(id))?;
+        if record.id != id {
+            return Err(Error::Datos);
+        }
         if self
             .cargar()?
             .instancias
@@ -298,11 +538,15 @@ impl Almacen {
         if source.parent() != Some(trash.as_path()) {
             return Err(Error::Datos);
         }
-        let target = root.join(id);
+        let target = self.destino(&record.nombre, None)?;
         if fs::symlink_metadata(&target).is_ok() {
             return Err(Error::Repetida);
         }
-        fs::rename(source, target).map_err(|_| Error::Disco)?;
+        fs::rename(source, &target).map_err(|_| Error::Disco)?;
+        self.rutas
+            .lock()
+            .map_err(|_| Error::Disco)?
+            .insert(id.into(), target);
         Ok(record)
     }
 }
@@ -376,7 +620,15 @@ mod tests {
         let game = store.juego(&a.id).unwrap();
         a.nombre = "Nombre nuevo".into();
         store.guardar(&a).unwrap();
-        assert_eq!(store.juego(&a.id).unwrap(), game);
+        assert_ne!(store.juego(&a.id).unwrap(), game);
+        assert_eq!(
+            store.carpeta(&a.id).unwrap().file_name().unwrap(),
+            "Nombre nuevo"
+        );
+        assert_eq!(
+            fs::read(store.juego(&a.id).unwrap().join("options.txt")).unwrap(),
+            b"my options"
+        );
         assert_eq!(store.cargar().unwrap().instancias[0], a);
     }
     #[test]
@@ -446,5 +698,83 @@ mod tests {
         assert!(matches!(store.eliminar(&a.id), Err(Error::Datos)));
         assert_eq!(store.cargar().unwrap().instancias, vec![a]);
         assert!(store.restaurar("../outside").is_err());
+    }
+
+    #[test]
+    fn readable_paths_collisions_reserved_names_and_cfg_fallback_keep_identity() {
+        let p = Prueba::nueva();
+        let store = p.almacen();
+        let a = store.crear("a:b", "1.21.4", 0).unwrap();
+        let b = store.crear("a?b", "1.21.4", 0).unwrap();
+        let con = store.crear("CON", "1.21.4", 0).unwrap();
+        assert_eq!(store.carpeta(&a.id).unwrap().file_name().unwrap(), "a_b");
+        assert_eq!(
+            store.carpeta(&b.id).unwrap().file_name().unwrap(),
+            "a_b (2)"
+        );
+        assert_eq!(
+            store.carpeta(&con.id).unwrap().file_name().unwrap(),
+            "Instancia CON"
+        );
+        let path = store.carpeta(&a.id).unwrap();
+        fs::remove_file(path.join("instance.json")).unwrap();
+        assert_eq!(p.almacen().leer(&a.id).unwrap(), a);
+        assert!(fs::read_to_string(path.join("instance.cfg"))
+            .unwrap()
+            .contains("[General]"));
+    }
+
+    #[test]
+    fn migrate_legacy_directory_once_preserves_worlds_and_uses_collision_suffix() {
+        let p = Prueba::nueva();
+        let store = p.almacen();
+        let a = store.crear("Mi mundo", "1.21.4", 0).unwrap();
+        let path = store.carpeta(&a.id).unwrap();
+        fs::create_dir_all(path.join("minecraft/saves/world")).unwrap();
+        fs::write(path.join("minecraft/saves/world/level.dat"), b"world").unwrap();
+        fs::remove_file(path.join("instance.cfg")).unwrap();
+        let mut metadata = serde_json::to_value(&a).unwrap();
+        metadata["dato_de_otra_version"] = serde_json::json!({"conservar":true});
+        let legacy = serde_json::to_vec_pretty(&metadata).unwrap();
+        fs::write(path.join("instance.json"), &legacy).unwrap();
+        fs::rename(path, p.raiz.join(&a.id)).unwrap();
+        fs::create_dir(p.raiz.join("Mi mundo")).unwrap();
+        let fresh = p.almacen();
+        assert_eq!(fresh.cargar().unwrap().instancias, vec![a.clone()]);
+        let new = fresh.carpeta(&a.id).unwrap();
+        assert_eq!(new.file_name().unwrap(), "Mi mundo (2)");
+        assert_eq!(
+            fs::read(new.join("minecraft/saves/world/level.dat")).unwrap(),
+            b"world"
+        );
+        assert!(new.join("instance.cfg").is_file());
+        assert_eq!(fs::read(new.join("instance.json")).unwrap(), legacy);
+        assert!(!p.raiz.join(&a.id).exists());
+        assert_eq!(fresh.cargar().unwrap().instancias, vec![a.clone()]);
+        assert_eq!(fresh.carpeta(&a.id).unwrap(), new);
+    }
+
+    #[test]
+    fn failed_migration_or_rename_leaves_original_metadata_and_files_available() {
+        let p = Prueba::nueva();
+        let store = p.almacen();
+        let a = store.crear("Original", "1.21.4", 0).unwrap();
+        let path = store.carpeta(&a.id).unwrap();
+        fs::remove_file(path.join("instance.cfg")).unwrap();
+        fs::create_dir(path.join("instance.cfg")).unwrap();
+        fs::write(path.join("minecraft/options.txt"), b"untouched").unwrap();
+        let mut renamed = a.clone();
+        renamed.nombre = "Renombrada".into();
+        assert!(store.guardar(&renamed).is_err());
+        assert!(path.is_dir());
+        assert!(!p.raiz.join("Renombrada").exists());
+        assert_eq!(store.leer(&a.id).unwrap(), a);
+        fs::rename(&path, p.raiz.join(&a.id)).unwrap();
+        assert_eq!(store.cargar().unwrap().instancias, vec![a.clone()]);
+        assert_eq!(store.carpeta(&a.id).unwrap(), p.raiz.join(&a.id));
+        assert_eq!(
+            fs::read(store.juego(&a.id).unwrap().join("options.txt")).unwrap(),
+            b"untouched"
+        );
     }
 }

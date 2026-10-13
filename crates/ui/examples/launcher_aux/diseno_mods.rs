@@ -39,6 +39,7 @@ impl Cesta {
 }
 #[derive(Default)]
 pub struct Estado {
+    pub menu_barra: bool,
     pub cestas: BTreeMap<String, Cesta>,
     pub seleccion: BTreeMap<String, BTreeSet<String>>,
     pub proyectos: BTreeMap<String, (Project, String)>,
@@ -47,6 +48,9 @@ pub struct Estado {
 }
 #[derive(Debug, Clone)]
 pub enum Accion {
+    MenuBarra,
+    ExportarLista,
+    VerificarArchivos,
     Agregar(String, Option<String>),
     Quitar(String),
     Vaciar,
@@ -157,6 +161,16 @@ fn preparar(
 }
 pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     match a {
+        Accion::MenuBarra => app.servicios.mods.diseno.menu_barra=!app.servicios.mods.diseno.menu_barra,
+        Accion::ExportarLista => {
+            app.servicios.mods.diseno.menu_barra=false;
+            let selected=ids(app).is_some_and(|s|!s.is_empty());
+            return crate::exportar_lista_mods::actualizar(app,crate::exportar_lista_mods::Accion::Abrir(selected));
+        }
+        Accion::VerificarArchivos => {
+            app.servicios.mods.diseno.menu_barra=false;
+            return crate::verificacion_real::actualizar(app,crate::verificacion_real::Accion::Abrir);
+        }
         Accion::Agregar(p, v) => return preparar(app, Some((p, v)), None),
         Accion::Quitar(p) => return preparar(app, None, Some(p)),
         Accion::Vaciar => {
@@ -381,7 +395,7 @@ pub fn accion<'a>(
     version: Option<&str>,
     primary: bool,
 ) -> Element<'a, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let installed = mods_reales::lista(app)
         .iter()
         .find(|m| m.project_id == project && version.is_none_or(|v| v == m.version_id));
@@ -428,12 +442,14 @@ pub fn regla<'a>(p: Paleta) -> Element<'a, Mensaje> {
         .into()
 }
 pub fn tienda(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios;
     let (mc, ld) = crate::juego_de_instancia(app);
     let instance = mods_reales::instancia(app).map_or("", |i| i.nombre.as_str());
+    let tipo = match app.editor {Some(3)=>Some(mods::TipoPack::Recursos),Some(8)=>Some(mods::TipoPack::Shaders),_=>None};
+    let titulo = match tipo {Some(mods::TipoPack::Recursos)=>"AGREGAR RECURSOS",Some(mods::TipoPack::Shaders)=>"AGREGAR SHADERS",_=>"AGREGAR MODS"};
     let header = row![
-        text("AGREGAR MODS")
+        text(titulo)
             .font(fuentes::DISPLAY)
             .size(32)
             .color(p.text),
@@ -442,7 +458,7 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
         container(componentes::campo_con_icono(
             p,
             Icono::Buscar,
-            "Buscar mods",
+            match tipo {Some(mods::TipoPack::Recursos)=>"Buscar resourcepacks",Some(mods::TipoPack::Shaders)=>"Buscar shaders",_=>"Buscar mods"},
             &s.query,
             |q| Mensaje::Servicio(servicios::Accion::Consulta(q))
         ))
@@ -461,14 +477,12 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
     ]
     .spacing(12)
     .width(216);
-    for (key, label) in [
-        ("optimization", "Optimización"),
-        ("utility", "Utilidad"),
-        ("worldgen", "Mapas"),
-        ("decoration", "Decoración"),
-        ("technology", "Tecnología"),
-        ("adventure", "Aventura"),
-    ] {
+    let categories: &[(&str,&str)] = match tipo {
+        Some(mods::TipoPack::Recursos)=>&[("16x","16×"),("32x","32×"),("64x","64×"),("128x","128×"),("realistic","Realista"),("vanilla-like","Estilo Vanilla")],
+        Some(mods::TipoPack::Shaders)=>&[("realistic","Realista"),("fantasy","Fantasía"),("vanilla-like","Estilo Vanilla"),("low","Ligero"),("medium","Medio"),("high","Alto")],
+        _=>&[("optimization","Optimización"),("utility","Utilidad"),("worldgen","Mapas"),("decoration","Decoración"),("technology","Tecnología"),("adventure","Aventura")],
+    };
+    for &(key,label) in categories {
         filters = filters.push(componentes::casilla(
             p,
             label,
@@ -476,6 +490,7 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
             move |_| m(Accion::Categoria(key.into())),
         ));
     }
+    if tipo.is_none() {
     filters = filters
         .push(regla(p))
         .push(componentes::etiqueta(p, "Lado"));
@@ -493,6 +508,7 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
             .padding(0)
             .style(icaro_ui::estilo::sin_estilo(p.text)),
         );
+    }
     }
     let mut results = column![row![
         text(
@@ -574,7 +590,7 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
                         ]
                         .spacing(6)
                         .width(Length::Fill),
-                        accion(app, &h.project_id, None, false)
+                        if let Some(t)=tipo {mods_reales::packs::accion_cesta(app,t,&h.project_id,None)}else{accion(app, &h.project_id, None, false)}
                     ]
                     .spacing(16)
                     .align_y(Alignment::Center),
@@ -625,20 +641,14 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
         );
     }
     if let Some(e) = &s.error {
-        results = results
-            .push(text(e).color(p.warning))
-            .push(componentes::boton(
-                p,
-                "Reintentar",
-                Variante::Secundario,
-                Some(Mensaje::Servicio(servicios::Accion::Buscar)),
-            ));
+        results = results.push(icaro_ui::superficies::banner(p,componentes::Estado::Aviso,Icono::Aviso,
+            "No se pudo consultar el catálogo.",e,Some(("Reintentar",Mensaje::Servicio(servicios::Accion::Buscar)))));
     }
     let mut main = column![
         componentes::boton_con_icono(
             p,
             Icono::Atras,
-            "Volver a mis mods",
+            match tipo {Some(mods::TipoPack::Recursos)=>"Volver a mis recursos",Some(mods::TipoPack::Shaders)=>"Volver a mis shaders",_=>"Volver a mis mods"},
             Variante::Fantasma,
             Some(Mensaje::VistaMods(0)),
             true
@@ -663,10 +673,10 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
             main = main.push(text(e).color(p.warning));
         }
     }
-    column![main, barra(app)].height(Length::Fill).into()
+    column![main, if let Some(t)=tipo {mods_reales::packs::barra_cesta(app,t)}else{barra(app)}].height(Length::Fill).into()
 }
 fn barra(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let Some(c) = cesta(app).filter(|c| !c.raices.is_empty()) else {
         return Space::with_height(0).into();
     };
@@ -740,7 +750,7 @@ fn barra(app: &App) -> Element<'_, Mensaje> {
 }
 
 pub fn lista(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let installed = mods_reales::lista(app);
     let selected = ids(app);
     let count = selected.map_or(0, BTreeSet::len);
@@ -766,6 +776,7 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
         p, "Seleccionar todos", Variante::Secundario,
         (!installed.is_empty()).then(|| m(Accion::SeleccionarTodos)),
     ));
+    toolbar=toolbar.push(icaro_ui::descargas::boton_icono(p,Icono::Acciones,m(Accion::MenuBarra)));
     if !mods_reales::updates(app).is_empty() {
         toolbar = toolbar.push(componentes::boton_con_icono(
             p,
@@ -832,6 +843,7 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
                     (!busy).then(|| m(Accion::Retirar)),
                     true
                 ),
+                icaro_ui::descargas::boton_icono(inv,Icono::Acciones,m(Accion::MenuBarra)),
                 componentes::boton_con_icono(
                     inv,
                     Icono::Cerrar,
@@ -1044,7 +1056,7 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
         .and_then(|i| app.servicios.mods.tamanos.get(&i.id))
         .copied()
         .unwrap_or(0);
-    column![
+    let body:Element<'_,Mensaje>=column![
         componentes::campo(p, "Buscar", &app.busqueda_mods, Mensaje::BuscarMods),
         bar,
         mods_reales::estado_operacion(app),
@@ -1063,7 +1075,18 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
     .spacing(16)
     .padding(Padding::from([24., 48.]))
     .height(Length::Fill)
-    .into()
+    .into();
+    if app.servicios.mods.diseno.menu_barra {
+        use icaro_ui::superficies::{menu_contextual,ElementoMenu};
+        let menu=menu_contextual(p,vec![
+            ElementoMenu::Opcion{icono:Icono::Subir,texto:"Exportar lista…".into(),atajo:None,peligro:false,mensaje:m(Accion::ExportarLista)},
+            ElementoMenu::Opcion{icono:Icono::Aviso,texto:"Archivos sin verificar".into(),atajo:None,peligro:false,mensaje:m(Accion::VerificarArchivos)},
+        ]);
+        iced::widget::stack![body,
+            iced::widget::mouse_area(container(Space::new(Length::Fill,Length::Fill))).on_press(m(Accion::MenuBarra)),
+            container(menu).width(Length::Fill).align_x(Alignment::End).padding(Padding{top:106.,right:48.,bottom:0.,left:0.})
+        ].into()
+    }else{body}
 }
 
 pub fn categoria(value: &str) -> &str {
@@ -1131,7 +1154,7 @@ pub fn comprobar_cesta(app: &mut App, v: Version) {
 }
 
 pub fn ficha(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let s = &app.servicios;
     let Some((project, versions)) = &s.detail else {
         return container(
