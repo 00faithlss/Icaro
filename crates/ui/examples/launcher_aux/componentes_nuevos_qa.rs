@@ -21,7 +21,7 @@ pub fn vista<'a>(app: &'a App, scene: &str) -> Option<Element<'a, Mensaje>> {
             row![componentes::aviso_detallado(p, Estado::Aviso, "Hay una versión nueva de Sodium",
                 "0.6.5 corrige un cierre al cambiar de dimensión. Actualiza desde la pestaña Mods."),
                 componentes::aviso_detallado(p, Estado::Error, "Java 17 no sirve para 1.21",
-                "Instala Java 21 desde Ajustes > Java o deja que Ícaro lo descargue.")].spacing(16),
+                "Instala Java 21 desde Ajustes > Java o deja que Icaro Launcher lo descargue.")].spacing(16),
             row![componentes::aviso_detallado(p, Estado::Exito, "Integridad verificada", "1.482 archivos revisados. Ninguno dañado."),
                 componentes::aviso_detallado(p, Estado::Info, "Esta instancia usa una snapshot",
                 "Las snapshots pueden dañar mundos. Haz una copia antes de jugar.")].spacing(16)

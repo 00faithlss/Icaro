@@ -4,6 +4,8 @@ Actualizado el **12-10-2026**. Este documento describe el trabajo que falta; no 
 
 ## 1. Instalación y ejecución de loaders oficiales
 
+**Base de almacenamiento pendiente:** implementar la [organización de datos compartidos](organizacion-datos.md) para Vanilla y loaders, migrar las instalaciones existentes y unificar configuración, temporales y eliminaciones. Esta estructura no se obtiene automáticamente al incorporar un instalador oficial.
+
 **Estado actual:** el asistente y Cambiar versión consultan los catálogos oficiales de Fabric, Quilt, Forge y NeoForge y guardan la versión elegida. La instalación y el lanzamiento completos funcionan para Vanilla. Elegir un loader todavía no instala ni ejecuta ese loader.
 
 - [ ] Conectar la instalación de cada loader usando sus perfiles, manifiestos, bibliotecas y/o instaladores oficiales, según corresponda. No sustituir el resultado oficial por versiones o perfiles inventados.

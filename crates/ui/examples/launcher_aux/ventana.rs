@@ -1,10 +1,45 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Bordes para cambiar el tamaño de la ventana sin una barra de título del sistema.
+//! Esquinas exteriores y bordes para redimensionar la ventana sin título del sistema.
 
 use crate::Mensaje;
 use iced::{Element, Task};
+
+/// El compositor recorta sólo la ventana; los componentes mantienen su geometría.
+/// Windows 11 usa un radio pequeño y vuelve a esquinas rectas al maximizar.
+pub fn configurar_esquinas() -> Task<Mensaje> {
+    #[cfg(windows)]
+    {
+        use iced::window::{self, raw_window_handle::RawWindowHandle};
+        use windows_sys::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUNDSMALL,
+        };
+        return window::get_oldest().and_then(|id| {
+            window::run_with_handle(id, |handle| {
+                if let RawWindowHandle::Win32(handle) = handle.as_raw() {
+                    let preferencia = DWMWCP_ROUNDSMALL;
+                    // HWND vivo en el hilo de la ventana; el valor se copia durante la llamada.
+                    // Sistemas sin este atributo conservan su borde habitual.
+                    let resultado = unsafe {
+                        DwmSetWindowAttribute(
+                            handle.hwnd.get() as _,
+                            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                            (&preferencia as *const i32).cast(),
+                            std::mem::size_of_val(&preferencia) as u32,
+                        )
+                    };
+                    if std::env::var_os("ICARO_CAPTURA_DISENO").is_some() {
+                        eprintln!("Esquinas de ventana: DWM HRESULT={resultado:#x}");
+                    }
+                }
+                Mensaje::Nada
+            })
+        });
+    }
+    #[cfg(not(windows))]
+    Task::none()
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Borde {

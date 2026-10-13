@@ -356,7 +356,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     mods_reales::cargar_local(app);
                     app.aviso = Some(
                         icaro_ui::avisos::Aviso::nuevo(
-                            "Mods movidos a la papelera de Ícaro.".into(),
+                            "Mods movidos a la papelera de Icaro Launcher.".into(),
                             Some(m(Accion::Deshacer)),
                             std::time::Instant::now(),
                         )

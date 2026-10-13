@@ -215,7 +215,7 @@ pub mod espacio {
     pub const S24: f32 = 96.0;
 }
 
-/// Ícaro no redondea esquinas.
+/// Los componentes conservan esquinas rectas; el compositor redondea la ventana exterior.
 pub mod radio {
     pub const CERO: f32 = 0.0;
 }

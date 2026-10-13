@@ -1,4 +1,6 @@
-# Ícaro
+# Icaro Launcher
+
+El nombre visible del producto es **Icaro Launcher** y el repositorio es `00faithlss/icaro-launcher`. Las carpetas de datos `Icaro`, el protocolo `icaro://` y los identificadores internos conservan sus nombres actuales para mantener la compatibilidad.
 
 Launcher de Minecraft escrito en Rust, con Windows y Arch Linux como plataformas objetivo.
 
@@ -17,7 +19,7 @@ Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da 
 
 ## Estado actual
 
-Ícaro está en desarrollo. La interfaz ya permite recorrer instancias, servidores, descargas, consola, modpacks, capturas, ajustes y cuenta, con temas claro y oscuro.
+Icaro Launcher está en desarrollo. La interfaz ya permite recorrer instancias, servidores, descargas, consola, modpacks, capturas, ajustes y cuenta, con temas claro y oscuro.
 
 > [!NOTE]
 > El ejemplo conecta Microsoft y Modrinth, guarda las instancias, instala Minecraft Vanilla con Java automático, ejecuta el juego con una cuenta activa, instala y actualiza mods compatibles y exporta instancias en ZIP. Sin cuenta activa muestra la bienvenida; las secciones sin datos aparecen vacías. `ICARO_DEMO=1` permite revisar los datos de muestra. La instalación de loaders y el lanzamiento de instancias con mods siguen pendientes.
@@ -35,8 +37,8 @@ Apariencia incluye el tema del sistema, Mármol/Plata/Bronce y escala de 80 a 15
 Instala Rust estable con [rustup](https://rustup.rs/) y las herramientas de compilación correspondientes a tu sistema. Para descargar el repositorio y abrir la interfaz:
 
 ```sh
-git clone https://github.com/00faithlss/Icaro.git
-cd Icaro
+git clone https://github.com/00faithlss/icaro-launcher.git
+cd icaro-launcher
 git switch develop
 cargo run -p icaro-ui --example launcher
 ```
@@ -164,7 +166,7 @@ El [plan de integración](docs/integracion-real.md) detalla los servicios y sus 
 
 ## Componentes de terceros, licencias y fuentes
 
-Ícaro utiliza los siguientes componentes directos. Las versiones indicadas corresponden al `Cargo.lock` actual; cada proyecto conserva su licencia y sus avisos de autoría.
+Icaro Launcher utiliza los siguientes componentes directos. Las versiones indicadas corresponden al `Cargo.lock` actual; cada proyecto conserva su licencia y sus avisos de autoría.
 
 | Componente | Versión | Uso | Licencia declarada |
 | --- | --- | --- | --- |
@@ -205,7 +207,7 @@ Las obras y reproducciones utilizadas en los grabados conservan las condiciones 
 ## Documentación
 
 - [Índice de documentación](docs/README.md)
-- [Acerca de Ícaro](docs/acerca-de.md)
+- [Acerca de Icaro Launcher](docs/acerca-de.md)
 - [Desarrollo y estructura del proyecto](docs/desarrollo.md)
 - [Roadmap del System Design](docs/roadmap-system-design.md)
 - [Implementación pendiente: loaders, importación y siguientes entregas](docs/pendientes-implementacion.md)
@@ -219,7 +221,7 @@ Las obras y reproducciones utilizadas en los grabados conservan las condiciones 
 
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
-El código de Ícaro está disponible bajo **GNU General Public License v3.0 only**, identificada como `GPL-3.0-only`. El texto completo se encuentra en [LICENSE](LICENSE).
+El código de Icaro Launcher está disponible bajo **GNU General Public License v3.0 only**, identificada como `GPL-3.0-only`. El texto completo se encuentra en [LICENSE](LICENSE).
 
 Las bibliotecas, tipografías, iconos e imágenes de terceros conservan sus licencias, detalladas en [Componentes de terceros](#componentes-de-terceros-licencias-y-fuentes). La fotografía utilizada para el icono de Ícaro se atribuye a **© Marie-Lan Nguyen / Wikimedia Commons** bajo [CC BY 2.5](https://creativecommons.org/licenses/by/2.5/).
 

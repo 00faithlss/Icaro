@@ -263,7 +263,7 @@ fn tabla_instalaciones<'a, M: Clone + 'a>(
             .spacing(espacio::S2)
             .align_y(Alignment::Center);
         if i.gestionada {
-            proveedor = proveedor.push(insignia(p, Estado::Info, "Ícaro"));
+            proveedor = proveedor.push(insignia(p, Estado::Info, "Icaro Launcher"));
         }
         let accion = if i.existe {
             boton(p, "Probar", Variante::Secundario, None::<M>)
@@ -536,7 +536,7 @@ pub fn impacto<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
 /// Configuración de Java de una instancia. Cada instancia tiene la suya.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigJava {
-    /// `None` deja que Ícaro elija la versión según la del juego.
+    /// `None` deja que Icaro Launcher elija la versión según la del juego.
     pub java: Option<String>,
     /// Memoria inicial de la JVM (`-Xms`), en MB.
     pub memoria_min: u32,
@@ -648,7 +648,7 @@ pub fn pestana_java<'a, M: Clone + 'a>(
     pagina(
         column![
             campo_rotulado(p, "Versión de Java de esta instancia", version),
-            text("Con Automático, Ícaro obtiene la versión de Java que pide Minecraft y reutiliza las instalaciones guardadas.")
+            text("Con Automático, Icaro Launcher obtiene la versión de Java que pide Minecraft y reutiliza las instalaciones guardadas.")
                 .size(texto::BODY_SM.0)
                 .color(p.text_muted),
             memoria,
@@ -685,7 +685,7 @@ pub struct Nodo {
     pub profundidad: usize,
     pub carpeta: bool,
     pub abierta: bool,
-    /// Gestionado por Ícaro: se muestra con candado y no se modifica aquí.
+    /// Gestionado por Icaro Launcher: se muestra con candado y no se modifica aquí.
     pub bloqueado: bool,
     pub tamano: String,
 }

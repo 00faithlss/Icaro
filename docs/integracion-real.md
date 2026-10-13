@@ -44,7 +44,7 @@ Estas medidas reducen exposición accidental. El almacén del sistema no garanti
 
 El catálogo público usa la API documentada y un cliente independiente del login. No recibe el token de Minecraft. Identifica Ícaro mediante `User-Agent`, respeta la espera recibida con HTTP 429 y trata errores sin bloquear la interfaz. [Descripción de la API](https://docs.modrinth.com/api/).
 
-El `User-Agent` debe incluir el nombre, la versión de Ícaro y un enlace al proyecto, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/Icaro)`.
+El `User-Agent` debe incluir el nombre, la versión de Ícaro y un enlace al proyecto, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/icaro-launcher)`.
 
 La búsqueda usa texto, tipo de proyecto, versión de Minecraft y loader. Se pagina y se descartan respuestas antiguas al cambiar filtros. La selección final de versión vuelve a comprobar compatibilidad, porque encontrar un proyecto no garantiza que cualquier archivo sirva para la instancia. [Búsqueda](https://docs.modrinth.com/api/operations/searchprojects/) y [versiones](https://docs.modrinth.com/api/operations/getprojectversions/).
 

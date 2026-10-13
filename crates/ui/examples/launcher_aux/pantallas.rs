@@ -756,7 +756,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::CopiarInforme => {
             return iced::clipboard::write(
-                "Ícaro · El juego se cerró (código 1) · Supervivencia\nCausa probable: Iris Shaders 1.8.1 no es compatible con Sodium 0.6.5"
+                "Icaro Launcher · El juego se cerró (código 1) · Supervivencia\nCausa probable: Iris Shaders 1.8.1 no es compatible con Sodium 0.6.5"
                     .to_owned(),
             );
         }
@@ -965,7 +965,7 @@ fn primera<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
     if !app.servicios.demo {
         let disponible = !app.servicios.restoring && !app.servicios.auth_busy;
         return con_lamina(p, Lamina::Icaro, column![
-            text("ÍCARO").font(fuentes::DISPLAY).size(80.0).color(p.text),
+            text("ICARO\nLAUNCHER").font(fuentes::DISPLAY).size(64.0).color(p.text),
             crate::servicios::welcome_status(app),
             row![
                 componentes::boton(p, "Iniciar sesión", Variante::Primario, disponible.then(|| m(Accion::Abrir(Pantalla::Codigo)))),
@@ -989,13 +989,13 @@ fn primera<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
         .into()
     };
     let derecha = column![
-        text("ÍCARO").font(fuentes::DISPLAY).size(80.0).color(p.text),
+        text("ICARO\nLAUNCHER").font(fuentes::DISPLAY).size(64.0).color(p.text),
         text("Vamos a dejar todo listo en tres pasos. Después, solo queda pulsar Jugar.")
             .size(texto::BODY.0)
             .color(p.text_muted),
         Space::with_height(espacio::S4),
         paso("1", "Inicia sesión", "Con tu cuenta Microsoft o como invitado.", true),
-        paso("2", "Revisamos Java", "Si falta, Ícaro lo descarga.", false),
+        paso("2", "Revisamos Java", "Si falta, Icaro Launcher lo descarga.", false),
         paso("3", "Tu primera instancia", "Vanilla, Fabric o un modpack.", false),
         Space::with_height(espacio::S4),
         row![
@@ -1019,7 +1019,7 @@ fn codigo<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
     let celdas = icaro_ui::cuenta::codigo(p, "F7K2-9QXM", vencido);
     let mut col = column![
         text("INICIA SESIÓN\nCON MICROSOFT").font(fuentes::DISPLAY).size(texto::DISPLAY.0).color(p.text),
-        text("Tu cuenta de Minecraft se confirma en el navegador. Ícaro nunca ve tu contraseña.")
+        text("Tu cuenta de Minecraft se confirma en el navegador. Icaro Launcher nunca ve tu contraseña.")
             .size(texto::BODY.0)
             .color(p.text_muted),
         Space::with_height(espacio::S2),
@@ -1707,7 +1707,7 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
             col = col
                 .push(fila_ajuste(p, "Idioma", "El idioma de la interfaz.",
                     componentes::selector(p, vec!["Español (Chile)".to_owned(), "English".to_owned()], Some(a.idioma.clone()), |v| m(Accion::Idioma(v)))))
-                .push(fila_ajuste(p, "Abrir con el sistema", "Ícaro se inicia al encender el equipo.", interruptor(a.abrir_al_iniciar, CampoAjuste::AbrirAlIniciar)))
+                .push(fila_ajuste(p, "Abrir con el sistema", "Icaro Launcher se inicia al encender el equipo.", interruptor(a.abrir_al_iniciar, CampoAjuste::AbrirAlIniciar)))
                 .push(fila_ajuste(p, "Iniciar minimizado", "Arranca sin mostrar la ventana.", interruptor(a.iniciar_minimizado, CampoAjuste::IniciarMinimizado)))
                 .push(fila_ajuste(p, "Al iniciar el juego", "Qué hace el launcher cuando Minecraft abre.",
                     componentes::selector(p, vec!["Mantener abierto".to_owned(), "Minimizar".to_owned(), "Cerrar el launcher".to_owned()],
@@ -1726,9 +1726,9 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
         2 => {
             col = col
                 .push(fila_ajuste(p, "Java de cada instancia", "La versión y la memoria se eligen por instancia, en la pestaña Java de su editor.", Space::with_width(0).into()))
-                .push(fila_ajuste(p, "Gestión automática", "Ícaro obtiene el Java que pide la versión de Minecraft y lo guarda para reutilizarlo.", componentes::interruptor(p, true, Mensaje::Nada)))
+                .push(fila_ajuste(p, "Gestión automática", "Icaro Launcher obtiene el Java que pide la versión de Minecraft y lo guarda para reutilizarlo.", componentes::interruptor(p, true, Mensaje::Nada)))
                 .push(text("Instalaciones detectadas").font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text));
-            let installations = if app.servicios.demo { vec![("21.0.5".into(), "Temurin · Ícaro".into(), "…/icaro/java/21".into()), ("17.0.13".into(), "Temurin · Ícaro".into(), "…/icaro/java/17".into())] } else { crate::juego_real::instalaciones_java(app).into_iter().map(|i| (i.version,i.proveedor,i.ruta)).collect() };
+            let installations = if app.servicios.demo { vec![("21.0.5".into(), "Temurin · Icaro Launcher".into(), "…/icaro/java/21".into()), ("17.0.13".into(), "Temurin · Icaro Launcher".into(), "…/icaro/java/17".into())] } else { crate::juego_real::instalaciones_java(app).into_iter().map(|i| (i.version,i.proveedor,i.ruta)).collect() };
             for (v, prov, ruta) in installations {
                 col = col.push(
                     container(
@@ -1796,7 +1796,7 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
         }
         _ => {
             col = col
-                .push(text("Ícaro 0.1.0").font(fuentes::TITULO).size(texto::HEADING.0).color(p.text))
+                .push(text("Icaro Launcher 0.1.0").font(fuentes::TITULO).size(texto::HEADING.0).color(p.text))
                 .push(text("Un launcher de Minecraft escrito en Rust, ligero y optimizado, para Windows y Arch Linux.").size(texto::BODY.0).color(p.text_muted))
                 .push(text("Licencia GPL-3.0. Grabados de dominio público (CC0) de The Met, la National Gallery of Art y el Art Institute of Chicago. Íconos Pixelarticons (MIT).").size(texto::BODY.0).color(p.text_muted));
             if app.servicios.demo {

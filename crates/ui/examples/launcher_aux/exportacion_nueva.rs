@@ -210,7 +210,7 @@ pub fn vista<'a>(app: &'a App, s: &'a Exportar) -> Element<'a, Mensaje> {
     .height(Length::Fill)
     .style(icaro_ui::estilo::marco(p));
     let (count, bytes) = s.arbol.as_ref().map_or((0, 0), Arbol::resumen);
-    let formats = ["Formato: .zip de Ícaro", "Formato: Prism / MultiMC"];
+    let formats = ["Formato: .zip de Icaro Launcher", "Formato: Prism / MultiMC"];
     let selector = componentes::selector(
         p,
         formats.to_vec(),

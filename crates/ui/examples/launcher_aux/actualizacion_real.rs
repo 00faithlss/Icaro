@@ -109,7 +109,7 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
             }
             if ahora && juego_abierto(app) {
                 app.actualizacion.error =
-                    Some("Cierra Minecraft y espera a que terminen sus tareas antes de actualizar Ícaro.".into());
+                    Some("Cierra Minecraft y espera a que terminen sus tareas antes de actualizar Icaro Launcher.".into());
                 return Task::none();
             }
             if let Some(p) = app.actualizacion.preparada.as_ref() {
@@ -175,7 +175,7 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
                     app.actualizacion.al_cerrar = true;
                     if ahora {
                         app.actualizacion.error = Some(
-                            "Minecraft está abierto. La actualización se aplicará al cerrar Ícaro."
+                            "Minecraft está abierto. La actualización se aplicará al cerrar Icaro Launcher."
                                 .into(),
                         );
                     } else {
@@ -219,7 +219,7 @@ pub fn banner(app: &App) -> Option<Element<'_, Mensaje>> {
     Some(
         container(
             row![
-                text(format!("Ícaro {} disponible", d.version))
+                text(format!("Icaro Launcher {} disponible", d.version))
                     .size(texto::BODY_SM.0)
                     .color(p.text),
                 Space::with_width(Length::Fill),
@@ -249,8 +249,8 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
     let titulo = e
         .disponible
         .as_ref()
-        .map(|d| format!("ÍCARO {}", d.version))
-        .unwrap_or_else(|| "ÍCARO".into());
+        .map(|d| format!("ICARO LAUNCHER {}", d.version))
+        .unwrap_or_else(|| "ICARO LAUNCHER".into());
     let detalle = e
         .disponible
         .as_ref()
@@ -286,7 +286,7 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
             } else if e.comprobada && e.error.is_none() {
                 "Tienes la versión más reciente publicada."
             } else {
-                "Comprueba si hay una nueva versión de Ícaro."
+                "Comprueba si hay una nueva versión de Icaro Launcher."
             })
             .size(texto::BODY.0)
             .color(p.text_muted),
@@ -308,7 +308,7 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
     }
     if e.al_cerrar {
         notas = notas.push(
-            text("Actualización lista para aplicar al cerrar Ícaro.")
+            text("Actualización lista para aplicar al cerrar Icaro Launcher.")
                 .size(texto::BODY_SM.0)
                 .color(p.success),
         );
@@ -332,7 +332,7 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
             ),
             componentes::boton(
                 p,
-                "Al cerrar Ícaro",
+                "Al cerrar Icaro Launcher",
                 Variante::Secundario,
                 (!e.descargando).then(|| m(Accion::AlCerrar))
             ),
@@ -412,7 +412,7 @@ pub fn preparar_diseno(app: &mut App) {
     let disponible = serde_json::from_value(serde_json::json!({
         "version": "1.3.0",
         "bytes": 14889779,
-        "url": "https://github.com/00faithlss/Icaro/releases/download/v1.3.0/icaro-windows-x86_64.exe",
+        "url": "https://github.com/00faithlss/icaro-launcher/releases/download/v1.3.0/icaro-windows-x86_64.exe",
         "sha256": "00".repeat(32),
         "notas": [
             {"tipo":"nuevo", "texto":"Sincroniza mods con un servidor antes de unirte."},

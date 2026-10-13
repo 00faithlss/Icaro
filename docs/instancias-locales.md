@@ -6,6 +6,8 @@ Los caracteres reservados del sistema de archivos se sustituyen por `_`. Los nom
 
 ## Metadatos y migración
 
+La [investigación de Prism y organización objetivo de datos](organizacion-datos.md) distingue las rutas actuales de la reorganización pendiente: assets/bibliotecas compartidos, configuración por instancia y papelera del sistema.
+
 Cada carpeta contiene `instance.json` y `instance.cfg`. El CFG es un INI de Ícaro, con sección `[General]` y campos `Id`, `Name`, `Minecraft`, `Loader`, `Cover` y `Created`. Las cadenas están escapadas como JSON para conservar acentos y caracteres especiales. No es un archivo de configuración intercambiable con Prism Launcher.
 
 `instance.json` conserva la lectura compatible de versiones anteriores. Cuando no existe, se puede recuperar la instancia desde `instance.cfg`; un JSON presente pero corrupto no se sustituye silenciosamente. El icono personalizado se guarda por separado, dentro de la misma carpeta.

@@ -3392,7 +3392,7 @@ fn main() -> iced::Result {
         }
         return Ok(());
     }
-    let mut app = iced::application("Ícaro", actualizar, vista)
+    let mut app = iced::application("Icaro Launcher", actualizar, vista)
         .theme(|app: &App| if app.modo==Modo::Piedra {iced::Theme::Light}else{iced::Theme::Dark})
         .scale_factor(|app: &App| app.aj.escala.clamp(80,150) as f64/100.)
         .default_font(fuentes::CUERPO)
@@ -3543,8 +3543,12 @@ fn main() -> iced::Result {
     let menu = std::env::var_os("ICARO_MENU").is_some().then_some(0);
     let con_dialogo = std::env::var_os("ICARO_DIALOGO").is_some();
     app.run_with(move || {
-        if std::env::var_os("ICARO_CAPTURA_DISENO").is_some() { return pruebas_diseno::iniciar(piedra); }
-        iniciar_app(seccion, piedra, menu, con_dialogo, servicios::Estado::default())
+        let (app, inicio) = if std::env::var_os("ICARO_CAPTURA_DISENO").is_some() {
+            pruebas_diseno::iniciar(piedra)
+        } else {
+            iniciar_app(seccion, piedra, menu, con_dialogo, servicios::Estado::default())
+        };
+        (app, Task::batch([inicio, ventana::configurar_esquinas()]))
     })
 }
 

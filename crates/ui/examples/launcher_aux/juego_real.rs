@@ -429,7 +429,7 @@ fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::path::PathBu
 }
 pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
     if app.actualizacion.descargando {
-        app.avisar("Espera a que termine de descargarse la actualización de Ícaro.".into());
+        app.avisar("Espera a que termine de descargarse la actualización de Icaro Launcher.".into());
         return Task::none();
     }
     let Some(i) = app.servicios.instancias.registros.get(index).cloned() else {
@@ -1450,7 +1450,7 @@ fn exportar_registro(app: &App) -> Task<Mensaje> {
                         .and_then(leer_registro_disco)
                         .map(|text| {
                             format!(
-                                "Ícaro · Minecraft\n{}\n{}",
+                                "Icaro Launcher · Minecraft\n{}\n{}",
                                 error.unwrap_or_default(),
                                 lanzamiento::registro_para_exportar(&text, session.as_deref())
                             )
@@ -1481,7 +1481,7 @@ fn texto_registro(app: &App) -> String {
         .cloned()
         .unwrap_or_default();
     format!(
-        "Ícaro · Minecraft Vanilla\n{error}\n{}",
+        "Icaro Launcher · Minecraft Vanilla\n{error}\n{}",
         lineas(app)
             .iter()
             .map(|l| format!("[{}] {:?} {}", l.hora, l.nivel, l.mensaje))
