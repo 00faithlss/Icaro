@@ -412,7 +412,7 @@ pub fn preparar_diseno(app: &mut App) {
     let disponible = serde_json::from_value(serde_json::json!({
         "version": "1.3.0",
         "bytes": 14889779,
-        "url": "https://github.com/00faithlss/icaro-launcher/releases/download/v1.3.0/icaro-windows-x86_64.exe",
+        "url": "https://github.com/00faithlss/Icaro-launcher/releases/download/v1.3.0/icaro-windows-x86_64.exe",
         "sha256": "00".repeat(32),
         "notas": [
             {"tipo":"nuevo", "texto":"Sincroniza mods con un servidor antes de unirte."},

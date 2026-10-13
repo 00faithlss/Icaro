@@ -12,7 +12,7 @@ use std::{
 };
 use tokio::io::AsyncWriteExt;
 
-const RELEASE: &str = "https://api.github.com/repos/00faithlss/icaro-launcher/releases/latest";
+const RELEASE: &str = "https://api.github.com/repos/00faithlss/Icaro-launcher/releases/latest";
 const MAX_ARCHIVO: u64 = 1024 * 1024 * 1024;
 const PLATAFORMA: &str = "windows-x86_64";
 
@@ -107,7 +107,7 @@ fn asset_valido(url: &str, tag: &str, nombre: &str) -> bool {
     {
         return false;
     }
-    url == format!("https://github.com/00faithlss/icaro-launcher/releases/download/{tag}/{nombre}")
+    url == format!("https://github.com/00faithlss/Icaro-launcher/releases/download/{tag}/{nombre}")
 }
 fn resolver(
     release: Release,
@@ -332,7 +332,7 @@ fn validar_descarga(d: &Disponible) -> Result<(), Error> {
         || url.query().is_some()
         || url.fragment().is_some()
         || partes.len() != 6
-        || partes[..4] != ["00faithlss", "icaro-launcher", "releases", "download"]
+        || partes[..4] != ["00faithlss", "Icaro-launcher", "releases", "download"]
         || numeros(partes[4]) != numeros(&d.version)
         || numeros(&d.version).is_none()
         || !partes[5].ends_with(".exe")
@@ -511,7 +511,7 @@ mod tests {
     fn datos() -> (Release, Manifest) {
         let release = Release { tag_name: "v0.2.0".into(), draft: false, prerelease: false,
             assets: vec![Asset { name: "icaro-windows-x86_64.exe".into(), size: 200,
-                browser_download_url: "https://github.com/00faithlss/icaro-launcher/releases/download/v0.2.0/icaro-windows-x86_64.exe".into() }] };
+                browser_download_url: "https://github.com/00faithlss/Icaro-launcher/releases/download/v0.2.0/icaro-windows-x86_64.exe".into() }] };
         let manifest = Manifest {
             version: "0.2.0".into(),
             notas: vec![Nota {
@@ -566,7 +566,7 @@ mod tests {
         assert!(validar_descarga(&d).is_ok());
         d.url = "https://github.com/otro/Icaro/releases/download/v0.2.0/icaro.exe".into();
         assert!(validar_descarga(&d).is_err());
-        d.url = "https://github.com/00faithlss/icaro-launcher/releases/download/v0.3.0/icaro.exe".into();
+        d.url = "https://github.com/00faithlss/Icaro-launcher/releases/download/v0.3.0/icaro.exe".into();
         assert!(validar_descarga(&d).is_err());
     }
 }

@@ -6,9 +6,9 @@ use std::time::Duration;
 use zeroize::Zeroizing;
 
 pub(crate) const USER_AGENT: &str = concat!(
-    "00faithlss/icaro-launcher/",
+    "00faithlss/Icaro-launcher/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/00faithlss/icaro-launcher)"
+    " (+https://github.com/00faithlss/Icaro-launcher)"
 );
 
 /// Los errores conservan únicamente etapa y código HTTP; nunca cuerpos ni URLs.

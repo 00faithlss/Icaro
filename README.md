@@ -1,6 +1,6 @@
 # Icaro Launcher
 
-El nombre visible del producto es **Icaro Launcher** y el repositorio es `00faithlss/icaro-launcher`. Las carpetas de datos `Icaro`, el protocolo `icaro://` y los identificadores internos conservan sus nombres actuales para mantener la compatibilidad.
+El nombre visible del producto es **Icaro Launcher** y el repositorio es `00faithlss/Icaro-launcher`. Las carpetas de datos `Icaro`, el protocolo `icaro://` y los identificadores internos conservan sus nombres actuales para mantener la compatibilidad.
 
 Launcher de Minecraft escrito en Rust, con Windows y Arch Linux como plataformas objetivo.
 
@@ -37,8 +37,8 @@ Apariencia incluye el tema del sistema, Mármol/Plata/Bronce y escala de 80 a 15
 Instala Rust estable con [rustup](https://rustup.rs/) y las herramientas de compilación correspondientes a tu sistema. Para descargar el repositorio y abrir la interfaz:
 
 ```sh
-git clone https://github.com/00faithlss/icaro-launcher.git
-cd icaro-launcher
+git clone https://github.com/00faithlss/Icaro-launcher.git
+cd Icaro-launcher
 git switch develop
 cargo run -p icaro-ui --example launcher
 ```
