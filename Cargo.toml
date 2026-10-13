@@ -6,7 +6,7 @@ members = ["crates/core", "crates/cli", "crates/ui"]
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
-repository = "https://github.com/00faithlss/Icaro"
+repository = "https://github.com/00faithlss/Icaro-launcher"
 
 [workspace.dependencies]
 anyhow = "1"

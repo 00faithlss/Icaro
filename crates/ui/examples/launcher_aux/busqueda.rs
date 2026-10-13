@@ -78,11 +78,13 @@ pub fn resultados(app: &App) -> Vec<Resultado> {
             destino: Destino::Instancia(i),
         })
         .collect();
+    if app.servicios.demo {
     entradas.extend(mods::CATALOGO.iter().map(|m| Resultado {
         titulo: m.titulo.into(),
         detalle: format!("Mod · {} · {}", m.id, m.descripcion),
         destino: Destino::Mod(m.id.into()),
     }));
+    }
     entradas.extend(
         app.red
             .servidores
@@ -106,7 +108,7 @@ pub fn mover(actual: usize, paso: i32, total: usize) -> usize {
 }
 
 pub fn vista(app: &App) -> Element<'_, Mensaje> {
-    let p = app.modo.paleta();
+    let p = app.paleta();
     let resultados = resultados(app);
     let cantidad = resultados.len();
     let mut lista = column![].spacing(espacio::S1);

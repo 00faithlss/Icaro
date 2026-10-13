@@ -45,6 +45,11 @@ impl Explorador {
     pub fn abrir(instancia: &str) -> Self {
         let raiz = std::env::temp_dir().join("icaro-demo").join(instancia);
         crear_demo(&raiz);
+        Self::desde_ruta(raiz)
+    }
+
+    /// Abre la carpeta de juego existente sin crear archivos de demostración.
+    pub fn desde_ruta(raiz: PathBuf) -> Self {
         let mut e = Self {
             abiertas: HashSet::from([raiz.join("mods"), raiz.join("config")]),
             raiz,
@@ -70,6 +75,7 @@ impl Explorador {
                 carpeta: e.carpeta,
                 abierta: self.abiertas.contains(&e.ruta),
                 bloqueado: e.bloqueado,
+                tamano: fs::metadata(&e.ruta).ok().map_or(String::new(),|m| if m.is_dir() { fs::read_dir(&e.ruta).ok().map_or(String::new(),|d| d.count().to_string()) } else { format!("{} KB",m.len().div_ceil(1024)) }),
             })
             .collect();
     }
@@ -183,6 +189,14 @@ impl Explorador {
     pub fn ruta_texto(&self) -> Option<String> {
         self.ruta_elegida().map(|r| r.display().to_string())
     }
+    pub fn ruta_relativa(&self) -> Option<String> { self.ruta_elegida().and_then(|r| r.strip_prefix(&self.raiz).ok().map(|p| p.to_string_lossy().replace('\\',"/"))) }
+    pub fn abrir_carpeta(&mut self) {
+        if let Some(r)=self.ruta_elegida() {
+            if let Err(error) = crate::pantallas::abrir_en_sistema(if r.is_dir() { &r } else { r.parent().unwrap_or(&self.raiz) }) {
+                self.nota = Some((Estado::Error, error));
+            }
+        }
+    }
 
     /// Abre la carpeta o el archivo con el sistema.
     pub fn abrir_en_sistema(&self) {
@@ -269,14 +283,12 @@ impl Explorador {
         }
     }
 
-    /// Mueve el elemento a la papelera interna de la instancia.
+    /// Mueve el elemento a la papelera del sistema.
     pub fn a_la_papelera(&mut self) {
         let Some(ruta) = self.ruta_elegida() else {
             return;
         };
-        let papelera = self.raiz.join(".papelera");
-        let destino = nombre_libre(&papelera.join(ruta.file_name().unwrap_or_default()));
-        let resultado = fs::create_dir_all(&papelera).and_then(|_| fs::rename(&ruta, &destino));
+        let resultado = icaro_core::papelera::enviar(&ruta).map(|_| ());
         match resultado {
             Ok(()) => {
                 self.elegido = None;

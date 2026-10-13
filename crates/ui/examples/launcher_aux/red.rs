@@ -29,6 +29,7 @@ pub enum Mensaje {
     Cancelar(usize),
     Seguir(usize),
     Reintentar(usize),
+    QuitarRegistro(usize),
     AlternarHistorial,
     LimpiarHistorial,
     /// Devuelve la lista de servidores a como estaba antes del último cambio.
@@ -115,6 +116,13 @@ fn tiempo_restante(segundos: f32) -> String {
 }
 
 impl Estado {
+    pub fn vacio() -> Self {
+        Self {
+            servidores: Vec::new(), arrastre: None, sobre: None, colocando: None,
+            historial: Vec::new(), historial_abierto: false, cola: Vec::new(),
+            toma: (0.0, 0), anterior: None, ultimo: Instant::now(), nuevos: 0,
+        }
+    }
     pub fn nuevo() -> Self {
         let servidores = vec![
             Servidor {
@@ -250,6 +258,11 @@ impl Estado {
                 } else {
                     let nombre = self.cola.remove(i).nombre;
                     return Some(format!("Se canceló la descarga de {nombre}."));
+                }
+            }
+            Mensaje::QuitarRegistro(i) => {
+                if self.cola.get(i).is_some_and(|d|matches!(d.modo,Modo::Completada|Modo::Fallo)) {
+                    self.cola.remove(i);
                 }
             }
             Mensaje::Seguir(i) => {

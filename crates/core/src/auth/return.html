@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__TITLE__ · Ícaro</title>
+  <style>
+    :root { color-scheme: dark light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px; background: #0b0b0b; color: #f1f1ed; font-family: system-ui, sans-serif; }
+    main { width: min(100%, 540px); border: 1px solid #454541; padding: 40px; }
+    .brand { font-weight: 800; letter-spacing: .12em; margin: 0 0 32px; }
+    h1 { font-size: clamp(26px, 5vw, 38px); line-height: 1.15; margin: 0 0 20px; }
+    p { line-height: 1.6; margin: 0; color: #bfbfba; }
+    @media (prefers-color-scheme: light) { body { background: #eeeeea; color: #111; } main { border-color: #a6a6a1; } p { color: #494943; } }
+  </style>
+</head>
+<body>
+  <main><p class="brand">ÍCARO</p><h1>__TITLE__</h1><p>__MESSAGE__</p></main>
+  <script>__SCRIPT__</script>
+</body>
+</html>

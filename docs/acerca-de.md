@@ -1,6 +1,6 @@
-# Acerca de Ícaro
+# Acerca de Icaro Launcher
 
-Ícaro es un launcher de Minecraft escrito en Rust, ligero y optimizado, para Windows y Arch Linux.
+Icaro Launcher es un launcher de Minecraft escrito en Rust, ligero y optimizado, para Windows y Arch Linux.
 
 ## Funciones previstas
 

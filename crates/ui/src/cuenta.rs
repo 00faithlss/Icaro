@@ -683,6 +683,22 @@ pub struct MensajesSelector<M> {
     pub cerrar_sesion: M,
 }
 
+/// Una cuenta visible en el menú; el nombre y la selección proceden de la sesión.
+pub struct CuentaSelector<M> {
+    pub estado: EstadoSesion,
+    pub nombre: String,
+    pub seleccionada: bool,
+    pub al_pulsar: Option<M>,
+}
+
+/// Acción del menú de cuentas, con icono y contraste compartidos.
+pub struct AccionSelector<M> {
+    pub icono: Icono,
+    pub etiqueta: String,
+    pub peligro: bool,
+    pub al_pulsar: Option<M>,
+}
+
 /// Menú de cuentas que se abre desde el bloque de la barra lateral: la activa
 /// marcada, la vencida con su arreglo, el modo invitado y las acciones.
 pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: MensajesSelector<M>) -> Element<'a, M> {
@@ -690,8 +706,24 @@ pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: Me
         (EstadoSesion::Vencida, EstadoSesion::CodigoVencido | EstadoSesion::SinJuego) => true,
         (a, b) => a == b,
     };
-    let fila_cuenta = |e: EstadoSesion, nombre: &str, detalle: Element<'a, M>, derecha: Option<Element<'a, M>>, msg: M| -> Element<'a, M> {
-        let elegida = actual(e);
+    selector_cuentas(
+        p,
+        vec![
+            CuentaSelector { estado: EstadoSesion::Activa, nombre: "Mineral_7".into(), seleccionada: actual(EstadoSesion::Activa), al_pulsar: Some(m.activa) },
+            CuentaSelector { estado: EstadoSesion::Vencida, nombre: "Forjador".into(), seleccionada: actual(EstadoSesion::Vencida), al_pulsar: Some(m.vencida) },
+            CuentaSelector { estado: EstadoSesion::Invitado, nombre: "Invitado".into(), seleccionada: actual(EstadoSesion::Invitado), al_pulsar: Some(m.invitado) },
+        ],
+        vec![
+            AccionSelector { icono: Icono::UsuarioMas, etiqueta: "Agregar cuenta".into(), peligro: false, al_pulsar: Some(m.agregar) },
+            AccionSelector { icono: Icono::Usuario, etiqueta: "Gestionar cuenta y skin".into(), peligro: false, al_pulsar: Some(m.gestionar) },
+            AccionSelector { icono: Icono::Salir, etiqueta: format!("Cerrar sesión de {}", if estado == EstadoSesion::Invitado { "Invitado" } else { estado.nombre() }), peligro: true, al_pulsar: Some(m.cerrar_sesion) },
+        ],
+    )
+}
+
+/// Diseño común para cuentas reales y las variantes del modo de demostración.
+pub fn selector_cuentas<'a, M: Clone + 'a>(p: Paleta, cuentas: Vec<CuentaSelector<M>>, acciones: Vec<AccionSelector<M>>) -> Element<'a, M> {
+    let fila_cuenta = |e: EstadoSesion, nombre: &str, elegida: bool, msg: Option<M>| -> Element<'a, M> {
         let construir = |invertida: bool| -> Element<'a, M> {
             let mut fila = row![
                 cabeza_de(p, e, 32.0),
@@ -720,15 +752,14 @@ pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: Me
                 })
                 .into()
         };
-        let _ = (detalle, derecha);
         button(hover(construir(false), construir(true)))
             .padding(0)
             .width(Length::Fill)
-            .on_press(msg)
+            .on_press_maybe(msg)
             .style(estilo::sin_estilo(p.text))
             .into()
     };
-    let accion = |g: Icono, etiqueta_: &str, peligro: bool, msg: M| -> Element<'a, M> {
+    let accion = |g: Icono, etiqueta_: &str, peligro: bool, msg: Option<M>| -> Element<'a, M> {
         let tinta = if peligro { p.error } else { p.text };
         let construir = |invertida: bool| -> Element<'a, M> {
             let (fondo, color) = if invertida {
@@ -751,20 +782,18 @@ pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: Me
         button(hover(construir(false), construir(true)))
             .padding(0)
             .width(Length::Fill)
-            .on_press(msg)
+            .on_press_maybe(msg)
             .style(estilo::sin_estilo(tinta))
             .into()
     };
-    let nombre_sal = format!("Cerrar sesión de {}", if estado == EstadoSesion::Invitado { "Invitado" } else { estado.nombre() });
-    let col = column![
-        fila_cuenta(EstadoSesion::Activa, "Mineral_7", Space::new(0, 0).into(), None, m.activa),
-        fila_cuenta(EstadoSesion::Vencida, "Forjador", Space::new(0, 0).into(), None, m.vencida),
-        fila_cuenta(EstadoSesion::Invitado, "Invitado", Space::new(0, 0).into(), None, m.invitado),
-        container(regla(p.border, borde::FINO)).padding(Padding::from([4.0, 0.0])),
-        accion(Icono::UsuarioMas, "Agregar cuenta", false, m.agregar),
-        accion(Icono::Usuario, "Gestionar cuenta y skin", false, m.gestionar),
-        accion(Icono::Salir, &nombre_sal, true, m.cerrar_sesion),
-    ];
+    let mut col = column![];
+    for cuenta in cuentas {
+        col = col.push(fila_cuenta(cuenta.estado, &cuenta.nombre, cuenta.seleccionada, cuenta.al_pulsar));
+    }
+    col = col.push(container(regla(p.border, borde::FINO)).padding(Padding::from([4.0, 0.0])));
+    for a in acciones {
+        col = col.push(accion(a.icono, &a.etiqueta, a.peligro, a.al_pulsar));
+    }
     container(col)
         .width(320)
         .padding(Padding::from([4.0, borde::MEDIO]))

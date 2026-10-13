@@ -13,6 +13,57 @@ use crate::fuentes;
 use crate::iconos::{Icono, Tam};
 use crate::tema::{espacio, medida, texto, Paleta};
 
+/// Apariencia fiel al sistema: temas con iconos, muestras de 56 px y escala.
+pub fn apariencia<'a, M: Clone + 'a>(
+    p: Paleta, tema: usize, metal: usize, escala: i32,
+    al_tema: impl Fn(usize) -> M,
+    al_metal: impl Fn(usize) -> M,
+    al_escala: impl Fn(i32) -> M,
+) -> Element<'a, M> {
+    let mut temas = row![];
+    for (i, (titulo, glifo)) in [("Tinta", Icono::Luna), ("Piedra", Icono::Sol), ("Sistema", Icono::Monitor)].into_iter().enumerate() {
+        temas = temas.push(button(container(row![crate::iconos::icono_texto(glifo, Tam::Base),
+            text(titulo.to_uppercase()).font(fuentes::ETIQUETA).size(texto::LABEL.0)]
+            .spacing(8).align_y(iced::Alignment::Center)).center_y(32))
+            .height(32).padding([0., 16.]).on_press(al_tema(i)).style(estilo::segmento(p, tema == i)));
+        if i < 2 { temas = temas.push(container(Space::new(1, 32)).style(estilo::bloque(p.text))); }
+    }
+    let mut muestras = row![].spacing(10);
+    for (i, metal_actual) in [crate::tema::Metal::Marmol, crate::tema::Metal::Plata, crate::tema::Metal::Bronce].into_iter().enumerate() {
+        let tono = p.modo.paleta().con_metal(metal_actual).accent;
+        let seleccionada = i == metal;
+        let muestra: Element<'a, M> = container(Space::new(56, 56))
+            .style(move |_| container::Style { background: Some(tono.into()), border: iced::Border {
+                width: 2., color: p.border_strong, ..Default::default() }, ..Default::default() }).into();
+        let muestra = if seleccionada {
+            iced::widget::stack![muestra,
+                container(container(Space::new(14, 14)).style(estilo::bloque(p.text)))
+                    .width(56).height(56).align_right(56).align_bottom(56)].into()
+        } else { muestra };
+        let muestra = button(container(muestra).padding(3).style(move |_| container::Style {
+            border: iced::Border { width: 2., color: if seleccionada { p.text } else { iced::Color::TRANSPARENT }, ..Default::default() },
+            ..Default::default()
+        })).padding(0).on_press(al_metal(i)).style(estilo::sin_estilo(p.text));
+        muestras = muestras.push(column![muestra, text(metal_actual.nombre()).size(texto::BODY_SM.0).color(p.text)]
+            .spacing(8).align_x(iced::Alignment::Center));
+    }
+    let escala = escala.clamp(80, 150);
+    let control_escala = container(row![
+        button(crate::iconos::icono_texto(Icono::Menos, Tam::Base)).padding(4).height(32)
+            .on_press_maybe((escala > 80).then(|| al_escala(escala - 10))).style(estilo::boton_fantasma(p)),
+        container(text(format!("{escala} %")).font(fuentes::MONO).size(texto::MONO.0).color(p.text))
+            .width(86).height(32).center_x(86).center_y(32),
+        button(crate::iconos::icono_texto(Icono::Mas, Tam::Base)).padding(4).height(32)
+            .on_press_maybe((escala < 150).then(|| al_escala(escala + 10))).style(estilo::boton_fantasma(p)),
+    ].align_y(iced::Alignment::Center)).style(estilo::marco(p));
+    column![column![etiqueta(p, "Tema"), container(temas).style(estilo::marco(p))].spacing(8),
+        row![column![etiqueta(p, "Metal de acento"), muestras].spacing(8),
+            column![etiqueta(p, "Escala"), control_escala,
+                text("80 a 150 %").size(texto::BODY_SM.0).color(p.text_muted)].spacing(8)
+        ].spacing(48)
+    ].spacing(48).into()
+}
+
 /// Variante visual de un botón.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variante {
@@ -20,6 +71,29 @@ pub enum Variante {
     Secundario,
     Fantasma,
     Peligro,
+}
+
+/// Radio rombo del sistema de diseño (SelectorLoader y filtros de TiendaMods).
+pub fn rombo<'a, M: 'a>(p: Paleta, elegido: bool, deshabilitado: bool) -> Element<'a, M> {
+    let interior = if elegido {
+        "<path d='M12 8L16 12L12 16L8 12Z'/>"
+    } else {
+        ""
+    };
+    let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2L22 12L12 22L2 12Z' fill='none' stroke='currentColor' stroke-width='2'/>{interior}</svg>");
+    iced::widget::svg(iced::widget::svg::Handle::from_memory(svg.into_bytes()))
+        .width(24)
+        .height(24)
+        .style(move |_, _| iced::widget::svg::Style {
+            color: Some(if deshabilitado {
+                p.text_disabled
+            } else if elegido {
+                p.text
+            } else {
+                p.text_muted
+            }),
+        })
+        .into()
 }
 
 /// Botón de texto de alto `control`. Sin mensaje queda deshabilitado.
@@ -31,6 +105,7 @@ pub fn boton<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let contenido = text(etiqueta.to_uppercase())
         .font(fuentes::ETIQUETA)
+        .wrapping(iced::widget::text::Wrapping::None)
         .size(texto::LABEL.0);
     let b = button(
         container(contenido)
@@ -58,6 +133,7 @@ pub fn boton_compacto<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let contenido = text(etiqueta.to_uppercase())
         .font(fuentes::ETIQUETA)
+        .wrapping(iced::widget::text::Wrapping::None)
         .size(texto::LABEL.0);
     let b = button(
         container(contenido)
@@ -88,12 +164,15 @@ pub fn boton_con_icono<'a, M: Clone + 'a>(
     compacto: bool,
 ) -> Element<'a, M> {
     let deshabilitado = al_pulsar.is_none();
-    let contenido = row![
-        crate::iconos::icono_texto(glifo, Tam::Base),
-        text(etiqueta.to_uppercase())
-            .font(fuentes::ETIQUETA)
-            .size(texto::LABEL.0),
-    ]
+    let rotulo = text(etiqueta.to_uppercase())
+        .font(fuentes::ETIQUETA)
+        .wrapping(iced::widget::text::Wrapping::None)
+        .size(texto::LABEL.0);
+    let contenido = if glifo == Icono::Adelante {
+        row![rotulo, crate::iconos::icono_texto(glifo, Tam::Base)]
+    } else {
+        row![crate::iconos::icono_texto(glifo, Tam::Base), rotulo]
+    }
     .spacing(espacio::S1)
     .align_y(iced::alignment::Vertical::Center);
     let b = button(
@@ -101,7 +180,11 @@ pub fn boton_con_icono<'a, M: Clone + 'a>(
             .height(Length::Fill)
             .align_y(iced::alignment::Vertical::Center),
     )
-    .height(if compacto { medida::CONTROL_SM } else { medida::CONTROL })
+    .height(if compacto {
+        medida::CONTROL_SM
+    } else {
+        medida::CONTROL
+    })
     .padding(Padding {
         top: 0.0,
         right: if compacto { espacio::S3 } else { espacio::S4 },
@@ -173,9 +256,82 @@ pub fn campo<'a, M: Clone + 'a>(
         .on_input(al_cambiar)
         .font(fuentes::CUERPO)
         .size(texto::BODY.0)
-        .padding(Padding::from([10.0, espacio::S4]))
+        .line_height(iced::widget::text::LineHeight::Absolute(20.0.into()))
+        .padding(Padding::from([8.0, espacio::S4]))
         .style(estilo::campo(p))
         .into()
+}
+
+/// Campo con icono Pixelarticons, como en SelectorVersion y TiendaMods.
+pub fn campo_con_icono<'a, M: Clone + 'a>(
+    p: Paleta,
+    glifo: Icono,
+    marcador: &str,
+    valor: &str,
+    al_cambiar: impl Fn(String) -> M + 'a,
+) -> Element<'a, M> {
+    let entrada = text_input(marcador, valor)
+        .on_input(al_cambiar)
+        .font(fuentes::CUERPO)
+        .size(texto::BODY.0)
+        .line_height(iced::widget::text::LineHeight::Absolute(20.0.into()))
+        .padding(0)
+        .style(move |theme, status| {
+            let mut s = estilo::campo(p)(theme, status);
+            s.border.width = 0.;
+            s
+        });
+    container(
+        row![
+            crate::iconos::icono(glifo, Tam::Base, p.text_muted),
+            entrada
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center),
+    )
+    .height(medida::CONTROL)
+    .align_y(iced::alignment::Vertical::Center)
+    .padding(Padding::from([0., 12.]))
+    .style(move |_| iced::widget::container::Style {
+        background: Some(iced::Background::Color(p.surface_sunken)),
+        border: iced::Border {
+            color: p.border_strong,
+            width: 2.,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// El selector angosto mantiene las mismas pestañas, con el relleno compacto.
+pub fn segmentado_compacto<'a, M: Clone + 'a>(
+    p: Paleta,
+    opciones: &[&str],
+    activa: usize,
+    al_elegir: impl Fn(usize) -> M,
+) -> Element<'a, M> {
+    container(row(opciones
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            button(
+                container(
+                    text(o.to_uppercase())
+                        .font(fuentes::ETIQUETA)
+                        .size(texto::LABEL.0),
+                )
+                .center_y(Length::Fill),
+            )
+            .height(28)
+            .padding(Padding::from([0., 8.]))
+            .on_press(al_elegir(i))
+            .style(estilo::segmento(p, i == activa))
+            .into()
+        })
+        .collect::<Vec<_>>()))
+    .style(estilo::marco(p))
+    .into()
 }
 
 /// Etiqueta de control en mayúsculas (`label`).
@@ -204,14 +360,29 @@ pub fn insignia<'a, M: 'a>(p: Paleta, estado: Estado, palabra: &str) -> Element<
         Estado::Error => (p.error_soft, p.error),
         Estado::Info => (p.info_soft, p.info),
     };
-    container(
+    let glifo = match estado { Estado::Exito => Icono::Check, Estado::Aviso => Icono::Aviso,
+        Estado::Error => Icono::Cerrar, Estado::Info => Icono::Info };
+    container(row![crate::iconos::icono(glifo, Tam::Sm, tinta),
         text(palabra.to_uppercase())
             .font(fuentes::ETIQUETA)
-            .size(texto::LABEL.0),
-    )
-    .padding(Padding::from([espacio::S1 + 2.0, espacio::S3]))
+            .size(10)
+            .line_height(iced::widget::text::LineHeight::Relative(1.0))
+            .wrapping(iced::widget::text::Wrapping::None),
+    ].spacing(4).align_y(iced::Alignment::Center))
+    .height(20)
+    .align_y(iced::alignment::Vertical::Center)
+    .padding(Padding::from([0., 6.]))
     .style(estilo::insignia(fondo, tinta))
     .into()
+}
+
+/// Estado neutro destacado (NUEVA, ACTIVA) con tinta invertida.
+pub fn insignia_solida<'a, M: 'a>(p: Paleta, palabra: &str) -> Element<'a, M> {
+    container(text(palabra.to_uppercase()).font(fuentes::ETIQUETA).size(10)
+        .line_height(iced::widget::text::LineHeight::Relative(1.))
+        .wrapping(iced::widget::text::Wrapping::None))
+        .height(20).center_y(20).padding([0., 6.])
+        .style(estilo::insignia(p.text, p.bg)).into()
 }
 
 /// Insignia neutra: solo contorno de tinta, sin color de estado.
@@ -219,9 +390,13 @@ pub fn insignia_contorno<'a, M: 'a>(p: Paleta, palabra: &str) -> Element<'a, M> 
     container(
         text(palabra.to_uppercase())
             .font(fuentes::ETIQUETA)
-            .size(texto::LABEL.0),
+            .size(10)
+            .line_height(iced::widget::text::LineHeight::Relative(1.0))
+            .wrapping(iced::widget::text::Wrapping::None),
     )
-    .padding(Padding::from([espacio::S1 + 2.0, espacio::S3]))
+    .height(20)
+    .align_y(iced::alignment::Vertical::Center)
+    .padding(Padding::from([0., 6.]))
     .style(estilo::insignia(iced::Color::TRANSPARENT, p.text))
     .into()
 }
@@ -307,6 +482,7 @@ pub fn casilla<'a, M: 'a>(
     al_cambiar: impl Fn(bool) -> M + 'a,
 ) -> Element<'a, M> {
     checkbox(etiqueta, marcada)
+        .icon(icono_casilla())
         .on_toggle(al_cambiar)
         .font(fuentes::CUERPO)
         .size(20.0)
@@ -314,6 +490,16 @@ pub fn casilla<'a, M: 'a>(
         .spacing(espacio::S2)
         .style(estilo::casilla(p))
         .into()
+}
+
+pub fn icono_casilla() -> iced::widget::checkbox::Icon<iced::Font> {
+    iced::widget::checkbox::Icon {
+        font: fuentes::MONO,
+        code_point: '■',
+        size: Some(iced::Pixels(12.)),
+        line_height: iced::widget::text::LineHeight::Relative(1.),
+        shaping: iced::widget::text::Shaping::Advanced,
+    }
 }
 
 /// Interruptor cuadrado: la perilla pasa de un lado al otro de la pista.
@@ -406,12 +592,12 @@ pub fn pestanas<'a, M: Clone + 'a>(
     al_elegir: impl Fn(usize) -> M,
 ) -> Element<'a, M> {
     let regla = |alto: f32, color: iced::Color| {
-        container(Space::new(Length::Fill, Length::Fixed(alto))).style(
-            move |_: &iced::Theme| container::Style {
+        container(Space::new(Length::Fill, Length::Fixed(alto))).style(move |_: &iced::Theme| {
+            container::Style {
                 background: Some(iced::Background::Color(color)),
                 ..Default::default()
-            },
-        )
+            }
+        })
     };
     let mut fila = row![].spacing(espacio::S6);
     for (i, (nombre, conteo)) in pestanas.iter().enumerate() {
@@ -509,21 +695,29 @@ fn colores_estado(p: Paleta, estado: Estado) -> (iced::Color, iced::Color) {
 /// Aviso en línea: bloque suave con contorno del color del estado, icono y
 /// mensaje. El estado nunca va solo en color: lleva icono y texto.
 pub fn aviso<'a, M: 'a>(p: Paleta, estado: Estado, mensaje: &str) -> Element<'a, M> {
+    aviso_detallado(p, estado, mensaje, "")
+}
+
+/// Aviso del componente Insignia: icono, título y explicación por separado.
+pub fn aviso_detallado<'a, M: 'a>(p: Paleta, estado: Estado, titulo: &str, explicacion: &str) -> Element<'a, M> {
     let (fondo, tinta) = colores_estado(p, estado);
     let glifo = match estado {
         Estado::Exito => crate::iconos::Icono::Check,
-        Estado::Aviso | Estado::Error => crate::iconos::Icono::Aviso,
+        Estado::Aviso => crate::iconos::Icono::Aviso,
+        Estado::Error => crate::iconos::Icono::Alerta,
         Estado::Info => crate::iconos::Icono::Info,
     };
+    let mut detalle = column![text(titulo.to_owned()).font(fuentes::CUERPO_NEGRITA)
+        .size(texto::HEADING.0).color(p.text)].spacing(4);
+    if !explicacion.is_empty() {
+        detalle = detalle.push(text(explicacion.to_owned()).size(texto::BODY_SM.0).color(p.text));
+    }
     container(
         row![
             crate::iconos::icono(glifo, crate::iconos::Tam::Base, tinta),
-            text(mensaje.to_owned())
-                .size(texto::BODY.0)
-                .color(p.text),
+            detalle,
         ]
-        .spacing(espacio::S3)
-        .align_y(iced::Alignment::Center),
+        .spacing(espacio::S4),
     )
     .padding(Padding::from([espacio::S4, espacio::S5]))
     .width(Length::Fill)
@@ -555,8 +749,11 @@ pub fn senal<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
     for i in 0..4 {
         let color = if i < nivel { p.text } else { p.border_strong };
         fila = fila.push(
-            container(Space::new(Length::Fixed(4.0), Length::Fixed(4.0 + 4.0 * i as f32)))
-                .style(estilo::bloque(color)),
+            container(Space::new(
+                Length::Fixed(4.0),
+                Length::Fixed(4.0 + 4.0 * i as f32),
+            ))
+            .style(estilo::bloque(color)),
         );
     }
     fila.into()
@@ -638,6 +835,191 @@ pub fn boton_jugar<'a, M: Clone + 'a>(
         .into()
 }
 
+/// Estados del BotonJugar definidos en la referencia original.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EstadoJugar {
+    Listo,
+    PorInstalar,
+    Instalando(f32),
+    Preparando,
+    Ejecutando,
+    Cerrar,
+}
+
+pub fn boton_jugar_estado<'a, M: Clone + 'a>(
+    p: Paleta,
+    estado: EstadoJugar,
+    meta: Option<&str>,
+    accion: Option<M>,
+) -> Element<'a, M> {
+    boton_jugar_estado_animado(p, estado, meta, accion, 0.)
+}
+
+/// Trama estable y relleno en bloques del BotonJugar.
+struct FondoJugar {
+    p: Paleta,
+    estado: EstadoJugar,
+}
+impl<M> iced::widget::canvas::Program<M> for FondoJugar {
+    type State = ();
+    fn draw(
+        &self,
+        _: &(),
+        renderer: &iced::Renderer,
+        _: &iced::Theme,
+        bounds: iced::Rectangle,
+        _: iced::mouse::Cursor,
+    ) -> Vec<iced::widget::canvas::Geometry> {
+        let mut frame = iced::widget::canvas::Frame::new(renderer, bounds.size());
+        match self.estado {
+            EstadoJugar::Instalando(ratio) => {
+                let end = bounds.width * ratio.clamp(0., 1.);
+                let mut x = 0.;
+                while x < end {
+                    frame.fill_rectangle(
+                        iced::Point::new(x, 0.),
+                        iced::Size::new((end - x).min(10.), bounds.height),
+                        iced::Color {
+                            a: 0.22,
+                            ..self.p.text
+                        },
+                    );
+                    x += 12.;
+                }
+            }
+            EstadoJugar::Preparando => {
+                // La trama no se desplaza: moverla a cada fotograma producía
+                // destellos sobre toda la superficie del botón.
+                let mut y = 0.;
+                while y < bounds.height {
+                    frame.fill_rectangle(
+                        iced::Point::new(0., y),
+                        iced::Size::new(bounds.width, 1.),
+                        iced::Color {
+                            a: 0.12,
+                            ..self.p.text
+                        },
+                    );
+                    y += 3.;
+                }
+            }
+            _ => {}
+        }
+        vec![frame.into_geometry()]
+    }
+}
+pub fn boton_jugar_estado_animado<'a, M: Clone + 'a>(
+    p: Paleta,
+    estado: EstadoJugar,
+    meta: Option<&str>,
+    accion: Option<M>,
+    ms: f32,
+) -> Element<'a, M> {
+    let (label, icono) = match estado {
+        EstadoJugar::Listo => ("Jugar", crate::iconos::Icono::Jugar),
+        EstadoJugar::PorInstalar => ("Instalar", crate::iconos::Icono::Descargas),
+        EstadoJugar::Instalando(_) => ("Instalando", crate::iconos::Icono::Descargas),
+        EstadoJugar::Preparando => ("Preparando", crate::iconos::Icono::Espera),
+        EstadoJugar::Ejecutando => ("En ejecución", crate::iconos::Icono::Check),
+        EstadoJugar::Cerrar => ("Cerrar juego", crate::iconos::Icono::Detener),
+    };
+    let glifo: Element<'a, M> = if estado == EstadoJugar::Ejecutando {
+        container(Space::new(10, 10))
+            .style(estilo::bloque(iced::Color {
+                a: if (ms / 600.).floor() as u64 % 2 == 0 {
+                    1.
+                } else {
+                    0.4
+                },
+                ..p.success
+            }))
+            .into()
+    } else {
+        crate::iconos::icono_texto(icono, crate::iconos::Tam::Base).into()
+    };
+    let mut fila = row![
+        glifo,
+        text(label.to_uppercase())
+            .font(fuentes::TITULO)
+            .size(18)
+            .wrapping(iced::widget::text::Wrapping::None)
+    ]
+    .spacing(espacio::S3)
+    .align_y(iced::Alignment::Center);
+    if let Some(meta) = meta.filter(|m| !m.trim().is_empty()) {
+        fila = fila.push(Space::with_width(Length::Fill)).push(
+            text(meta.to_owned())
+                .font(fuentes::MONO)
+                .size(texto::MONO_SM.0)
+                .width((meta.chars().count() as f32 * 8.0).max(16.0))
+                .align_x(iced::alignment::Horizontal::Right)
+                .wrapping(iced::widget::text::Wrapping::None),
+        );
+    }
+    let contenido = container(fila)
+        .padding(Padding::from([0., espacio::S5]))
+        .height(Length::Fill)
+        .center_y(Length::Fill);
+    let contenido: Element<'a, M> =
+        if matches!(estado, EstadoJugar::Instalando(_) | EstadoJugar::Preparando) {
+            iced::widget::stack![
+                iced::widget::canvas(FondoJugar { p, estado })
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                contenido
+            ]
+            .into()
+        } else if estado == EstadoJugar::Ejecutando {
+            container(contenido
+                .style(move |_: &iced::Theme| container::Style {
+                    border: iced::Border {
+                        width: 1.,
+                        color: p.text,
+                        radius: 0.into(),
+                    },
+                    ..Default::default()
+                }))
+                .padding(3)
+                .height(Length::Fill)
+                .into()
+        } else {
+            contenido.into()
+        };
+    let b = button(contenido)
+        // La referencia define un ancho mínimo: los estados con textos más
+        // largos necesitan crecer para conservar etiqueta y metadato en línea.
+        .width(match estado {
+            EstadoJugar::Listo | EstadoJugar::PorInstalar => 260,
+            EstadoJugar::Instalando(_) | EstadoJugar::Preparando => 300,
+            EstadoJugar::Ejecutando | EstadoJugar::Cerrar => 340,
+        })
+        .height(medida::CONTROL_JUGAR)
+        .padding(0)
+        .on_press_maybe(accion);
+    match estado {
+        EstadoJugar::Listo | EstadoJugar::PorInstalar => b.style(estilo::boton_primario(p)).into(),
+        EstadoJugar::Cerrar => b.style(estilo::boton_peligro(p)).into(),
+        _ => b
+            .style(move |_: &iced::Theme, _| iced::widget::button::Style {
+                background: Some(iced::Background::Color(
+                    if estado == EstadoJugar::Ejecutando {
+                        p.bg
+                    } else {
+                        p.surface
+                    },
+                )),
+                text_color: p.text,
+                border: iced::Border {
+                    color: p.text,
+                    width: 2.,
+                    radius: 0.into(),
+                },
+                ..Default::default()
+            })
+            .into(),
+    }
+}
+
 /// Memoria con el contexto del equipo: barra de RAM dividida en sistema,
 /// Minecraft y libre, y un deslizador con la zona recomendada marcada.
 /// Por encima del 75 % de la RAM el valor pasa a tono de aviso.
@@ -670,11 +1052,15 @@ pub fn deslizador_memoria<'a, M: Clone + 'a>(
     .style(estilo::marco(p))
     .padding(2);
     let zona_marcada = row![
-        Space::with_width(Length::FillPortion(zona.0.saturating_sub(1024).max(1) as u16)),
+        Space::with_width(Length::FillPortion(
+            zona.0.saturating_sub(1024).max(1) as u16
+        )),
         container(Space::new(Length::Fill, 4))
             .width(Length::FillPortion((zona.1 - zona.0).max(1) as u16))
             .style(estilo::bloque(p.success)),
-        Space::with_width(Length::FillPortion(maximo.saturating_sub(zona.1).max(1) as u16)),
+        Space::with_width(Length::FillPortion(
+            maximo.saturating_sub(zona.1).max(1) as u16
+        )),
     ];
     let control = slider(1024..=maximo, valor.clamp(1024, maximo), al_cambiar)
         .step(256u32)
@@ -757,12 +1143,8 @@ pub struct Parte {
 
 /// Pantalla provisional de una sección que aún no existe: la rueda de
 /// bloques a medio levantar, el nombre de la sección y el plan de partes.
-/// Solo para la maqueta; se retira cuando el núcleo esté completo.
-pub fn en_construccion<'a, M: 'a>(
-    p: Paleta,
-    seccion: &str,
-    partes: &[Parte],
-) -> Element<'a, M> {
+/// Estado de una sección pendiente de implementación.
+pub fn en_construccion<'a, M: 'a>(p: Paleta, seccion: &str, partes: &[Parte]) -> Element<'a, M> {
     let mut lista = column![].spacing(espacio::S2);
     for parte in partes {
         let (estado, palabra) = match parte.avance {
@@ -781,9 +1163,12 @@ pub fn en_construccion<'a, M: 'a>(
     }
     container(
         row![
-            container(
-                crate::laminas::grabado(p, crate::laminas::Lamina::PiranesiRueda, Length::Fill, Length::Fill),
-            )
+            container(crate::laminas::grabado(
+                p,
+                crate::laminas::Lamina::PiranesiRueda,
+                Length::Fill,
+                Length::Fill
+            ),)
             .width(300)
             .height(400)
             .style(estilo::marco(p)),
@@ -792,7 +1177,7 @@ pub fn en_construccion<'a, M: 'a>(
                     .font(fuentes::DISPLAY)
                     .size(texto::DISPLAY.0)
                     .color(p.text),
-                text(format!("{} todavía no existe en esta maqueta.", seccion))
+                text(format!("{} está en desarrollo.", seccion))
                     .size(texto::BODY.0)
                     .color(p.text_muted),
                 lista,
@@ -861,7 +1246,10 @@ pub fn deslizador_valor<'a, M: Clone + 'a>(
             .width(110)
             .align_x(iced::alignment::Horizontal::Right)
             .style(estilo::campo(p)),
-        text("MB").font(fuentes::MONO).size(texto::MONO.0).color(p.text_muted),
+        text("MB")
+            .font(fuentes::MONO)
+            .size(texto::MONO.0)
+            .color(p.text_muted),
     ]
     .spacing(espacio::S4)
     .align_y(iced::Alignment::Center)

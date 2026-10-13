@@ -5,17 +5,19 @@
 //! miniaturas 16:9 con nombre de archivo e instancia, selección múltiple y
 //! acciones al pasar el puntero. El visor ampliado está en [`crate::visor`].
 
-use iced::widget::{button, column, container, mouse_area, row, stack, text, Space};
+use iced::widget::image::Handle;
+use iced::widget::{Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Alignment, Background, Border, Element, Length};
+use std::{path::PathBuf, time::SystemTime};
 
-use crate::botones::{boton, boton_icono_estilo, icono_heredado, TamBoton};
-use crate::componentes::{selector, Variante};
+use crate::botones::{TamBoton, boton, boton_icono_estilo, icono_heredado};
+use crate::componentes::{Variante, selector};
 use crate::estilo;
 use crate::fuentes;
 use crate::grabados::Imagen;
 use crate::iconos::{Icono, Tam};
 use crate::laminas::Lamina;
-use crate::tema::{borde, espacio, texto, Paleta};
+use crate::tema::{Paleta, borde, espacio, texto};
 
 /// Captura de pantalla. En el launcher la imagen es la captura real del
 /// usuario; mientras tanto se usa una lámina de ejemplo.
@@ -27,6 +29,16 @@ pub struct Captura {
     pub fecha: String,
     pub bytes: u64,
     pub imagen: Lamina,
+    /// Original local; la lámina solo se usa en la maqueta del diseño.
+    pub original: Option<OriginalCaptura>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OriginalCaptura {
+    pub ruta: PathBuf,
+    pub instancia_id: String,
+    pub imagen: Handle,
+    pub modificada: Option<SystemTime>,
 }
 
 /// Separación entre miniaturas.
@@ -45,7 +57,11 @@ pub fn formato_peso(bytes: u64) -> String {
     const MB: f64 = 1024.0 * 1024.0;
     const GB: f64 = MB * 1024.0;
     let b = bytes as f64;
-    let (valor, unidad) = if b >= GB { (b / GB, "GB") } else { (b / MB, "MB") };
+    let (valor, unidad) = if b >= GB {
+        (b / GB, "GB")
+    } else {
+        (b / MB, "MB")
+    };
     let cifra = if valor >= 100.0 {
         format!("{valor:.0}")
     } else {
@@ -88,7 +104,10 @@ pub struct MensajesCapturas<M> {
 }
 
 /// Cabecera y cuadrícula de capturas.
-pub fn galeria<'a, M: Clone + 'a>(v: &VistaCapturas<'_>, m: &MensajesCapturas<M>) -> Element<'a, M> {
+pub fn galeria<'a, M: Clone + 'a>(
+    v: &VistaCapturas<'_>,
+    m: &MensajesCapturas<M>,
+) -> Element<'a, M> {
     let p = v.p;
     let elegidas = v.seleccion.len();
     let peso: u64 = v.visibles.iter().map(|&i| v.capturas[i].bytes).sum();
@@ -111,7 +130,11 @@ pub fn galeria<'a, M: Clone + 'a>(v: &VistaCapturas<'_>, m: &MensajesCapturas<M>
                 text(format!(
                     "{} {} · {}",
                     v.visibles.len(),
-                    if v.visibles.len() == 1 { "captura" } else { "capturas" },
+                    if v.visibles.len() == 1 {
+                        "captura"
+                    } else {
+                        "capturas"
+                    },
                     formato_peso(peso)
                 ))
                 .size(texto::BODY_SM.0)
@@ -131,15 +154,40 @@ pub fn galeria<'a, M: Clone + 'a>(v: &VistaCapturas<'_>, m: &MensajesCapturas<M>
             .push(
                 text(format!(
                     "{elegidas} {}",
-                    if elegidas == 1 { "seleccionada" } else { "seleccionadas" }
+                    if elegidas == 1 {
+                        "seleccionada"
+                    } else {
+                        "seleccionadas"
+                    }
                 ))
                 .size(texto::BODY_SM.0)
                 .color(p.text),
             )
             .push(Space::with_width(Length::Fill))
-            .push(boton(p, Some(Icono::Copiar), "Copiar", Variante::Secundario, TamBoton::Sm, Some(m.copiar_seleccion.clone())))
-            .push(boton(p, Some(Icono::Papelera), "Eliminar", Variante::Peligro, TamBoton::Sm, Some(m.eliminar_seleccion.clone())))
-            .push(boton(p, None, "Quitar selección", Variante::Fantasma, TamBoton::Sm, Some(m.limpiar_seleccion.clone())));
+            .push(boton(
+                p,
+                Some(Icono::Copiar),
+                "Copiar",
+                Variante::Secundario,
+                TamBoton::Sm,
+                Some(m.copiar_seleccion.clone()),
+            ))
+            .push(boton(
+                p,
+                Some(Icono::Papelera),
+                "Eliminar",
+                Variante::Peligro,
+                TamBoton::Sm,
+                Some(m.eliminar_seleccion.clone()),
+            ))
+            .push(boton(
+                p,
+                None,
+                "Quitar selección",
+                Variante::Fantasma,
+                TamBoton::Sm,
+                Some(m.limpiar_seleccion.clone()),
+            ));
     }
 
     let columnas = columnas_para(v.ancho);
@@ -176,9 +224,18 @@ fn miniatura<'a, M: Clone + 'a>(
     let grosor = if elegida { borde::MEDIO } else { borde::FINO };
     let tinta = if elegida || encima { p.text } else { p.border };
     let alto = (ancho * 9.0 / 16.0).round();
-    let imagen = Imagen::nueva(p, c.imagen)
-        .barrido(p)
-        .tamano(Length::Fill, alto - 2.0 * grosor);
+    let imagen: Element<'a, M> = if let Some(original) = &c.original {
+        iced::widget::image(original.imagen.clone())
+            .content_fit(iced::ContentFit::Cover)
+            .width(Length::Fill)
+            .height(alto - 2.0 * grosor)
+            .into()
+    } else {
+        Imagen::nueva(p, c.imagen)
+            .barrido(p)
+            .tamano(Length::Fill, alto - 2.0 * grosor)
+            .into()
+    };
 
     let mut capas = stack![imagen];
     if elegida || encima {
@@ -198,14 +255,23 @@ fn miniatura<'a, M: Clone + 'a>(
             button::Style {
                 background: activo.then_some(Background::Color(p.bg)),
                 text_color: if activo { p.text } else { p.bg },
-                border: Border { width: 0.0, ..Default::default() },
+                border: Border {
+                    width: 0.0,
+                    ..Default::default()
+                },
                 ..Default::default()
             }
         };
         let franja = container(
             row![
                 boton_icono_estilo(p, Icono::Copiar, "Copiar", invertido, (m.copiar)(i)),
-                boton_icono_estilo(p, Icono::Carpeta, "Abrir carpeta", invertido, (m.carpeta)(i)),
+                boton_icono_estilo(
+                    p,
+                    Icono::Carpeta,
+                    "Abrir carpeta",
+                    invertido,
+                    (m.carpeta)(i)
+                ),
                 Space::with_width(Length::Fill),
                 boton_icono_estilo(p, Icono::Papelera, "Eliminar", invertido, (m.eliminar)(i)),
             ]
@@ -224,7 +290,11 @@ fn miniatura<'a, M: Clone + 'a>(
         .height(alto)
         .style(move |_: &iced::Theme| container::Style {
             background: Some(Background::Color(p.surface_raised)),
-            border: Border { width: grosor, color: tinta, radius: 0.0.into() },
+            border: Border {
+                width: grosor,
+                color: tinta,
+                radius: 0.0.into(),
+            },
             ..Default::default()
         });
     let nombre = c.archivo.trim_end_matches(".png").to_owned();
@@ -258,7 +328,11 @@ fn casilla<'a, M: 'a>(p: Paleta, marcada: bool) -> Element<'a, M> {
     container(contenido)
         .center(20)
         .style(move |_: &iced::Theme| container::Style {
-            background: Some(Background::Color(if marcada { p.accent } else { p.surface_sunken })),
+            background: Some(Background::Color(if marcada {
+                p.accent
+            } else {
+                p.surface_sunken
+            })),
             text_color: Some(p.on_accent),
             border: Border {
                 width: borde::MEDIO,

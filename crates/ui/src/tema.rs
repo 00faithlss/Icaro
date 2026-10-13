@@ -35,6 +35,24 @@ pub enum Modo {
     Piedra,
 }
 
+/// Solo el bloque primario cambia de metal; los estados permanecen monocromos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Metal {
+    #[default]
+    Marmol,
+    Plata,
+    Bronce,
+}
+
+impl Metal {
+    pub const fn desde_indice(indice: usize) -> Self {
+        match indice { 1 => Self::Plata, 2 => Self::Bronce, _ => Self::Marmol }
+    }
+    pub const fn nombre(self) -> &'static str {
+        match self { Self::Marmol => "Mármol", Self::Plata => "Plata", Self::Bronce => "Bronce" }
+    }
+}
+
 impl Modo {
     pub const fn nombre(self) -> &'static str {
         match self {
@@ -85,6 +103,32 @@ pub struct Paleta {
     pub focus: Color,
     pub scrim: Color,
     pub selection: Color,
+}
+
+impl Paleta {
+    /// Sobrescribe exactamente los cuatro tokens indicados por Apariencia.
+    pub fn con_metal(mut self, metal: Metal) -> Self {
+        let valor = match (self.modo, metal) {
+            (_, Metal::Marmol) => return self,
+            (Modo::Tinta, Metal::Plata) => hex(0xc8ccd2),
+            (Modo::Tinta, Metal::Bronce) => hex(0xd4a868),
+            (Modo::Piedra, Metal::Plata) => hex(0x3c4048),
+            (Modo::Piedra, Metal::Bronce) => hex(0x6e4a1a),
+        };
+        self.accent = valor;
+        // Las mismas variaciones de luminosidad del botón primario, sin
+        // teñir los contornos, selecciones ni mensajes de estado.
+        let mezcla = |objetivo: iced::Color, t: f32| iced::Color {
+            r: valor.r + (objetivo.r - valor.r) * t,
+            g: valor.g + (objetivo.g - valor.g) * t,
+            b: valor.b + (objetivo.b - valor.b) * t,
+            a: 1.,
+        };
+        self.accent_hover = mezcla(iced::Color::WHITE, 0.12);
+        self.accent_pressed = mezcla(iced::Color::BLACK, 0.12);
+        self.on_accent = match self.modo { Modo::Tinta => hex(0x0a0a0a), Modo::Piedra => hex(0xf4f4f2) };
+        self
+    }
 }
 
 /// Tema oscuro.
@@ -171,7 +215,7 @@ pub mod espacio {
     pub const S24: f32 = 96.0;
 }
 
-/// Ícaro no redondea esquinas.
+/// Los componentes conservan esquinas rectas; el compositor redondea la ventana exterior.
 pub mod radio {
     pub const CERO: f32 = 0.0;
 }
@@ -227,4 +271,31 @@ pub mod duracion {
     pub const PRENSA: u64 = 420;
     pub const PICAR: u64 = 1200;
     pub const UMBRAL: u64 = 1400;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn el_metal_solo_modifica_los_cuatro_tokens_primarios() {
+        for p in [TINTA, PIEDRA] {
+            assert_eq!(p.con_metal(Metal::Marmol).accent, p.accent);
+            for m in [Metal::Plata, Metal::Bronce] {
+                let metal = p.con_metal(m);
+                assert_ne!(metal.accent, p.accent);
+                assert_eq!(metal.bg, p.bg);
+                assert_eq!(metal.text, p.text);
+                assert_eq!(metal.border, p.border);
+                assert_eq!(metal.success, p.success);
+                assert_eq!(metal.warning, p.warning);
+                assert_eq!(metal.error, p.error);
+                assert_eq!(metal.info, p.info);
+                assert_eq!(metal.accent_soft, p.accent_soft);
+                assert_eq!(metal.accent_text, p.accent_text);
+                assert_eq!(metal.selection, p.selection);
+            }
+        }
+        assert_eq!(TINTA.con_metal(Metal::Bronce).accent, hex(0xd4a868));
+        assert_eq!(PIEDRA.con_metal(Metal::Plata).accent, hex(0x3c4048));
+    }
 }

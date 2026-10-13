@@ -24,10 +24,12 @@ pub const ANCHO_TARJETA: f32 = 300.0;
 /// Estado visible de una instancia.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EstadoInstancia {
+    Pendiente,
     Lista,
     Desactualizada,
     /// Avance de 0 a 1.
     Instalando(f32),
+    Preparando,
     Jugando,
     Error,
 }
@@ -78,18 +80,18 @@ fn pie_fantasma<'a, M: Clone + 'a>(
         .height(Length::Fill)
         .padding(0)
         .on_press_maybe(mensaje)
-        .style(move |_, estado| {
-            let encima = activo && matches!(estado, button::Status::Hovered | button::Status::Pressed);
-            button::Style {
-                background: encima.then_some(iced::Background::Color(if invertido {
-                    Color { a: 0.18, ..p.bg }
-                } else {
-                    p.surface_hover
-                })),
-                text_color: tinta,
-                ..Default::default()
-            }
-        })
+        .style(move |_, estado| estilo_pie(p, tinta, activo, invertido, estado))
+}
+
+fn estilo_pie(p: Paleta, tinta: Color, activo: bool, invertido: bool, estado: button::Status) -> button::Style {
+    let encima = activo && matches!(estado, button::Status::Hovered | button::Status::Pressed);
+    let peligro = tinta == p.error;
+    button::Style {
+        background: encima.then_some(iced::Background::Color(if peligro { p.error } else if invertido { p.bg } else { p.text })),
+        text_color: if encima { if peligro { p.on_error } else if invertido { p.text } else { p.bg } } else { tinta },
+        border: iced::Border { width: borde::FINO, color: if peligro { p.error } else if invertido { p.bg } else { p.text }, radius: 0.0.into() },
+        ..Default::default()
+    }
 }
 
 /// Icono procedural de 48 px: una trama de 8 × 8 píxeles simétrica sacada del
@@ -140,8 +142,13 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     datos: &DatosInstancia,
     acciones: AccionesTarjeta<M>,
 ) -> Element<'a, M> {
+    tarjeta_instancia_con_icono(p,datos,acciones,None)
+}
+
+pub fn tarjeta_instancia_con_icono<'a,M:Clone+'a>(p:Paleta,datos:&DatosInstancia,acciones:AccionesTarjeta<M>,imagen:Option<Element<'a,M>>)->Element<'a,M>{
     let portada = crate::laminas::grabado_zoom(p, datos.portada, Length::Fill, ALTO_PORTADA);
 
+    let icono_grande=imagen.is_some();
     let mut cuerpo = column![
         text(datos.nombre.clone())
             .font(fuentes::TITULO)
@@ -156,6 +163,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
 
     cuerpo = cuerpo.push(Space::with_height(espacio::S1));
     cuerpo = match datos.estado {
+        EstadoInstancia::Pendiente => cuerpo.push(insignia(p, Estado::Aviso, "Por instalar")),
         EstadoInstancia::Lista => cuerpo.push(insignia(p, Estado::Exito, "Lista")),
         EstadoInstancia::Desactualizada => {
             cuerpo.push(insignia(p, Estado::Aviso, "Desactualizada"))
@@ -167,6 +175,9 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
                     .size(texto::BODY_SM.0)
                     .color(p.text_muted),
             ),
+        EstadoInstancia::Preparando => cuerpo
+            .push(progreso_bloques(p, 10, 0))
+            .push(text(datos.detalle.clone()).size(texto::BODY_SM.0).color(p.text_muted)),
         EstadoInstancia::Jugando => cuerpo.push(
             row![
                 container(Space::new(8, 8)).style(estilo::bloque(p.success)),
@@ -194,6 +205,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     let invertido = datos.estado == EstadoInstancia::Jugando;
     let tinta = if invertido { p.bg } else { p.text };
     let (glifo, etiqueta, color, activo) = match datos.estado {
+        EstadoInstancia::Pendiente => (Icono::Descargas, "Instalar".to_owned(), tinta, true),
         EstadoInstancia::Lista => (Icono::Jugar, "Jugar".to_owned(), tinta, true),
         EstadoInstancia::Desactualizada => {
             (Icono::Actualizar, "Actualizar".to_owned(), tinta, true)
@@ -204,6 +216,7 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
             p.text_muted,
             false,
         ),
+        EstadoInstancia::Preparando => (Icono::Espera, "Preparando".to_owned(), p.text_muted, false),
         EstadoInstancia::Jugando => (Icono::Detener, "Detener".to_owned(), tinta, true),
         EstadoInstancia::Error => (Icono::Instancias, "Reparar".to_owned(), p.error, true),
     };
@@ -225,13 +238,13 @@ pub fn tarjeta_instancia<'a, M: Clone + 'a>(
     let interior = column![
         portada,
         container(cuerpo)
-            .padding(Padding { top: 36.0, right: 20.0, bottom: 16.0, left: 20.0 })
+            .padding(Padding { top: if icono_grande{44.}else{36.}, right: 20.0, bottom: 16.0, left: 20.0 })
             .height(Length::Fill),
         pie,
     ];
     let interior = iced::widget::stack![
         interior,
-        container(sello(p, &datos.nombre)).padding(Padding { top: ALTO_PORTADA - 24.0, left: 20.0, ..Padding::ZERO }),
+        container(imagen.unwrap_or_else(||sello(p,&datos.nombre))).padding(Padding { top: ALTO_PORTADA - if icono_grande{32.}else{24.}, left: 20.0, ..Padding::ZERO }),
     ];
 
     // Contorno: 1 px en reposo, 2 px seleccionada, 3 px en ejecución, tono de error.
@@ -277,4 +290,27 @@ pub fn tarjeta_nueva<'a, M: Clone + 'a>(p: Paleta, al_pulsar: M) -> Element<'a, 
     .on_press(al_pulsar)
     .style(estilo::sin_estilo(p.text))
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn acciones_de_tarjeta_invierten_sin_borrar_los_bordes() {
+        for p in [crate::tema::TINTA, crate::tema::PIEDRA] {
+            for invertido in [false, true] {
+                for estado in [button::Status::Hovered, button::Status::Pressed] {
+                    let s = estilo_pie(p, p.text, true, invertido, estado);
+                    assert_eq!(s.background, Some(iced::Background::Color(if invertido { p.bg } else { p.text })));
+                    assert_eq!(s.text_color, if invertido { p.text } else { p.bg });
+                    assert!(s.border.width > 0.);
+                    assert_ne!(s.border.color, Color::TRANSPARENT);
+                }
+            }
+            let peligro = estilo_pie(p, p.error, true, false, button::Status::Hovered);
+            assert_eq!(peligro.text_color, p.on_error);
+            assert_eq!(peligro.border.color, p.error);
+        }
+    }
 }

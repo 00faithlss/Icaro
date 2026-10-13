@@ -144,13 +144,13 @@ pub fn servidores<'a, M: Clone + 'a>(c: Contexto, agregar: M) -> Element<'a, M> 
 }
 
 /// Descargas: nada en curso.
-pub fn descargas<'a, M: Clone + 'a>(c: Contexto, buscar_mods: M) -> Element<'a, M> {
+pub fn descargas<'a, M: Clone + 'a>(c: Contexto, buscar_modpacks: M) -> Element<'a, M> {
     estado_vacio(
         c,
         Lamina::Forja,
         "No hay descargas\nen curso",
         "Cuando instales un mod, una versión de Minecraft o Java, el avance aparece aquí.",
-        vec![boton(c.p, Some(Icono::Buscar), "Buscar mods", Variante::Primario, TamBoton::Lg, Some(buscar_mods))],
+        vec![boton(c.p, Some(Icono::Buscar), "Buscar modpacks", Variante::Primario, TamBoton::Lg, Some(buscar_modpacks))],
     )
 }
 
@@ -166,6 +166,13 @@ pub fn capturas<'a, M: Clone + 'a>(c: Contexto, ir_a_instancias: M) -> Element<'
 }
 
 /// Capturas de una instancia que no tiene ninguna.
+pub fn capturas_para_jugar<'a, M: Clone + 'a>(c: Contexto, jugar: M) -> Element<'a, M> {
+    estado_vacio(c, Lamina::Umbral, "Tus capturas\naparecerán aquí",
+        "Comienza a jugar y haz capturas con F2 dentro de Minecraft. Las capturas de esta instancia aparecerán aquí.",
+        vec![boton(c.p, Some(Icono::Jugar), "Jugar", Variante::Primario, TamBoton::Lg, Some(jugar))])
+}
+
+/// Capturas de una instancia filtrada desde la galería global.
 pub fn capturas_de_instancia<'a, M: Clone + 'a>(c: Contexto, instancia: &str, ver_todas: M) -> Element<'a, M> {
     estado_vacio(
         c,

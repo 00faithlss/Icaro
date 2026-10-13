@@ -3,7 +3,7 @@
 
 //! Manifiesto global de versiones de Mojang y descarga verificada del JSON de una versión.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
 pub const VERSION_MANIFEST_URL: &str =
@@ -19,27 +19,31 @@ pub enum Error {
     VersionNotFound(String),
     #[error("SHA-1 incorrecto: esperado {expected}, obtenido {actual}")]
     HashMismatch { expected: String, actual: String },
+    #[error(transparent)]
+    Servicio(#[from] crate::http::Error),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionManifest {
     pub latest: Latest,
     pub versions: Vec<VersionEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Latest {
     pub release: String,
     pub snapshot: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionEntry {
     pub id: String,
     #[serde(rename = "type")]
     pub kind: String,
     pub url: String,
     pub sha1: String,
+    #[serde(rename = "releaseTime", default)]
+    pub release_time: String,
 }
 
 impl VersionManifest {
@@ -70,6 +74,63 @@ pub async fn fetch_manifest(client: &reqwest::Client) -> Result<VersionManifest,
         .bytes()
         .await?;
     VersionManifest::parse(&bytes)
+}
+
+/// Catálogo local durante 24 horas; una copia válida permite elegir versiones sin red.
+pub async fn fetch_manifest_cached(cache: &std::path::Path) -> Result<VersionManifest, Error> {
+    const LIMITE: usize = 2 * 1024 * 1024;
+    let cached = std::fs::metadata(cache)
+        .ok()
+        .filter(|m| m.len() <= LIMITE as u64)
+        .and_then(|m| {
+            let age = m.modified().ok()?.elapsed().ok()?;
+            let bytes = std::fs::read(cache).ok()?;
+            if bytes.len() > LIMITE {
+                return None;
+            }
+            Some((VersionManifest::parse(&bytes).ok()?, age))
+        });
+    if let Some((m, age)) = &cached {
+        if age.as_secs() < 24 * 60 * 60 {
+            return Ok(m.clone());
+        }
+    }
+    let client = crate::http::client()?;
+    let result: Result<VersionManifest, crate::http::Error> = crate::http::json(
+        client.get(VERSION_MANIFEST_URL),
+        "las versiones de Minecraft",
+        LIMITE,
+    )
+    .await;
+    match result {
+        Ok(m) => {
+            if let Some(parent) = cache.parent() {
+                if std::fs::create_dir_all(parent).is_ok() {
+                    let mut random = [0u8; 16];
+                    if getrandom::fill(&mut random).is_ok() {
+                        let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
+                        let temporary = parent.join(format!("minecraft-{suffix}.tmp"));
+                        if let (Ok(bytes), Ok(mut file)) = (
+                            serde_json::to_vec(&m),
+                            std::fs::OpenOptions::new()
+                                .write(true)
+                                .create_new(true)
+                                .open(&temporary),
+                        ) {
+                            use std::io::Write;
+                            if file.write_all(&bytes).and_then(|_| file.sync_all()).is_ok() {
+                                drop(file);
+                                let _ = std::fs::rename(&temporary, cache);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(m)
+        }
+        Err(_) if cached.is_some() => Ok(cached.unwrap().0),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Descarga el JSON de una versión y verifica su SHA-1 contra el manifiesto.
@@ -110,5 +171,21 @@ mod tests {
     #[test]
     fn sha1_de_vacio() {
         assert_eq!(sha1_hex(b""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+    }
+
+    #[tokio::test]
+    async fn fresh_cache_is_used_without_consulting_the_provider() {
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).unwrap();
+        let suffix: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        let path = std::env::temp_dir().join(format!("icaro-manifest-test-{suffix}.json"));
+        // Una versión exclusiva de esta copia permite distinguirla de una respuesta de red.
+        let fixture = SAMPLE.replace("1.21.1", "cache-only-version");
+        std::fs::write(&path, fixture).unwrap();
+        let result = fetch_manifest_cached(&path).await;
+        std::fs::remove_file(&path).unwrap();
+        let manifest = result.unwrap();
+        assert_eq!(manifest.latest.release, "cache-only-version");
+        assert_eq!(manifest.versions[0].id, "cache-only-version");
     }
 }

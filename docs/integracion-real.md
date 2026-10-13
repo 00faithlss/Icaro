@@ -1,26 +1,34 @@
 # Integración del launcher
 
-Plan de implementación de la autenticación, la instalación del juego y las tiendas de mods. Las funciones pendientes y sus condiciones de aceptación se detallan a continuación.
+Estado y plan de implementación de la autenticación, la instalación del juego y las tiendas de mods. La guía de [inicio de sesión y catálogo](login-y-catalogo.md) describe cómo probar los servicios conectados.
+
+Actualizado el **12-10-2026**. El [roadmap general](../README.md#roadmap) y el [roadmap del diseño](roadmap-system-design.md) distinguen los recorridos conectados de las maquetas y pendientes.
 
 ## Estado actual
 
 | Parte | Implementación actual |
 | --- | --- |
 | Núcleo | `crates/core/src/manifest.rs` consulta el manifiesto de Mojang y verifica el SHA-1 del JSON de una versión. |
-| Inicio de sesión | `launcher_aux/pantallas.rs` muestra un código fijo y permite simular la confirmación. `sesion.rs` usa cuentas de ejemplo. |
-| Tienda | `launcher_aux/mods.rs` contiene un catálogo estático. Las descargas de `red.rs` están simuladas. |
-| Persistencia | `launcher_aux/estado.rs` guarda grupos y ajustes en `icaro-demo/estado.json`, dentro del directorio temporal. No es un almacén de credenciales. |
-| Juego | Faltan el instalador de Minecraft, los loaders y el proceso real de lanzamiento. |
+| Inicio de sesión | `icaro-core::auth` usa PKCE, Xbox, titularidad y perfil de Minecraft. La interfaz ofrece un único acceso por navegador. El retorno local y el directo por `icaro://oauth/microsoft` se probaron con una cuenta real en Windows. Sin cuenta activa aparece la bienvenida. La API de código de dispositivo se conserva sin acceso desde la interfaz real. |
+| Tienda | `icaro-core::modrinth` consulta búsqueda, fichas, versiones y creadores reales. `icaro-core::mods` descarga mods y dependencias obligatorias, verifica tamaño y SHA-512 y prepara las actualizaciones antes de sustituir los archivos. Resourcepacks y shaders ZIP cuentan con inventario, instalación, activación, actualización y eliminación reales. `ICARO_DEMO=1` conserva el catálogo estático. Los MRPACK de Modrinth se revisan e instalan en nuevas instancias Vanilla/Fabric, con archivos opcionales, configuración incluida y hashes verificados; la importación local y otros loaders siguen pendientes. |
+| Credenciales | `icaro-core::vault` recuerda una cuenta mediante Credential Manager en Windows o Secret Service en Linux. Si no puede guardar, la sesión queda solo en memoria. |
+| Instancias | Selectores separados de Minecraft y loader con catálogos oficiales; guardan la elección, nombre y portada en una carpeta propia. Crear Vanilla/Fabric prepara Minecraft, el perfil oficial y Java. Cambio de versión con revisión de todos los mods, actualizaciones opcionales, respaldo/copia y recuperación ante fallos. Vanilla omite Mods; el editor renombra la carpeta legible, conservando el identificador y recuperando la ruta anterior si falla el guardado. Cambiar versión conserva la familia del loader; cambiar únicamente su versión tiene una acción separada. Quilt, Forge y NeoForge siguen pendientes. |
+| Persistencia | `launcher_aux/estado.rs` guarda grupos y ajustes en `%APPDATA%/Icaro/estado.json` en Windows o en el directorio de datos de Linux. El modo de demostración usa `icaro-demo/estado.json`, dentro del directorio temporal. No es un almacén de credenciales. |
+| Juego | Vanilla se descarga y verifica desde Mojang, detecta o instala Java oficial y se ejecuta con la cuenta y ajustes de la instancia. Cola, Umbral, consola y fallo reciben estados/registros reales; las capturas se leen del disco. El usuario confirmó el lanzamiento en Windows. Fabric 26.3 fue confirmado por el usuario con un mod real en Windows. Faltan Quilt, Forge, NeoForge y la validación del recorrido completo en Linux. |
+| Exportación | `icaro-core::exportar` genera ZIP Ícaro o Prism/MultiMC con metadatos y archivos seleccionados; el diálogo nuevo muestra el árbol, presets y selector nativo. ExportarListaMods produce texto en seis formatos y consulta metadatos sin instalar. La exportación MRPACK sigue pendiente; la instalación de MRPACK de Modrinth ya está conectada para Vanilla/Fabric. |
+| Actualización | `icaro-core::actualizacion` consulta releases, valida el manifiesto y descarga por tamaño/SHA-256. Reemplazo portable ahora o al cerrar en Windows x86-64. Falta publicar los artefactos y probar una actualización completa; ver [contrato](actualizaciones-launcher.md). |
 
-La aplicación tiene un Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. Falta verificar los tipos de cuenta admitidos e integrar y probar el intercambio real.
+La aplicación utiliza el Client ID público aprobado y la URI de redirección `http://localhost` registrada en Azure para aplicaciones móviles y de escritorio. La prueba manual en Windows confirmó la autorización con una cuenta personal de Microsoft y el retorno al launcher.
+
+Las instancias se recuperan desde el disco sin consultar Microsoft. Cada una tiene un identificador estable y una carpeta en `Icaro/instances/<nombre-legible>`; los grupos se asocian a ese identificador. Los ajustes Java/memoria se guardan en instance.json de esquema 2 con herencia global; .icaro contiene el perfil y los nativos privados, mientras assets y bibliotecas se comparten en la raíz. El catálogo de versiones se conserva en caché durante 24 horas y una copia válida permite elegir versiones si la actualización de red falla. La guía de inicio de sesión incluye el procedimiento para probar esta primera etapa.
 
 ## Inicio de sesión
 
-La interfaz actual muestra una demostración del flujo de código de dispositivo. Su integración requiere obtener un código real, respetar el intervalo y la caducidad recibidos, permitir cancelar y sustituir la confirmación simulada. Este flujo no requiere URI de redirección y necesita configuración de cliente público. Véase [registro de aplicaciones de escritorio](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-overview) y [protocolo de dispositivo](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).
+La página de vinculación ofrece **Continuar con Microsoft**, que abre la autorización en el navegador. El bloque de código y QR se retiró porque el enlace del proveedor redirigía al panel de cuenta en el navegador probado. El núcleo conserva las solicitudes y la espera del código de dispositivo para una integración posterior. El código fijo y la confirmación simulada se conservan únicamente con `ICARO_DEMO=1`; no autentican cuentas reales.
 
-El flujo previsto para producción utiliza el navegador del sistema y el retorno a `http://localhost` mediante autorización con PKCE S256, comprobación de `state` y un receptor local temporal. Este receptor debe escuchar solo en loopback, aceptar la respuesta correspondiente al intento iniciado y cerrarse al completar, cancelar o vencer. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
+El botón utiliza PKCE S256, comprobación de `state` y retorno a `http://localhost`. El receptor local escucha solo en loopback, acepta la respuesta correspondiente al intento iniciado y se cierra al completar, cancelar o vencer. En Windows, `ICARO_APP_RETURN=1` permite probar el retorno por `icaro://oauth/microsoft` después de registrar esa URI en Azure. El protocolo se registra para el usuario actual; el proceso activado entrega el código al receptor original, que valida el `state` y conserva el verificador PKCE. La guía de inicio de sesión detalla la configuración. El navegador del sistema recibe la contraseña; Ícaro recibe la autorización. Una aplicación de escritorio no debe incorporar un secreto de cliente. Véase [flujo de autorización de Microsoft](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow) y [reglas de las URI locales](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url).
 
-La autenticación de Microsoft debe continuar hasta obtener acceso a Minecraft y comprobar el perfil y la titularidad del juego. Una sesión de Microsoft por sí sola no debe marcar la cuenta como lista para jugar. Los intercambios específicos de Xbox y Minecraft necesitan validación con la aplicación aprobada antes de considerar terminado el login.
+La autenticación comprueba Xbox, la titularidad de Minecraft Java y el perfil del juego antes de activar la cuenta. El 11 de octubre de 2026 se confirmaron el retorno local y el directo a Ícaro con una cuenta real en Windows. Después de corregir el formato del almacén de Windows para admitir credenciales más largas, se confirmó la recuperación al reabrir el launcher. También se verificó la lectura del formato anterior con una entrada aislada. La interfaz muestra el progreso de las comprobaciones y vuelve al frente al recibir la autorización; esta presentación queda pendiente de comprobación manual. Faltan las pruebas manuales de renovación y eliminación al cerrar sesión y la validación en Linux.
 
 ## Seguridad que debe implementar el núcleo
 
@@ -34,15 +42,23 @@ Estas medidas reducen exposición accidental. El almacén del sistema no garanti
 
 ## Modrinth
 
-Integrar primero el catálogo público con la API documentada. No necesita el token de Minecraft. El cliente debe identificar Ícaro mediante `User-Agent`, respetar límites y tratar errores sin bloquear la interfaz. [Descripción de la API](https://docs.modrinth.com/api/).
+El catálogo público usa la API documentada y un cliente independiente del login. No recibe el token de Minecraft. Identifica Ícaro mediante `User-Agent`, respeta la espera recibida con HTTP 429 y trata errores sin bloquear la interfaz. [Descripción de la API](https://docs.modrinth.com/api/).
 
-El `User-Agent` debe incluir el nombre, la versión de Ícaro y un enlace al proyecto, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/Icaro)`.
+El `User-Agent` debe incluir el nombre, la versión de Ícaro y un enlace al proyecto, por ejemplo `Icaro/0.1.0 (+https://github.com/00faithlss/Icaro-launcher)`.
 
 La búsqueda usa texto, tipo de proyecto, versión de Minecraft y loader. Se pagina y se descartan respuestas antiguas al cambiar filtros. La selección final de versión vuelve a comprobar compatibilidad, porque encontrar un proyecto no garantiza que cualquier archivo sirva para la instancia. [Búsqueda](https://docs.modrinth.com/api/operations/searchprojects/) y [versiones](https://docs.modrinth.com/api/operations/getprojectversions/).
 
 Antes de descargar, resolver dependencias obligatorias y conflictos; después verificar tamaño y SHA-512, escribir en un archivo temporal y publicar el resultado en la instancia. Validar nombres, rutas y archivos comprimidos para impedir escrituras fuera del destino. Guardar los IDs estables de proyecto y versión junto al archivo instalado para actualizaciones y reconocimiento posteriores.
 
 Los modpacks crean instancias desde sus manifiestos; los mods se instalan dentro de cada instancia.
+
+### Recursos, shaders y cambio de versión
+
+Los resourcepacks no se filtran por el loader de mods. Un ZIP de recursos debe contener `pack.mcmeta`; si no anuncia la versión de Minecraft de la instancia, se permite instalarlo después de confirmar. Su activación se guarda en `options.txt`. Los shaders deben contener archivos bajo `shaders/` y usan la configuración existente de Iris; solo uno queda activo. Otros motores y la prioridad de resourcepacks por arrastre siguen pendientes.
+
+`versiones_instancia` identifica todos los mods instalados mediante SHA-512 y consultas por lotes, incluidos los desactivados. El selector calcula compatibilidad en segundo plano con caché, sin verificar Minecraft al dibujar filas. Permite escoger la versión de Minecraft conservando la familia del loader, revisar actualizaciones y desactivaciones, respaldar mundos y crear una copia. Al aplicar, prepara mods/dependencias en una carpeta aislada, verifica los originales antes de sustituirlos y recupera archivos y metadatos si falla. Conserva los mods desactivados; el respaldo es obligatorio al bajar de versión. Fabric se prepara con el perfil oficial y la versión guardada; Quilt, Forge y NeoForge todavía requieren sus instaladores. Cambiar únicamente la versión del loader conserva Minecraft y los archivos de la instancia.
+
+`InfoProyecto` y `PaginaMod` usan datos publicados por Modrinth y los componentes del ZIP nuevo. Las métricas internas de MRPACK, mínimos/rendimiento de shaders y razones no publicadas de incompatibilidad se omiten. El perfil interno del creador requiere un componente de diseño aún no entregado; sus enlaces abren Modrinth.
 
 ## CurseForge
 

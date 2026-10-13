@@ -32,7 +32,12 @@ pub const ZOOM_MAX: u32 = 400;
 pub const ZOOM_PASO: u32 = 25;
 
 /// Fondo opaco del visor, igual en ambos temas.
-const VELO: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+const VELO: Color = Color {
+    r: 0.0,
+    g: 0.0,
+    b: 0.0,
+    a: 1.0,
+};
 
 /// Estado del visor abierto.
 #[derive(Debug, Clone, Copy)]
@@ -60,7 +65,6 @@ impl EstadoVisor {
         self.indice = indice;
         self.zoom = 100;
     }
-
 }
 
 /// Datos de la imagen que se muestra.
@@ -70,6 +74,14 @@ pub struct ItemVisor {
     pub lamina: Lamina,
     /// Marco 16:9 para capturas; `None` conserva la proporción del grabado.
     pub aspecto: Option<f32>,
+}
+
+/// Imagen ajena a las láminas del diseño, con el mismo visor y controles.
+pub struct ItemImagenVisor {
+    pub titulo: String,
+    pub detalle: String,
+    pub handle: Option<Handle>,
+    pub aviso: String,
 }
 
 /// Acciones de la barra superior; las que faltan no se dibujan.
@@ -94,30 +106,94 @@ pub fn visor<'a, M: Clone + 'a>(
     total: usize,
     m: MensajesVisor<M>,
 ) -> Element<'a, M> {
+    visor_con_imagen(
+        estado,
+        &item.titulo,
+        &item.detalle,
+        item.aspecto,
+        Some(item.lamina.imagen(modo).clone()),
+        "",
+        total,
+        m,
+    )
+}
+
+pub fn visor_imagen<'a, M: Clone + 'a>(
+    estado: &EstadoVisor,
+    item: &ItemImagenVisor,
+    total: usize,
+    m: MensajesVisor<M>,
+) -> Element<'a, M> {
+    visor_con_imagen(
+        estado,
+        &item.titulo,
+        &item.detalle,
+        None,
+        item.handle.clone(),
+        &item.aviso,
+        total,
+        m,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visor_con_imagen<'a, M: Clone + 'a>(
+    estado: &EstadoVisor,
+    titulo: &str,
+    detalle: &str,
+    aspecto: Option<f32>,
+    handle: Option<Handle>,
+    aviso: &str,
+    total: usize,
+    m: MensajesVisor<M>,
+) -> Element<'a, M> {
     // Sobre el velo oscuro todo va en tinta clara, también en el tema Piedra.
     let p = TINTA;
     let mut acciones = row![].spacing(espacio::S1).align_y(Alignment::Center);
     if let Some(copiar) = m.copiar {
-        acciones = acciones.push(boton_estilo(Some(Icono::Copiar), "Copiar", TamBoton::Sm, estilo::boton_fantasma(p), Some(copiar)));
+        acciones = acciones.push(boton_estilo(
+            Some(Icono::Copiar),
+            "Copiar",
+            TamBoton::Sm,
+            estilo::boton_fantasma(p),
+            Some(copiar),
+        ));
     }
     if let Some(carpeta) = m.carpeta {
-        acciones = acciones.push(boton_estilo(Some(Icono::Carpeta), "Abrir carpeta", TamBoton::Sm, estilo::boton_fantasma(p), Some(carpeta)));
+        acciones = acciones.push(boton_estilo(
+            Some(Icono::Carpeta),
+            "Abrir carpeta",
+            TamBoton::Sm,
+            estilo::boton_fantasma(p),
+            Some(carpeta),
+        ));
     }
     if let Some(eliminar) = m.eliminar {
-        acciones = acciones.push(boton_estilo(Some(Icono::Papelera), "Eliminar", TamBoton::Sm, fantasma_error(p), Some(eliminar)));
+        acciones = acciones.push(boton_estilo(
+            Some(Icono::Papelera),
+            "Eliminar",
+            TamBoton::Sm,
+            fantasma_error(p),
+            Some(eliminar),
+        ));
     }
     acciones = acciones.push(boton_icono(p, Icono::Cerrar, "Cerrar", m.cerrar.clone()));
 
     let barra = container(
         row![
-            text(item.titulo.clone())
-                .font(fuentes::MONO)
-                .size(texto::MONO_SM.0)
-                .color(p.text),
-            text(item.detalle.clone())
-                .size(texto::BODY_SM.0)
-                .color(p.text_muted),
-            Space::with_width(Length::Fill),
+            column![
+                text(titulo.to_owned())
+                    .font(fuentes::MONO)
+                    .size(texto::MONO_SM.0)
+                    .shaping(iced::advanced::text::Shaping::Advanced)
+                    .color(p.text),
+                text(detalle.to_owned())
+                    .size(texto::BODY_SM.0)
+                    .shaping(iced::advanced::text::Shaping::Advanced)
+                    .color(p.text_muted)
+            ]
+            .spacing(espacio::S1)
+            .width(Length::Fill),
             acciones,
         ]
         .spacing(espacio::S4)
@@ -125,19 +201,41 @@ pub fn visor<'a, M: Clone + 'a>(
     )
     .padding(Padding::from([espacio::S3, espacio::S4]))
     .width(Length::Fill);
-    let regla_inferior = container(Space::new(Length::Fill, borde::FINO)).style(estilo::bloque(p.border));
+    let regla_inferior =
+        container(Space::new(Length::Fill, borde::FINO)).style(estilo::bloque(p.border));
 
-    let imagen = ImagenVisor {
-        aspecto: item.aspecto,
-        handle: item.lamina.imagen(modo).clone(),
-        zoom: estado.zoom as f32 / 100.0,
-        acercar: m.acercar.clone(),
-        alejar: m.alejar.clone(),
+    let imagen: Element<'a, M> = if let Some(handle) = handle {
+        Element::new(ImagenVisor {
+            aspecto,
+            handle,
+            zoom: estado.zoom as f32 / 100.0,
+            acercar: m.acercar.clone(),
+            alejar: m.alejar.clone(),
+        })
+    } else {
+        container(text(aviso.to_owned()).color(p.text_muted))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
     };
     let medio = row![
-        container(boton_icono(p, Icono::ChevronIzquierda, "Anterior", m.anterior)).center_x(56),
-        Element::new(imagen),
-        container(boton_icono(p, Icono::ChevronDerecha, "Siguiente", m.siguiente)).center_x(56),
+        container(boton_icono(
+            p,
+            Icono::ChevronIzquierda,
+            "Anterior",
+            m.anterior
+        ))
+        .center_x(56),
+        imagen,
+        container(boton_icono(
+            p,
+            Icono::ChevronDerecha,
+            "Siguiente",
+            m.siguiente
+        ))
+        .center_x(56),
     ]
     .align_y(Alignment::Center)
     .height(Length::Fill);
@@ -145,10 +243,15 @@ pub fn visor<'a, M: Clone + 'a>(
     let pie = container(
         row![
             boton_icono(p, Icono::ZoomMenos, "Alejar", m.alejar),
-            text(format!("{} % · {} de {}", estado.zoom, estado.indice + 1, total))
-                .font(fuentes::MONO)
-                .size(texto::MONO_SM.0)
-                .color(p.text),
+            text(format!(
+                "{} % · {} de {}",
+                estado.zoom,
+                estado.indice + 1,
+                total
+            ))
+            .font(fuentes::MONO)
+            .size(texto::MONO_SM.0)
+            .color(p.text),
             boton_icono(p, Icono::ZoomMas, "Acercar", m.acercar),
         ]
         .spacing(espacio::S4)
@@ -161,14 +264,18 @@ pub fn visor<'a, M: Clone + 'a>(
         Space::with_height(espacio::S6),
         barra,
         regla_inferior,
-        container(medio).padding(Padding::from([espacio::S4, 0.0])).height(Length::Fill),
+        container(medio)
+            .padding(Padding::from([espacio::S4, 0.0]))
+            .height(Length::Fill),
         pie,
     ];
-    opaque(container(cuerpo)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding::from([0.0, espacio::S4]))
-        .style(estilo::bloque(VELO)))
+    opaque(
+        container(cuerpo)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(Padding::from([0.0, espacio::S4]))
+            .style(estilo::bloque(VELO)),
+    )
 }
 
 /// Botón fantasma de la acción destructiva: texto cinabrio.
@@ -177,7 +284,11 @@ fn fantasma_error(p: Paleta) -> impl Fn(&iced::Theme, button::Status) -> button:
         background: matches!(estado, button::Status::Hovered | button::Status::Pressed)
             .then(|| Background::Color(p.surface_hover)),
         text_color: p.error,
-        border: Border { width: borde::MEDIO, color: Color::TRANSPARENT, radius: 0.0.into() },
+        border: Border {
+            width: borde::MEDIO,
+            color: Color::TRANSPARENT,
+            radius: 0.0.into(),
+        },
         ..Default::default()
     }
 }
@@ -202,10 +313,17 @@ struct EstadoImagen {
 
 impl<M> ImagenVisor<M> {
     fn marco(&self, caja: Rectangle) -> Rectangle {
-        let Some(aspecto) = self.aspecto else { return caja };
+        let Some(aspecto) = self.aspecto else {
+            return caja;
+        };
         let w = caja.width.min(caja.height * aspecto);
         let h = w / aspecto;
-        Rectangle { x: caja.center_x() - w / 2.0, y: caja.center_y() - h / 2.0, width: w, height: h }
+        Rectangle {
+            x: caja.center_x() - w / 2.0,
+            y: caja.center_y() - h / 2.0,
+            width: w,
+            height: h,
+        }
     }
 
     /// Rectángulo donde se dibuja la imagen dentro de `caja`, ya con el
@@ -214,7 +332,9 @@ impl<M> ImagenVisor<M> {
         let (iw, ih) = (tam.width as f32, tam.height as f32);
         let ajuste = if self.aspecto.is_some() {
             (caja.width / iw).max(caja.height / ih)
-        } else { (caja.width / iw).min(caja.height / ih) };
+        } else {
+            (caja.width / iw).min(caja.height / ih)
+        };
         let (w, h) = (iw * ajuste * self.zoom, ih * ajuste * self.zoom);
         let tope_x = ((w - caja.width) / 2.0).max(0.0);
         let tope_y = ((h - caja.height) / 2.0).max(0.0);
@@ -257,7 +377,10 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for ImagenVisor<M> {
     ) -> event::Status {
         let estado = arbol.state.downcast_mut::<EstadoImagen>();
         if estado.imagen != id_de(&self.handle) {
-            *estado = EstadoImagen { imagen: id_de(&self.handle), ..Default::default() };
+            *estado = EstadoImagen {
+                imagen: id_de(&self.handle),
+                ..Default::default()
+            };
         }
         let caja = self.marco(layout.bounds());
         let Event::Mouse(raton) = evento else {
@@ -342,7 +465,11 @@ impl<M: Clone> Widget<M, iced::Theme, iced::Renderer> for ImagenVisor<M> {
         }
         let estado = arbol.state.downcast_ref::<EstadoImagen>();
         // Una imagen distinta empieza centrada.
-        let mover = if estado.imagen == id_de(&self.handle) { estado.mover } else { Vector::ZERO };
+        let mover = if estado.imagen == id_de(&self.handle) {
+            estado.mover
+        } else {
+            Vector::ZERO
+        };
         let destino = self.rectangulo(tam, caja, mover);
         renderer.with_layer(recorte, |renderer| {
             renderer.draw_image(
@@ -406,7 +533,6 @@ mod tests {
         v.ir_a(3);
         assert_eq!((v.indice, v.zoom), (3, 100));
     }
-
 }
 
 /// Huella de la imagen, para detectar que cambió.

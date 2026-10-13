@@ -263,7 +263,7 @@ pub fn toast_con_opacidad<'a, M: Clone + 'a>(
     let mut fila = row![
         icono(glifo, Tam::Base, tinta),
         text(mensaje.to_owned())
-            .size(texto::BODY.0)
+            .size(texto::BODY_SM.0)
             .color(tinta)
             .width(Length::Fill),
     ]
@@ -303,8 +303,8 @@ pub fn toast_con_opacidad<'a, M: Clone + 'a>(
         );
     }
     container(fila)
-        .width(460)
-        .padding(Padding::from([espacio::S3, espacio::S4]))
+        .width(420)
+        .padding(Padding { top: 12., right: 12., bottom: 12., left: 16. })
         .style(estilo::bloque(fondo))
         .into()
 }
