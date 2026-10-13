@@ -25,7 +25,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 - [x] Menú de Mods anclado al botón y reposicionado al maximizar; Agregar acepta ZIP de recursos/shaders beta o de otra versión; ArchivosNoVerificados limita la lámina y usa interlineado absoluto.
 - [x] Tiendas de mods, resourcepacks y shaders con composición y cesta compartidas; filtros de entorno distinguen cliente, servidor y ambos.
 - [x] Apariencia, insignias, progreso y toasts recuperan los componentes originales y sus estados reales.
-- [x] Servidores muestra EnConstruccion en modo real; la maqueta de servidores permanece separada.
+- [x] Servidores guarda y consulta la lista real y conecta la instancia vinculada; la maqueta permanece separada.
 - [x] Rutas legibles e `instance.json` de esquema 2, migración conservadora de CFG e identificación de archivos no verificados.
 - [x] ExportarInstancia nuevo con árbol, selección por grupos, presets y ZIP Ícaro/Prism.
 - [x] IconoInstancia: editor y menú, imagen/capturas/generado, recorte, estilos y guardado reversible.
@@ -124,8 +124,8 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | --- | --- | --- |
 | `PantallaDescargas`, `ColaDescargas` | Parcial | Cola real de MRPACK/Vanilla/Fabric/Java con pausa, reanudación, cancelación y reintento en las filas originales. Quitar un registro terminado o fallido oculta su progreso sin borrar la instancia ni sus archivos. Falta historial persistente y unificar mods y demás instaladores en la cola global. |
 | `PantallaConsola`, `Consola` | Implementado | Barra interior del diseño con filtros independientes y conteos, búsqueda con resaltado, autoscroll con pausa al subir e Ir al final, copiar/limpiar e iconos. Render de filas visibles, selector por instancia, último registro desde latest.log, exportación TXT y vacío con San Jerónimo. Registros en vivo acotados y credenciales ocultas. |
-| `PantallaServidores`, `TarjetaServidor` | Maqueta | Lista, tarjetas y reordenación disponibles. Falta añadir/guardar servidores reales, consultar su estado y jugar con la instancia elegida. |
-| `RedPrivada`, `SincronizarMods` | Maqueta | Pantallas originales disponibles. Falta conectar red, comparación de manifiestos y sincronización real. |
+| `PantallaServidores`, `TarjetaServidor` | Maqueta | Lista real con tarjetas originales, guardado, edición, eliminación sin borrar la instancia, consulta de estado y lanzamiento hacia la dirección vinculada. Orden persistente mediante Subir/Bajar; arrastre se conserva en la maqueta. Falta resolver DNS SRV en la consulta de estado y validar conexión dentro del juego en Windows/Arch. |
+| `RedPrivada`, `SincronizarMods` | Maqueta | Pantallas originales disponibles. Servidores ya detecta ZeroTier y consulta estado y redes mediante su CLI; la pantalla de unirse a redes conserva ejemplos. Falta conectar nuevas redes, definir el manifiesto del servidor/anfitrión y aplicar la sincronización verificada con recuperación. El roadmap general cuenta estos pendientes por separado. |
 | `PantallaCuenta` | A evaluar | La cuenta real usa una vista simplificada; la composición original con skin de frente/espalda, Apolo, capas e historial está en la maqueta. Evaluar su recuperación y conectar datos/acciones reales. |
 | `EstudioSkin` | Maqueta | Composición y controles disponibles; faltan textura, modelo/capas reales, validación de PNG y aplicación a Microsoft/Minecraft. |
 | `PantallaAjustes`, `FilaAjuste` | Parcial | Índice y filas existentes; los ajustes de Java por instancia se guardan. Falta persistir las preferencias generales y conectar los controles que todavía describen servicios no implementados. |

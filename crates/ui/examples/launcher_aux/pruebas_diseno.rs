@@ -16,6 +16,7 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
     a.umbral = None;
     let scene = std::env::var("ICARO_VISTA_DISENO").unwrap_or_else(|_| "asistente".into());
     match scene.as_str() {
+        s if s.starts_with("servidores")=>crate::servidores_reales::preparar_diseno(&mut a,s),
         "java-instancia" => { a.editor = Some(1); a.editor_inst = 0; },
         "almacenamiento" => { a.seccion=Seccion::Ajustes;a.ajuste=3;a.almacenamiento.informe=Some(icaro_core::almacenamiento::Informe{categorias:vec![("Assets".into(),484486173),("Bibliotecas".into(),80695893),("Java".into(),250000000),("Instancias".into(),2000000),("Caché".into(),1000000)],total:818182066,papeleras:vec![std::path::PathBuf::from("fixture/.papelera")]}); },
         "java-global" => { a.seccion = Seccion::Ajustes; a.ajuste = 2; },

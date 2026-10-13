@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Estado {
+    pub servidores:crate::servidores_reales::Estado,
     pub modpacks:crate::modpacks_reales::Estado,
     pub juego: crate::juego_real::Estado,
     pub mods: crate::mods_reales::Estado,
@@ -72,6 +73,7 @@ impl Default for Estado {
 impl Estado {
     pub fn nuevo(demo: bool) -> Self {
         Self {
+            servidores:Default::default(),
             modpacks:Default::default(),
             juego: Default::default(),
             mods: Default::default(),

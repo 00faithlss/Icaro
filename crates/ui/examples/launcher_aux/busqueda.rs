@@ -85,7 +85,7 @@ pub fn resultados(app: &App) -> Vec<Resultado> {
         destino: Destino::Mod(m.id.into()),
     }));
     }
-    entradas.extend(
+    if app.servicios.demo {entradas.extend(
         app.red
             .servidores
             .iter()
@@ -95,7 +95,9 @@ pub fn resultados(app: &App) -> Vec<Resultado> {
                 detalle: format!("Servidor · {}", s.direccion),
                 destino: Destino::Servidor(i),
             }),
-    );
+    );} else {entradas.extend(app.servicios.servidores.guardados().iter().enumerate().map(|(i,s)|Resultado{
+        titulo:s.nombre.clone(),detalle:format!("Servidor · {}",s.direccion),destino:Destino::Servidor(i)
+    }));}
     filtrar(entradas, &app.busqueda.consulta)
 }
 

@@ -152,3 +152,7 @@ La prueba opcional del visor consulta la imagen «FPS in high render distance» 
 Crear Vanilla o Fabric prepara sus archivos oficiales con Java según el perfil. La familia se elige al crear la instancia; sus versiones solo se muestran al seleccionar ese loader. Cambiar versión modifica Minecraft; Cambiar versión del loader modifica únicamente la versión del mismo loader.
 
 Instalar modpack revisa el MRPACK, permite elegir archivos opcionales y crea una instancia independiente con la versión de Minecraft y el loader del pack. La cola permite pausar, cancelar y reintentar. Quitar de Descargas en un registro completado o fallido oculta ese registro; conserva la instancia y sus archivos. El historial todavía no se guarda entre sesiones.
+
+## Servidores
+
+La sección permite guardar, editar, quitar y ordenar servidores, consultar Minecraft y preparar la conexión mediante una instancia vinculada. ZeroTier se detecta y muestra sus redes reales cuando el servicio permite consultar; unirse a nuevas redes y sincronizar mods siguen pendientes. Consulta la [guía de servidores y ZeroTier](servidores.md).

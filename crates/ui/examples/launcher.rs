@@ -26,6 +26,8 @@ use icaro_ui::servidores::{lista_servidores, red_privada, AccionesLista};
 mod archivos;
 #[path = "launcher_aux/estado.rs"]
 mod estado;
+#[path = "launcher_aux/servidores_reales.rs"]
+mod servidores_reales;
 #[path = "launcher_aux/almacenamiento_real.rs"]
 mod almacenamiento_real;
 #[path = "launcher_aux/java_real.rs"]
@@ -260,6 +262,7 @@ enum Mensaje {
     DisenoCapturado(window::Screenshot),
     DisenoMods(diseno_mods::Accion),
     Modpacks(modpacks_reales::Accion),
+    Servidores(servidores_reales::Accion),
     ModsReales(mods_reales::Accion),
     PacksReales(mods_reales::packs::Accion),
     Instancias(instancias_reales::Accion),
@@ -516,9 +519,9 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     if matches!(&m, Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Actualizacion))) {
         return actualizacion_real::actualizar(app, actualizacion_real::Accion::Abrir);
     }
-    if !app.servicios.demo && matches!(&m, Mensaje::Red(red::Mensaje::Agregar | red::Mensaje::Jugar(_))) {
-        app.avisar("La gestión de servidores todavía está en preparación.".into());
-        return Task::none();
+    if !app.servicios.demo {
+        if let Mensaje::Red(red::Mensaje::Agregar)=&m{return servidores_reales::actualizar(app,servidores_reales::Accion::Nuevo);}
+        if let Mensaje::Red(red::Mensaje::Jugar(i))=&m{return servidores_reales::actualizar(app,servidores_reales::Accion::Jugar(*i));}
     }
     if !app.servicios.demo && matches!(&m, Mensaje::TiendaInstalar | Mensaje::InstalarMod(_, _) | Mensaje::VersionMod(_, _)
         | Mensaje::InstalarModpack(_) | Mensaje::AlternarMod(_) | Mensaje::EliminarMod(_)) {
@@ -527,6 +530,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     }
     match m {
         Mensaje::Modpacks(a) => return modpacks_reales::actualizar(app,a),
+        Mensaje::Servidores(a)=>return servidores_reales::actualizar(app,a),
         Mensaje::Almacenamiento(a) => return almacenamiento_real::actualizar(app,a),
         Mensaje::Java(a) => return java_real::actualizar(app, a),
         Mensaje::Actualizacion(a) => return actualizacion_real::actualizar(app, a),
@@ -603,7 +607,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                     mods::fijar_recurso(false);
                     return actualizar_estado(app, Mensaje::AbrirModPagina(id));
                 }
-                busqueda::Destino::Servidor(i) if i < app.red.servidores.len() => {
+                busqueda::Destino::Servidor(i) if i < if app.servicios.demo {app.red.servidores.len()}else{app.servicios.servidores.guardados().len()} => {
                     app.seccion = Seccion::Servidores;
                     app.editor = None;
                     app.red.sobre = Some(i);
@@ -834,6 +838,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             arrancar(app);
             app.editor = None;
             if s == Seccion::Modpacks && !app.servicios.demo { return servicios::buscar(app, 0, false); }
+            if s == Seccion::Servidores && !app.servicios.demo { return servidores_reales::actualizar(app,servidores_reales::Accion::Abrir); }
             if s == Seccion::Capturas { return capt::refrescar(app); }
             if s == Seccion::Consola && !app.servicios.demo { return juego_real::cargar_consola(app); }
         }
@@ -3039,21 +3044,15 @@ fn pantalla_capturas(app: &App) -> Element<'_, Mensaje> {
 }
 
 fn pantalla_servidores(app: &App) -> Element<'_, Mensaje> {
-    if !app.servicios.demo {
-        use componentes::{AvanceParte, Parte};
-        return componentes::en_construccion(app.paleta(), "Servidores", &[
-            Parte { nombre: "Guardar y consultar servidores", avance: AvanceParte::Pendiente },
-            Parte { nombre: "Unirse con una instancia", avance: AvanceParte::Pendiente },
-            Parte { nombre: "Sincronizar mods", avance: AvanceParte::Pendiente },
-        ]);
-    }
+    if !app.servicios.demo || app.servicios.servidores.visual {return servidores_reales::vista(app);}
     if app.capt.vacio || app.red.servidores.is_empty() {
         return capt::vacio_servidores(app);
     }
     let p = app.paleta();
     let acciones = AccionesLista {
+        editar:None,eliminar:None,permitir_sin_estado:false,
         jugar: |i| Mensaje::Red(red::Mensaje::Jugar(i)),
-        tomar: |i| Mensaje::Red(red::Mensaje::Tomar(i)),
+        tomar: Some(|i| Mensaje::Red(red::Mensaje::Tomar(i))),
         sobre: |i| Mensaje::Red(red::Mensaje::Sobre(i)),
     };
     // Colocar dura `dur-fast`: el avance de 0 a 1 sale del reloj de la ventana.
@@ -3810,6 +3809,9 @@ fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con
                 colocada: None,
                 sesion: sesion::Sesion::desde_entorno(),
             },
-            Task::perform(async {}, |_| Mensaje::Servicio(servicios::Accion::Inicializar)),
+            Task::batch([
+                Task::perform(async {}, |_| Mensaje::Servicio(servicios::Accion::Inicializar)),
+                Task::perform(async {}, |_| Mensaje::Servidores(servidores_reales::Accion::Abrir)),
+            ]),
         )
 }

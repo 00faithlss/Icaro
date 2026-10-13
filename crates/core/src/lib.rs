@@ -12,6 +12,8 @@ pub mod icono_instancia;
 pub mod exportar_lista_mods;
 pub mod modrinth;
 pub mod modpacks;
+pub mod servidores;
+pub mod zerotier;
 pub mod mods;
 pub mod vault;
 pub mod java;

@@ -27,6 +27,7 @@ pub struct Config {
     pub argumentos_jvm: String,
     pub resolucion: Option<(u32, u32)>,
     pub fullscreen: bool,
+    pub servidor: Option<String>,
 }
 
 impl Default for Config {
@@ -37,6 +38,7 @@ impl Default for Config {
             argumentos_jvm: String::new(),
             resolucion: None,
             fullscreen: false,
+            servidor: None,
         }
     }
 }
@@ -49,6 +51,7 @@ impl std::fmt::Debug for Config {
             .field("argumentos_jvm", &"[PERSONALIZADOS]")
             .field("resolucion", &self.resolucion)
             .field("fullscreen", &self.fullscreen)
+            .field("servidor", &self.servidor)
             .finish()
     }
 }
@@ -106,6 +109,8 @@ pub enum Error {
         "La instalación no contiene los archivos o argumentos necesarios para lanzar Minecraft."
     )]
     Instalacion,
+    #[error("La dirección del servidor no es válida.")]
+    Servidor,
     #[error("No se pudo preparar la carpeta del juego.")]
     Carpeta,
     #[error("No se pudo iniciar Java. Revisa el ejecutable seleccionado.")]
@@ -342,6 +347,16 @@ fn preparar(
     }
     if config.fullscreen {
         argumentos.push("--fullscreen".into());
+    }
+    if let Some(servidor)=&config.servidor {
+        let destino=crate::servidores::direccion(servidor).map_err(|_|Error::Servidor)?;
+        let moderno=instalado.quick_play_multiplayer.unwrap_or_else(||{
+            let partes:Vec<_>=instalado.version.split(['.','-']).collect();
+            partes.first().and_then(|p|p.parse::<u32>().ok()).is_some_and(|a|a>=26)
+                || (partes.first()==Some(&"1")&&partes.get(1).and_then(|p|p.parse::<u32>().ok()).is_some_and(|b|b>=20))
+        });
+        if moderno {argumentos.extend(["--quickPlayMultiplayer".into(),servidor.trim().into()]);}
+        else {argumentos.extend(["--server".into(),destino.host,"--port".into(),destino.puerto.to_string()]);}
     }
     Ok(argumentos)
 }
@@ -859,6 +874,7 @@ mod tests {
         Instalado {
             version: "1.21.1".into(),
             perfil_id: None,
+            quick_play_multiplayer: None,
             main_class: "net.minecraft.client.main.Main".into(),
             classpath: vec![
                 PathBuf::from("bibliotecas con espacios/lwjgl.jar"),
@@ -1010,6 +1026,22 @@ mod tests {
         ] {
             assert!(args.iter().any(|a| a == expected), "{expected}");
         }
+    }
+
+    #[test]
+    fn conectar_servidor_respeta_perfil_quickplay_y_argumentos_literales(){
+        let mut game=instalado();game.quick_play_multiplayer=Some(true);
+        let c=Config{memoria_min_mb:1024,memoria_max_mb:4096,servidor:Some("play.example.net".into()),..Config::default()};
+        let args=preparar(&game,Path::new("juego"),"Jugador","uuid","token","xuid",&c).unwrap();
+        assert!(args.windows(2).any(|v|v==["--quickPlayMultiplayer","play.example.net"]));
+        assert!(args.iter().any(|v|v=="-Xmx4096M"));assert!(!args.iter().any(|v|v=="--server"));
+        game.quick_play_multiplayer=Some(false);
+        let args=preparar(&game,Path::new("juego"),"Jugador","uuid","token","xuid",&c).unwrap();
+        assert!(args.windows(2).any(|v|v==["--server","play.example.net"]));
+        assert!(args.windows(2).any(|v|v==["--port","25565"]));
+        let invalid=Config{servidor:Some("host --accessToken bad".into()),..Config::default()};
+        assert!(matches!(preparar(&game,Path::new("juego"),"Jugador","uuid","token","xuid",&invalid),Err(Error::Servidor)));
+        assert!(!preparar(&game,Path::new("juego"),"Jugador","uuid","token","xuid",&Config::default()).unwrap().iter().any(|v|v=="--server"||v=="--quickPlayMultiplayer"));
     }
 
     #[test]

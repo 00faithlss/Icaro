@@ -71,8 +71,11 @@ impl Arrastre {
 /// Mensajes que emite la lista.
 pub struct AccionesLista<M> {
     pub jugar: fn(usize) -> M,
+    pub editar: Option<fn(usize) -> M>,
+    pub eliminar: Option<fn(usize) -> M>,
+    pub permitir_sin_estado: bool,
     /// El asa de la fila `i` se presionó: empieza el arrastre.
-    pub tomar: fn(usize) -> M,
+    pub tomar: Option<fn(usize) -> M>,
     /// El puntero entró (`Some`) o salió (`None`) de una fila.
     pub sobre: fn(Option<usize>) -> M,
 }
@@ -195,7 +198,7 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
         EstadoServidor::EnLinea { jugadores, maximo, ms } => {
             format!("{} · {jugadores} / {maximo} · {ms} ms", s.direccion)
         }
-        EstadoServidor::FueraDeLinea(_) => format!("{} · fuera de línea", s.direccion),
+        EstadoServidor::FueraDeLinea(estado) => format!("{} · {estado}", s.direccion),
     };
     let datos = column![
         titulo,
@@ -207,13 +210,13 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
     .spacing(2)
     .width(Length::Fill);
 
-    let jugar = if en_linea {
+    let jugar = if en_linea || acciones.permitir_sin_estado {
         boton_con_icono(p, Icono::Jugar, "Jugar", Variante::Primario, Some((acciones.jugar)(i)), false)
     } else {
         boton_con_icono(p, Icono::Jugar, "Jugar", Variante::Secundario, None, false)
     };
 
-    let asa = mouse_area(
+    let asa:Element<'a,M> = if let Some(tomar)=acciones.tomar {mouse_area(
         container(icono(
             Icono::Arrastrar,
             Tam::Base,
@@ -221,10 +224,13 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
         ))
         .center(Length::Fixed(24.0)),
     )
-    .on_press((acciones.tomar)(i))
-    .interaction(mouse::Interaction::Grab);
+    .on_press(tomar(i))
+    .interaction(mouse::Interaction::Grab).into()}else{Space::with_width(0).into()};
 
-    let fila = row![asa, avatar_servidor(p, &s.nombre), datos, jugar]
+    let mut controles=row![jugar].spacing(8).align_y(Alignment::Center);
+    if let Some(editar)=acciones.editar {controles=controles.push(boton_con_icono(p,Icono::Editar,"",Variante::Fantasma,Some(editar(i)),true));}
+    if let Some(eliminar)=acciones.eliminar {controles=controles.push(boton_con_icono(p,Icono::Papelera,"",Variante::Fantasma,Some(eliminar(i)),true));}
+    let fila = row![asa, avatar_servidor(p, &s.nombre), datos, controles]
         .spacing(espacio::S4)
         .align_y(Alignment::Center);
     let resaltada = vista.levantada || vista.encima || vista.colocando.is_some_and(|t| t < 2.0 / 3.0);

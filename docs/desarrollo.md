@@ -136,3 +136,7 @@ GPL-3.0-only. El texto completo está en [LICENSE](../LICENSE).
 Pasaron 127 pruebas del núcleo, 55 de componentes y 38 del launcher, sin fallos. Quedaron omitidas por defecto 12 pruebas del núcleo y dos del launcher que necesitan servicios o fixtures externos. La instalación real de Fabulously Optimized 14.1.1 con Minecraft 26.2/Fabric 0.19.5 y la reutilización sin descargas se comprobaron por separado; esa prueba no inicia el juego ni usa una cuenta. El usuario confirmó Fabric 26.3 con un mod real en Windows.
 
 Se inspeccionaron capturas de modpacks y eliminación en Tinta/Piedra, incluidos los chips de versiones, licencia larga y Cancelar alineado al pie de la tarjeta. El ejecutable compiló y git diff --check pasó. Los comandos reproducibles de instalación están en [Vanilla, Fabric y Java](vanilla-y-java.md).
+
+## Servidores reales y detección de ZeroTier
+
+Las escenas servidores, servidores-vacio, servidores-formulario y sus variantes con sufijo -angosto capturan lista, vacío y formulario sin consultar cuentas, servidores ni ZeroTier del usuario. El diagnóstico detectar_zerotier consulta únicamente la CLI instalada y no modifica redes. La [guía de servidores](servidores.md) explica la persistencia, las consultas, el lanzamiento por perfil y los límites pendientes.
