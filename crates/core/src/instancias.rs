@@ -37,6 +37,8 @@ pub enum Error {
     Datos,
     #[error("El nombre debe contener entre 1 y 80 caracteres, sin caracteres de control.")]
     Nombre,
+    #[error("{0}")]
+    Papelera(String),
     #[error("Ya existe una instancia con ese nombre.")]
     Repetida,
 }
@@ -45,6 +47,7 @@ pub enum Error {
 pub struct Almacen {
     raiz: PathBuf,
     rutas: Arc<Mutex<BTreeMap<String, PathBuf>>>,
+    eliminadas: Arc<Mutex<BTreeMap<String, crate::papelera::Ticket>>>,
 }
 pub struct Informe {
     pub instancias: Vec<Instancia>,
@@ -187,6 +190,7 @@ fn leer_en(path: &Path) -> Result<Instancia, Error> {
     Ok(i)
 }
 
+#[cfg(test)]
 fn cfg(i: &Instancia) -> Result<Vec<u8>, Error> {
     let string = |s: &str| serde_json::to_string(s).map_err(|_| Error::Datos);
     Ok(format!(
@@ -221,26 +225,68 @@ fn escribir(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     result
 }
 
-fn guardar_en(path: &Path, i: &Instancia) -> Result<(), Error> {
+fn documento(path: &Path) -> Result<serde_json::Value, Error> {
     let json = path.join("instance.json");
-    let config = path.join("instance.cfg");
-    for dest in [&json, &config] {
-        if fs::symlink_metadata(dest).is_ok() {
-            regular(dest, false)?;
+    if json.exists() {
+        regular(&json, false)?;
+        if fs::metadata(&json).map_err(|_| Error::Disco)?.len() > MAX_METADATA {
+            return Err(Error::Datos);
         }
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(json).map_err(|_| Error::Disco)?)
+                .map_err(|_| Error::Datos)?;
+        if !value.is_object() {
+            return Err(Error::Datos);
+        }
+        Ok(value)
+    } else {
+        Ok(serde_json::json!({}))
     }
-    let anterior = fs::read(&config).ok();
-    escribir(&config, &cfg(i)?)?;
-    if let Err(error) = escribir(
-        &json,
-        &serde_json::to_vec_pretty(i).map_err(|_| Error::Datos)?,
-    ) {
-        if let Some(bytes) = anterior {
-            let _ = escribir(&config, &bytes);
-        } else {
-            let _ = fs::remove_file(&config);
+}
+
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn guardar_en(path: &Path, i: &Instancia) -> Result<(), Error> {
+    let _guard = CONFIG_LOCK.lock().map_err(|_| Error::Disco)?;
+    let mut value = documento(path)?;
+    let object = value.as_object_mut().ok_or(Error::Datos)?;
+    if object
+        .get("schema")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|s| s > 2)
+    {
+        return Err(Error::Datos);
+    }
+    object.extend(
+        serde_json::to_value(i)
+            .map_err(|_| Error::Datos)?
+            .as_object()
+            .ok_or(Error::Datos)?
+            .clone(),
+    );
+    object.insert("schema".into(), 2.into());
+    let config = path.join("instance.cfg");
+    if config.exists() {
+        regular(&config, false)?;
+        if fs::metadata(&config).map_err(|_| Error::Disco)?.len() > MAX_METADATA {
+            return Err(Error::Datos);
         }
-        return Err(error);
+        // Conserva todas las claves desconocidas del formato anterior como texto.
+        object
+            .entry("legacy_cfg")
+            .or_insert(serde_json::Value::String(
+                fs::read_to_string(&config).map_err(|_| Error::Disco)?,
+            ));
+    }
+    let bytes = serde_json::to_vec_pretty(&value).map_err(|_| Error::Datos)?;
+    if bytes.len() as u64 > MAX_METADATA {
+        return Err(Error::Datos);
+    }
+    if fs::read(path.join("instance.json")).ok().as_deref() != Some(bytes.as_slice()) {
+        escribir(&path.join("instance.json"), &bytes)?;
+    }
+    if config.exists() {
+        fs::remove_file(config).map_err(|_| Error::Disco)?;
     }
     Ok(())
 }
@@ -278,8 +324,47 @@ impl Almacen {
         Self {
             raiz: raiz.into(),
             rutas: Default::default(),
+            eliminadas: Default::default(),
         }
     }
+    /// Raíz de datos compartidos, hermana del directorio de instancias.
+    pub(crate) fn datos(&self) -> Result<PathBuf, Error> {
+        let instances = self.raiz.canonicalize().map_err(|_| Error::Disco)?;
+        instances.parent().map(Path::to_owned).ok_or(Error::Datos)
+    }
+    pub fn configuracion(&self, id: &str) -> Result<Option<serde_json::Value>, Error> {
+        Ok(documento(&self.carpeta(id)?)?.get("configuracion").cloned())
+    }
+    pub fn guardar_configuracion(
+        &self,
+        id: &str,
+        settings: &serde_json::Value,
+    ) -> Result<(), Error> {
+        let path = self.carpeta(id)?;
+        let _guard = CONFIG_LOCK.lock().map_err(|_| Error::Disco)?;
+        let mut value = documento(&path)?;
+        if value
+            .get("schema")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|n| n > 2)
+        {
+            return Err(Error::Datos);
+        }
+        let mut merged = value
+            .get("configuracion")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let fields = merged.as_object_mut().ok_or(Error::Datos)?;
+        fields.extend(settings.as_object().ok_or(Error::Datos)?.clone());
+        value["configuracion"] = merged;
+        let bytes = serde_json::to_vec_pretty(&value).map_err(|_| Error::Datos)?;
+        if bytes.len() as u64 > MAX_METADATA {
+            return Err(Error::Datos);
+        }
+        if fs::read(path.join("instance.json")).ok().as_deref()==Some(bytes.as_slice()){return Ok(());}
+        escribir(&path.join("instance.json"), &bytes)
+    }
+
     pub fn carpeta(&self, id: &str) -> Result<PathBuf, Error> {
         if !id_valido(id) {
             return Err(Error::Datos);
@@ -369,23 +454,12 @@ impl Almacen {
             // Si el sistema tiene la carpeta abierta, la ruta antigua sigue siendo utilizable.
             if path.file_name() == Some(std::ffi::OsStr::new(&i.id)) {
                 if let Ok(destino) = self.destino(&i.nombre, Some(&path)) {
-                    let config = path.join("instance.cfg");
-                    let config_valida = if config.exists() {
-                        regular(&config, false)
-                    } else {
-                        Ok(())
-                    };
-                    // El JSON legado se conserva byte a byte, incluso campos de
-                    // otras versiones que este lector todavía no conoce.
-                    if config_valida
-                        .and_then(|_| escribir(&config, &cfg(&i)?))
-                        .is_ok()
-                        && fs::rename(&path, &destino).is_ok()
-                    {
+                    if guardar_en(&path, &i).is_ok() && fs::rename(&path, &destino).is_ok() {
                         path = destino;
                     }
                 }
             }
+            let _ = guardar_en(&path, &i);
             rutas.insert(i.id.clone(), path);
             informe.instancias.push(i);
         }
@@ -499,7 +573,7 @@ impl Almacen {
         Ok(resolved)
     }
 
-    /// Retira una instancia activa sin borrar sus mundos; el destino permanece dentro del almacén.
+    /// Envía la instancia a la papelera del sistema; nunca usa borrado permanente.
     pub fn eliminar(&self, id: &str) -> Result<(), Error> {
         self.leer(id)?;
         let root = fs::canonicalize(&self.raiz).map_err(|_| Error::Disco)?;
@@ -507,12 +581,11 @@ impl Almacen {
         if source.parent() != Some(root.as_path()) {
             return Err(Error::Datos);
         }
-        let trash = self.papelera()?;
-        let target = trash.join(id);
-        if fs::symlink_metadata(&target).is_ok() {
-            return Err(Error::Repetida);
-        }
-        fs::rename(source, target).map_err(|_| Error::Disco)?;
+        let ticket = crate::papelera::enviar(&source).map_err(Error::Papelera)?;
+        self.eliminadas
+            .lock()
+            .map_err(|_| Error::Disco)?
+            .insert(id.into(), ticket);
         self.rutas.lock().map_err(|_| Error::Disco)?.remove(id);
         Ok(())
     }
@@ -520,6 +593,25 @@ impl Almacen {
     pub fn restaurar(&self, id: &str) -> Result<Instancia, Error> {
         if !id_valido(id) {
             return Err(Error::Datos);
+        }
+        let ticket = self
+            .eliminadas
+            .lock()
+            .map_err(|_| Error::Disco)?
+            .get(id)
+            .cloned();
+        if let Some(ticket) = ticket {
+            crate::papelera::restaurar(&ticket).map_err(Error::Papelera)?;
+            let record = leer_en(&ticket.original)?;
+            if record.id != id {
+                return Err(Error::Datos);
+            }
+            self.rutas
+                .lock()
+                .map_err(|_| Error::Disco)?
+                .insert(id.into(), ticket.original);
+            self.eliminadas.lock().map_err(|_| Error::Disco)?.remove(id);
+            return Ok(record);
         }
         let trash = self.papelera()?;
         let record = leer_en(&trash.join(id))?;
@@ -666,16 +758,7 @@ mod tests {
         store.eliminar(&a.id).unwrap();
         assert_eq!(store.cargar().unwrap().instancias, vec![b.clone()]);
         assert!(!p.raiz.join(&a.id).exists());
-        assert_eq!(
-            fs::read(
-                p.raiz
-                    .join(".papelera")
-                    .join(&a.id)
-                    .join("minecraft/options.txt")
-            )
-            .unwrap(),
-            b"saved options"
-        );
+        assert!(!p.raiz.join(".papelera").exists());
         assert_eq!(store.restaurar(&a.id).unwrap(), a);
         assert_eq!(store.cargar().unwrap().instancias, vec![a.clone(), b]);
         assert_eq!(
@@ -684,9 +767,10 @@ mod tests {
         );
         store.eliminar(&a.id).unwrap();
         let replacement = store.crear("MUNDO", "1.21.4", 2).unwrap();
-        assert!(matches!(store.restaurar(&a.id), Err(Error::Repetida)));
+        assert!(store.restaurar(&a.id).is_err());
         assert!(store.juego(&replacement.id).unwrap().exists());
-        assert!(p.raiz.join(".papelera").join(&a.id).exists());
+        fs::remove_dir_all(store.carpeta(&replacement.id).unwrap()).unwrap();
+        store.restaurar(&a.id).unwrap();
     }
 
     #[test]
@@ -695,7 +779,7 @@ mod tests {
         let store = p.almacen();
         let a = store.crear("Mundo", "1.21.4", 0).unwrap();
         fs::write(p.raiz.join(".papelera"), b"not a directory").unwrap();
-        assert!(matches!(store.eliminar(&a.id), Err(Error::Datos)));
+        assert!(store.restaurar(&a.id).is_err());
         assert_eq!(store.cargar().unwrap().instancias, vec![a]);
         assert!(store.restaurar("../outside").is_err());
     }
@@ -717,11 +801,12 @@ mod tests {
             "Instancia CON"
         );
         let path = store.carpeta(&a.id).unwrap();
+        fs::write(path.join("instance.cfg"), cfg(&a).unwrap()).unwrap();
         fs::remove_file(path.join("instance.json")).unwrap();
         assert_eq!(p.almacen().leer(&a.id).unwrap(), a);
-        assert!(fs::read_to_string(path.join("instance.cfg"))
-            .unwrap()
-            .contains("[General]"));
+        store.cargar().unwrap();
+        assert!(path.join("instance.json").exists());
+        assert!(!path.join("instance.cfg").exists());
     }
 
     #[test]
@@ -732,7 +817,7 @@ mod tests {
         let path = store.carpeta(&a.id).unwrap();
         fs::create_dir_all(path.join("minecraft/saves/world")).unwrap();
         fs::write(path.join("minecraft/saves/world/level.dat"), b"world").unwrap();
-        fs::remove_file(path.join("instance.cfg")).unwrap();
+        let _ = fs::remove_file(path.join("instance.cfg"));
         let mut metadata = serde_json::to_value(&a).unwrap();
         metadata["dato_de_otra_version"] = serde_json::json!({"conservar":true});
         let legacy = serde_json::to_vec_pretty(&metadata).unwrap();
@@ -747,8 +832,14 @@ mod tests {
             fs::read(new.join("minecraft/saves/world/level.dat")).unwrap(),
             b"world"
         );
-        assert!(new.join("instance.cfg").is_file());
-        assert_eq!(fs::read(new.join("instance.json")).unwrap(), legacy);
+        assert!(!new.join("instance.cfg").exists());
+        let updated: serde_json::Value =
+            serde_json::from_slice(&fs::read(new.join("instance.json")).unwrap()).unwrap();
+        assert_eq!(
+            updated["dato_de_otra_version"],
+            metadata["dato_de_otra_version"]
+        );
+        assert_eq!(updated["schema"], 2);
         assert!(!p.raiz.join(&a.id).exists());
         assert_eq!(fresh.cargar().unwrap().instancias, vec![a.clone()]);
         assert_eq!(fresh.carpeta(&a.id).unwrap(), new);
@@ -760,7 +851,7 @@ mod tests {
         let store = p.almacen();
         let a = store.crear("Original", "1.21.4", 0).unwrap();
         let path = store.carpeta(&a.id).unwrap();
-        fs::remove_file(path.join("instance.cfg")).unwrap();
+        let _ = fs::remove_file(path.join("instance.cfg"));
         fs::create_dir(path.join("instance.cfg")).unwrap();
         fs::write(path.join("minecraft/options.txt"), b"untouched").unwrap();
         let mut renamed = a.clone();

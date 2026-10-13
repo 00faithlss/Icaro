@@ -75,6 +75,58 @@ Si la compilación de pruebas agota la memoria, ejecuta los objetivos por separa
 
 Esta validación no equivale a instalar loaders ni a probar una actualización publicada: ambos límites siguen registrados en los roadmaps. Las pruebas de red ignoradas se ejecutan aparte cuando se requiere comprobar el proveedor real.
 
+## Validación de los ajustes Java (12-10-2026)
+
+- Núcleo: 108 pruebas aprobadas y 5 omitidas. Incluye prioridad local sobre runtime guardado, respaldo sin red, descarga desactivada, versión manual incompatible y arquitectura.
+- Biblioteca de interfaz: 55 pruebas aprobadas. Launcher: 35 aprobadas y 2 omitidas, ejecutado con `--test-threads=1` porque varias pruebas comparten la lista global de instancias. Una ejecución concurrente falló en la comprobación de lista vacía del arranque; la ejecución secuencial completa pasó.
+- Revisadas las capturas aisladas `java-instancia` y `java-global` en Tinta y Piedra. Conservan los componentes existentes de campos, selectores, interruptores y tabla.
+- Falta el recorrido nativo en Arch y repetir el lanzamiento real de Minecraft con las nuevas selecciones; estas pruebas no requieren ni usan las cuentas del usuario.
+
+## Java con perfiles y modos de Prism (12-10-2026)
+
+La resolución automática distingue descarga administrada y detección sin descargas. Vanilla guarda la lista compatible por versión de los metadatos públicos de Prism, con respaldo Mojang si no está disponible. La detección incluye runtimes del launcher oficial tradicional y Microsoft Store. Probar inicia la JVM con memoria y argumentos de la instancia; usa el perfil guardado tras reiniciar cuando está disponible.
+
+Validación: 110 pruebas del núcleo, 55 de la biblioteca de interfaz y 35 del launcher aprobadas (estas últimas con `--test-threads=1`), más las dos pruebas explícitas de JVM y metadatos reales.
+
+La validación incluye perfiles explícitos con varias versiones, runtime administrado sin consultar candidatos locales, ruta manual compatible, búsqueda acotada de runtimes oficiales, argumentos con espacios, límites de memoria y fallo de JVM. Se ejecutaron también una prueba con el Java 25 ya guardado en Ícaro y la consulta real del perfil Prism de Minecraft 1.17.1, sin descargar nuevos runtimes ni usar cuentas.
+
+La integración de requisitos de loaders depende de sus instaladores, que siguen pendientes. Faltan el recorrido nativo en Arch y el lanzamiento completo del juego con los nuevos modos.
+
+## Almacenamiento compartido de Vanilla (13-10-2026)
+
+El instalador usa assets compartidos, bibliotecas por SHA-1/ruta Maven y metadatos/clientes bajo `meta/minecraft`. Mantiene los nativos extraídos y el marcador de instalación por instancia. Migra copias antiguas verificadas al preparar, publica el marcador de esquema 2 y después retira los duplicados verificados. El bloqueo del SO serializa las preparaciones del mismo almacén y admite cancelación; no debe eliminarse `meta/minecraft/instalacion.lock` para desbloquearlo.
+
+Validación: 114 pruebas del núcleo aprobadas (7 omitidas) y 35 del launcher aprobadas (2 omitidas; ejecución secuencial). Los casos nuevos cubren dos instancias sin red, reparación de corrupción del mismo tamaño, cambio de nombre, eliminación de una instancia sin perder el almacén común, cancelación de migración conservando el perfil anterior, espera cancelable y argumentos de lanzamiento con rutas compartidas/privadas.
+
+La instancia local de prueba Vanilla 26.3 se migró y volvió a preparar: 5.215 archivos verificados y 65 entradas de classpath; la segunda preparación no anunció descargas. Se comprobó esquema 2 y ausencia de las carpetas antiguas `assets`, `libraries` y `versions` dentro de la instancia. La validación del menú del juego con este nuevo almacenamiento y la ejecución en Linux siguen pendientes.
+
+Para preparar una instancia existente sin abrir Minecraft ni acceder a cuentas:
+
+```powershell
+cargo run -j 1 -p icaro-core --example preparar_minecraft -- "$env:APPDATA\Icaro" <id-de-instancia>
+```
+
+El comando usa el mismo instalador que la interfaz: puede descargar archivos faltantes, verificar, reparar y migrar copias antiguas. Requiere una instancia ya existente y no modifica sus preferencias Java/memoria.
+
+## Reorganización funcional (13-10-2026)
+
+La configuración por instancia usa `instance.json` de esquema 2; migra CFG conservando sus claves y los campos desconocidos del JSON. Java, descarga, memoria, Metaspace y argumentos tienen herencia global independiente. Los ajustes antiguos mantienen valores propios. Las exportaciones Ícaro conservan ajustes portables y marcan las rutas manuales de Java para seleccionarlas de nuevo en destino.
+
+Instancias, mods, packs, archivos y capturas usan la papelera del sistema. Deshacer funciona para instancias, mods y capturas durante la sesión; la recuperación posterior permanece disponible en la papelera del sistema. Windows usa `IFileOperation` con `FOFX_RECYCLEONDELETE` y fallo temprano; no se solicita borrado permanente. Las rutas demasiado largas se rechazan antes de operar. Linux usa la implementación Freedesktop de `trash`; falta validación nativa en ese sistema.
+
+Almacenamiento obtiene tamaños reales, limpia exclusivamente `cache/`, permite trasladar papeleras internas y recuperar retiradas de mods interrumpidas mediante su diario. La recuperación comprueba hashes y conserva las colisiones. El registro del launcher rota a 1 MiB con tres archivos anteriores. Los respaldos de transacciones completadas se limpian; los respaldos de mundos y datos personales no son caché.
+
+Se ejecutó `reorganizar_datos` sobre el directorio local de Ícaro: se trasladaron 15 elementos previamente eliminados a la papelera del sistema y se retiró la carpeta interna vacía. En ese momento no había instancias activas. Assets, bibliotecas y Java permanecen en el almacén común.
+
+```powershell
+cargo run -j 1 -p icaro-core --example reorganizar_datos -- "$env:APPDATA\Icaro"
+```
+
+Este comando traslada papeleras antiguas, migra ajustes y recupera operaciones interrumpidas. La interfaz ofrece las mismas acciones de mantenimiento en Almacenamiento. No necesita iniciar sesión ni abrir el juego.
+
+Validación final: 117 pruebas del núcleo, 55 de la biblioteca de interfaz y 35 del launcher aprobadas, más la prueba nativa explícita de papelera: 208 pruebas únicas aprobadas. El núcleo conserva 8 pruebas omitidas por defecto y el launcher 2. Las comprobaciones específicas de exportación portable y retirada de packs también pasaron tras sus últimos ajustes. Compilación del launcher y `git diff --check` correctos. Se revisó Almacenamiento en Tinta y Piedra y Java global en Piedra mediante capturas de fixtures. La llegada al menú con esta estructura y Linux siguen pendientes.
+
+
 ## Licencia
 
 GPL-3.0-only. El texto completo está en [LICENSE](../LICENSE).

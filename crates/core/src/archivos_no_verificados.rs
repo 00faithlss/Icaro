@@ -619,12 +619,7 @@ mod tests {
         assert_eq!(restored.sha512, registro.sha512);
         assert_eq!(fs::read(dir.join("local.jar")).unwrap(), b"modified");
         let again = retirar(&store, &id, &reviewed).unwrap();
-        let game = store.juego(&id).unwrap();
-        let backup = fs::read_dir(game.join(".icaro-mods-trash"))
-            .unwrap()
-            .map(|e| e.unwrap().path().join("local.jar"))
-            .find(|p| p.exists())
-            .unwrap();
+        let backup = again.0.carpeta_recuperada().unwrap().join("local.jar");
         fs::write(&backup, b"tampered backup").unwrap();
         assert!(restaurar(&store, &id, &again).is_err());
         assert!(!dir.join("local.jar").exists());

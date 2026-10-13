@@ -4,7 +4,7 @@ Actualizado el **12-10-2026**. Este documento describe el trabajo que falta; no 
 
 ## 1. Instalación y ejecución de loaders oficiales
 
-**Base de almacenamiento pendiente:** implementar la [organización de datos compartidos](organizacion-datos.md) para Vanilla y loaders, migrar las instalaciones existentes y unificar configuración, temporales y eliminaciones. Esta estructura no se obtiene automáticamente al incorporar un instalador oficial.
+**Base de almacenamiento:** Vanilla ya comparte assets, bibliotecas y metadatos, y migra las copias verificadas al preparar una instancia. La configuración por instancia, papelera del sistema, medición de almacenamiento y mantenimiento están conectados. Sigue pendiente incorporar los loaders a estas rutas; ver [organización de datos](organizacion-datos.md).
 
 **Estado actual:** el asistente y Cambiar versión consultan los catálogos oficiales de Fabric, Quilt, Forge y NeoForge y guardan la versión elegida. La instalación y el lanzamiento completos funcionan para Vanilla. Elegir un loader todavía no instala ni ejecuta ese loader.
 
@@ -36,6 +36,7 @@ Actualizado el **12-10-2026**. Este documento describe el trabajo que falta; no 
 ## 3. Editor, descargas y recuperación
 
 - [ ] Completar las opciones pendientes de General y Java y su persistencia.
+- [x] Conectar selección global/por instancia, herencia, modos automáticos como Prism, detección de runtimes oficiales, listas compatibles por perfil y prueba con memoria/argumentos. Ver la [política de Java](organizacion-datos.md#java-según-el-perfil-y-modo-de-gestión); falta validar el recorrido nativo en Linux y los requisitos de loaders.
 - [ ] Gestionar los mundos con acciones reales y conectar sus respaldos y recuperación a los componentes del diseño.
 - [ ] Ordenar la prioridad de resourcepacks por arrastre y ampliar el soporte de configuración de shaders a otros motores.
 - [ ] Completar la recuperación de archivos y capturas desde sus papeleras y la revisión de integridad.

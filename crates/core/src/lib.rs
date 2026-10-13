@@ -19,3 +19,6 @@ pub mod lanzamiento;
 pub mod versiones_instancia;
 pub mod actualizacion;
 pub mod archivos_no_verificados;
+
+pub mod papelera;
+pub mod almacenamiento;

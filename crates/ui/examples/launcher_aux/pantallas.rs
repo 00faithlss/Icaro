@@ -325,8 +325,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 return Task::none();
             }
             Accion::LimpiarCache => {
-                app.avisar("La limpieza de caché todavía está en preparación.".into());
-                return Task::none();
+                return crate::almacenamiento_real::actualizar(app,crate::almacenamiento_real::Accion::Limpiar);
             }
             Accion::CopiarCodigo => return Task::none(),
             _ => {}
@@ -1726,7 +1725,10 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
         2 => {
             col = col
                 .push(fila_ajuste(p, "Java de cada instancia", "La versión y la memoria se eligen por instancia, en la pestaña Java de su editor.", Space::with_width(0).into()))
-                .push(fila_ajuste(p, "Gestión automática", "Icaro Launcher obtiene el Java que pide la versión de Minecraft y lo guarda para reutilizarlo.", componentes::interruptor(p, true, Mensaje::Nada)))
+                .push(fila_ajuste(p, "Descarga automática de Java", "Activada: usa el runtime administrado del perfil y lo descarga si falta. Desactivada: detecta Java compatible disponible.", componentes::interruptor(p, app.java_global.descarga, Mensaje::Java(crate::java_real::Accion::DescargaGlobal(!app.java_global.descarga)))))
+                .push(fila_ajuste(p, "Java global", "Ruta vacía: Automático. Las instancias pueden heredar esta selección.", componentes::campo(p, "Automático", &icaro_ui::editor::ruta_java_visible(app.java_global.ruta.as_deref().unwrap_or("")), |v| Mensaje::Java(crate::java_real::Accion::RutaGlobal(v)))))
+                .push(row![componentes::boton(p, "Agregar ruta", componentes::Variante::Fantasma, Some(Mensaje::Java(crate::java_real::Accion::Agregar(true)))), componentes::boton(p, "Detectar instalaciones", componentes::Variante::Secundario, Some(Mensaje::Java(crate::java_real::Accion::Detectar)))].spacing(espacio::S2))
+                .push(text(app.java_estado.clone()).size(texto::BODY_SM.0).color(p.text_muted))
                 .push(text("Instalaciones detectadas").font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text));
             let installations = if app.servicios.demo { vec![("21.0.5".into(), "Temurin · Icaro Launcher".into(), "…/icaro/java/21".into()), ("17.0.13".into(), "Temurin · Icaro Launcher".into(), "…/icaro/java/17".into())] } else { crate::juego_real::instalaciones_java(app).into_iter().map(|i| (i.version,i.proveedor,i.ruta)).collect() };
             for (v, prov, ruta) in installations {
@@ -1735,7 +1737,7 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
                         row![
                             text(format!("Java {v}")).font(fuentes::MONO).size(texto::MONO.0).color(p.text).width(140),
                             text(prov).size(texto::BODY.0).color(p.text_muted).width(200),
-                            text(ruta).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
+                            text(icaro_ui::editor::ruta_java_visible(&ruta)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted),
                         ]
                         .spacing(espacio::S4)
                         .align_y(Alignment::Center),
@@ -1745,25 +1747,28 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
                     .style(icaro_ui::estilo::tarjeta(p, false)),
                 );
             }
+            for (id,label,value) in [(0,"Memoria mínima global (MB)",app.java_global.memoria_min.to_string()),(1,"Memoria máxima global (MB)",app.java_global.memoria_max.to_string()),(2,"Metaspace global (MB)",app.java_global.metaspace.to_string()),(3,"Argumentos JVM globales",app.java_global.argumentos.clone())] {
+                col=col.push(fila_ajuste(p,label,"Se aplican a las instancias que heredan memoria y argumentos.",componentes::campo(p,"",&value,move|v|Mensaje::Java(crate::java_real::Accion::MemoriaGlobal(id,v)))));
+            }
         }
         3 => {
-            col = col.push(text("Uso de disco: 4,5 GB").font(fuentes::MONO).size(texto::MONO.0).color(p.text));
-            let cache = if a.cache_limpia { 0.0 } else { 0.08 };
-            let cache_txt = if a.cache_limpia { "0 MB" } else { "380 MB" };
-            for (n, gb, frac) in [("Instancias", "2,4 GB", 0.53f32), ("Versiones de Minecraft", "1,1 GB", 0.24), ("Java", "540 MB", 0.12), ("Caché de mods", cache_txt, cache), ("Capturas", "96 MB", 0.02)] {
-                col = col.push(
-                    row![
-                        text(n).size(texto::BODY.0).color(p.text).width(220),
-                        container(componentes::progreso(p, frac)).width(Length::Fill),
-                        text(gb).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(90).align_x(iced::alignment::Horizontal::Right),
-                    ]
-                    .spacing(espacio::S4)
-                    .align_y(Alignment::Center),
-                );
-            }
-            col = col.push(Space::with_height(espacio::S3)).push(row![
-                componentes::boton(p, "Limpiar caché", Variante::Secundario, (!a.cache_limpia).then(|| m(Accion::LimpiarCache))),
-                componentes::boton(p, "Abrir carpeta de datos", Variante::Fantasma, Some(m(Accion::AbrirCarpetaDatos))),
+            let storage=&app.almacenamiento;
+            if let Some(report)=&storage.informe {
+                col=col.push(text(format!("Uso de disco: {}",crate::almacenamiento_real::tamano(report.total))).font(fuentes::MONO).size(texto::MONO.0).color(p.text));
+                for(n,bytes)in &report.categorias {
+                    col=col.push(row![text(n.clone()).size(texto::BODY.0).color(p.text).width(220),container(componentes::progreso(p,if report.total==0{0.0}else{*bytes as f32/report.total as f32})).width(Length::Fill),text(crate::almacenamiento_real::tamano(*bytes)).font(fuentes::MONO).size(texto::MONO_SM.0).color(p.text_muted).width(90)].spacing(espacio::S4).align_y(Alignment::Center));
+                }
+                if !report.papeleras.is_empty(){
+                    col=col.push(text(format!("{} papeleras internas antiguas. Puedes trasladar su contenido a la papelera del sistema para recuperarlo desde allí.",report.papeleras.len())).size(texto::BODY.0).color(p.text_muted));
+                    col=col.push(componentes::boton(p,"Trasladar papeleras antiguas",Variante::Secundario,(!storage.ocupado).then_some(Mensaje::Almacenamiento(crate::almacenamiento_real::Accion::Trasladar))));
+                }
+            }else{col=col.push(text(if storage.ocupado{"Calculando uso de disco…"}else{"Actualiza para calcular el uso de disco."}).size(texto::BODY.0).color(p.text_muted));}
+            if let Some(error)=&storage.error{col=col.push(text(error.clone()).size(texto::BODY.0).color(p.text_muted));}
+            col=col.push(Space::with_height(espacio::S3)).push(row![
+                componentes::boton(p,"Recuperar operaciones",Variante::Secundario,(!storage.ocupado).then_some(Mensaje::Almacenamiento(crate::almacenamiento_real::Accion::Recuperar))),
+                componentes::boton(p,"Actualizar",Variante::Secundario,(!storage.ocupado).then_some(Mensaje::Almacenamiento(crate::almacenamiento_real::Accion::Medir))),
+                componentes::boton(p,"Limpiar caché",Variante::Secundario,(!storage.ocupado).then_some(m(Accion::LimpiarCache))),
+                componentes::boton(p,"Abrir carpeta de datos",Variante::Fantasma,Some(m(Accion::AbrirCarpetaDatos))),
             ].spacing(espacio::S3));
         }
         4 => {

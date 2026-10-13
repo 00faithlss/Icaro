@@ -283,14 +283,12 @@ impl Explorador {
         }
     }
 
-    /// Mueve el elemento a la papelera interna de la instancia.
+    /// Mueve el elemento a la papelera del sistema.
     pub fn a_la_papelera(&mut self) {
         let Some(ruta) = self.ruta_elegida() else {
             return;
         };
-        let papelera = self.raiz.join(".papelera");
-        let destino = nombre_libre(&papelera.join(ruta.file_name().unwrap_or_default()));
-        let resultado = fs::create_dir_all(&papelera).and_then(|_| fs::rename(&ruta, &destino));
+        let resultado = icaro_core::papelera::enviar(&ruta).map(|_| ());
         match resultado {
             Ok(()) => {
                 self.elegido = None;

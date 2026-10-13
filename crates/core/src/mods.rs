@@ -20,6 +20,8 @@ const MAX_FILE: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
+    #[error("{0}")]
+    Papelera(String),
     #[error(transparent)]
     Red(#[from] crate::modrinth::Error),
     #[error("No se pudieron leer o guardar los mods. Los archivos actuales se conservan.")]
@@ -468,6 +470,9 @@ pub fn alternar_recurso(store: &Almacen, id: &str, filename: &str) -> Result<(),
         }
         return Err(Error::Disco);
     }
+    if backup.exists() {
+        let _ = fs::remove_file(backup);
+    }
     Ok(())
 }
 
@@ -637,6 +642,9 @@ pub async fn instalar_packs(
             }
             return Err(e);
         }
+        if backup.exists() {
+            let _ = borrar_preparacion(&game, &backup);
+        }
         Ok(installed)
     }
     .await;
@@ -798,6 +806,16 @@ pub fn quitar_packs(
         }
         regular(&dir.join(name), false)?;
     }
+    let config_path = game.join(if tipo == TipoPack::Recursos {
+        "options.txt"
+    } else {
+        "config/iris.properties"
+    });
+    let previous_config = if config_path.exists() {
+        Some(leer_config(&config_path)?)
+    } else {
+        None
+    };
     let mut nonce = [0; 16];
     getrandom::fill(&mut nonce).map_err(|_| Error::Disco)?;
     let stage = game.join(format!(
@@ -854,6 +872,18 @@ pub fn quitar_packs(
             let _ = fs::rename(&dir, &stage);
             let _ = fs::rename(&backup, &dir);
             return Err(e);
+        }
+        if let Err(error) = crate::papelera::enviar(&backup) {
+            if backup.exists() {
+                let _ = fs::rename(&dir, &stage);
+                let _ = fs::rename(&backup, &dir);
+                if let Some(text) = &previous_config {
+                    let _ = guardar_archivo(&config_path, text.as_bytes());
+                } else if config_path.exists() {
+                    let _ = fs::remove_file(&config_path);
+                }
+            }
+            return Err(Error::Papelera(error));
         }
         Ok(())
     })();
@@ -1294,6 +1324,9 @@ pub async fn instalar(
             }
             return Err(Error::Disco);
         }
+        if backup.exists() {
+            let _ = borrar_preparacion(&game, &backup);
+        }
         Ok(installed)
     }
     .await;
@@ -1360,6 +1393,7 @@ pub fn alternar(store: &Almacen, id: &str, filename: &str) -> Result<(), Error> 
 
 /// Ticket de una retirada reversible. La ruta no se acepta desde la interfaz.
 pub struct Retirados {
+    papelera: crate::papelera::Ticket,
     instancia: String,
     carpeta: PathBuf,
     mods: Vec<Instalado>,
@@ -1420,6 +1454,7 @@ pub(crate) fn retirar_con_hash(
     let game = store.juego(id).map_err(|_| Error::Disco)?;
     let _lock = guardia(&game)?;
     let manifest = registros(&game)?;
+    let previous_manifest = manifest.clone();
     let selected: Vec<_> = inventory
         .into_iter()
         .filter(|m| files.contains(&m.archivo))
@@ -1435,16 +1470,28 @@ pub(crate) fn retirar_con_hash(
             }
         }
     }
-    let root = game.join(".icaro-mods-trash");
+    let root = store
+        .carpeta(id)
+        .map_err(|_| Error::Disco)?
+        .join(".icaro-transactions");
     if !root.exists() {
         fs::create_dir(&root).map_err(|_| Error::Disco)?;
     }
     regular(&root, true)?;
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(|_| Error::Datos)?;
-    let trash = root.join(hash(&random));
+    let trash = root.join(&hash(&random)[..16]);
     fs::create_dir(&trash).map_err(|_| Error::Disco)?;
     let dir = game.join("mods");
+    let exact: BTreeMap<String, String> = selected
+        .iter()
+        .map(|m| Ok((m.archivo.clone(), hash_archivo(&ruta_mod(&dir, m))?)))
+        .collect::<Result<_, Error>>()?;
+    crate::almacenamiento::escribir_json(
+        &trash.join("recuperacion.json"),
+        &serde_json::json!({"schema":1,"mods":selected,"hashes":exact}),
+    )
+    .map_err(|_| Error::Disco)?;
     let mut moved: Vec<(PathBuf, PathBuf)> = vec![];
     let result = (|| {
         for item in &selected {
@@ -1466,26 +1513,51 @@ pub(crate) fn retirar_con_hash(
         }
         return Err(e);
     }
+    let papelera = match crate::papelera::enviar(&trash) {
+        Ok(ticket) => ticket,
+        Err(error) => {
+            // Si el sistema no retiró la carpeta, revierte la transacción.
+            if trash.exists() {
+                for (src, dst) in moved.into_iter().rev() {
+                    let _ = fs::rename(dst, src);
+                }
+                let _ = guardar_registros(&game, &previous_manifest);
+            }
+            return Err(Error::Papelera(error));
+        }
+    };
     Ok(Retirados {
+        papelera,
         instancia: id.into(),
         carpeta: trash,
         mods: selected,
-        hashes: hashes.clone(),
+        hashes: exact,
     })
 }
 
+impl Retirados {
+    pub(crate) fn carpeta_recuperada(&self) -> Result<PathBuf, Error> {
+        if !self.carpeta.exists() {
+            crate::papelera::restaurar(&self.papelera).map_err(|_| Error::Disco)?;
+        }
+        regular(&self.carpeta, true)?;
+        Ok(self.carpeta.clone())
+    }
+}
 pub fn restaurar(store: &Almacen, id: &str, ticket: &Retirados) -> Result<(), Error> {
     if ticket.instancia != id {
         return Err(Error::Datos);
     }
     let game = store.juego(id).map_err(|_| Error::Disco)?;
     let _lock = guardia(&game)?;
-    regular(&ticket.carpeta, true)?;
+    ticket.carpeta_recuperada()?;
     let parent = ticket.carpeta.parent().ok_or(Error::Datos)?;
     regular(parent, true)?;
     if parent.canonicalize().map_err(|_| Error::Disco)?
-        != game
-            .join(".icaro-mods-trash")
+        != store
+            .carpeta(id)
+            .map_err(|_| Error::Disco)?
+            .join(".icaro-transactions")
             .canonicalize()
             .map_err(|_| Error::Disco)?
     {
@@ -1531,7 +1603,89 @@ pub fn restaurar(store: &Almacen, id: &str, ticket: &Retirados) -> Result<(), Er
         }
         return Err(e);
     }
+    let _ = fs::remove_file(ticket.carpeta.join("recuperacion.json"));
+    let _ = fs::remove_dir(&ticket.carpeta);
+    let _ = fs::remove_dir(parent);
     Ok(())
+}
+
+/// Recuperación explícita de retiradas interrumpidas; nunca pisa archivos nuevos.
+pub fn recuperar_operaciones(store: &Almacen, id: &str) -> Result<usize, Error> {
+    let game = store.juego(id).map_err(|_| Error::Disco)?;
+    let _lock = guardia(&game)?;
+    recuperar(&game)?;
+    recuperar_packs(&game, TipoPack::Recursos)?;
+    recuperar_packs(&game, TipoPack::Shaders)?;
+    let root = store
+        .carpeta(id)
+        .map_err(|_| Error::Disco)?
+        .join(".icaro-transactions");
+    if !root.exists() {
+        return Ok(0);
+    }
+    regular(&root, true)?;
+    let mut count = 0;
+    for entry in fs::read_dir(&root).map_err(|_| Error::Disco)? {
+        let stage = entry.map_err(|_| Error::Disco)?.path();
+        regular(&stage, true)?;
+        let journal = stage.join("recuperacion.json");
+        if !journal.exists() {
+            continue;
+        }
+        if regular(&journal, false)?.len() > 4 * 1024 * 1024 {
+            return Err(Error::Datos);
+        }
+        #[derive(Deserialize)]
+        struct Recuperacion {
+            schema: u32,
+            mods: Vec<Instalado>,
+            hashes: BTreeMap<String, String>,
+        }
+        let data: Recuperacion =
+            serde_json::from_slice(&fs::read(&journal).map_err(|_| Error::Disco)?)
+                .map_err(|_| Error::Datos)?;
+        if data.schema != 1 || data.mods.len() > 4096 {
+            return Err(Error::Datos);
+        }
+        let dir = game.join("mods");
+        regular(&dir, true)?;
+        let mut records = registros(&game)?;
+        for item in &data.mods {
+            if !nombre_valido(&item.archivo) {
+                return Err(Error::Datos);
+            }
+            let src = ruta_mod(&stage, item);
+            let dst = ruta_mod(&dir, item);
+            let candidate = if src.exists() {
+                if dst.exists() {
+                    return Err(Error::Archivo(item.archivo.clone()));
+                }
+                src
+            } else {
+                dst
+            };
+            regular(&candidate, false)?;
+            if data.hashes.get(&item.archivo) != Some(&hash_archivo(&candidate)?) {
+                return Err(Error::Archivo(item.archivo.clone()));
+            }
+        }
+        // Si se interrumpe otra vez, el diario permite reanudar los mismos movimientos.
+        for item in &data.mods {
+            let src = ruta_mod(&stage, item);
+            if src.exists() {
+                fs::rename(src, ruta_mod(&dir, item)).map_err(|_| Error::Disco)?;
+            }
+            if !item.project_id.is_empty() && !records.iter().any(|m| m.archivo == item.archivo) {
+                records.push(item.clone());
+            }
+        }
+        guardar_registros(&game, &records)?;
+        fs::remove_file(journal).map_err(|_| Error::Disco)?;
+        fs::remove_dir(stage).map_err(|_| Error::Disco)?;
+        count += 1;
+    }
+    let _ = fs::remove_dir(root);
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -1910,6 +2064,41 @@ mod tests {
             Err(Error::Datos)
         ));
     }
+    #[test]
+    fn recuperacion_interrumpida_conserva_colisiones_y_reanuda() {
+        let p = Prueba::nueva();
+        let (store, i) = p.instancia();
+        let game = store.juego(&i.id).unwrap();
+        let dir = game.join("mods");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("manual.jar"), b"original").unwrap();
+        let list = inventario(&store, &i.id).unwrap();
+        let item = list
+            .iter()
+            .find(|m| m.archivo == "manual.jar")
+            .unwrap()
+            .clone();
+        let hash = hash_archivo(&dir.join("manual.jar")).unwrap();
+        let stage = store
+            .carpeta(&i.id)
+            .unwrap()
+            .join(".icaro-transactions/interrumpida");
+        fs::create_dir_all(&stage).unwrap();
+        fs::rename(dir.join("manual.jar"), stage.join("manual.jar")).unwrap();
+        crate::almacenamiento::escribir_json(
+            &stage.join("recuperacion.json"),
+            &serde_json::json!({"schema":1,"mods":[item],"hashes":{"manual.jar":hash}}),
+        )
+        .unwrap();
+        fs::write(dir.join("manual.jar"), b"nuevo").unwrap();
+        assert!(recuperar_operaciones(&store, &i.id).is_err());
+        assert_eq!(fs::read(stage.join("manual.jar")).unwrap(), b"original");
+        fs::remove_file(dir.join("manual.jar")).unwrap();
+        assert_eq!(recuperar_operaciones(&store, &i.id).unwrap(), 1);
+        assert_eq!(fs::read(dir.join("manual.jar")).unwrap(), b"original");
+        assert!(!stage.exists());
+    }
+
     #[tokio::test]
     async fn retirar_y_deshacer_preserva_mods_manuales_y_no_pisa_archivos_nuevos() {
         let p = Prueba::nueva();

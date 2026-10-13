@@ -2,8 +2,8 @@
 // Copyright (C) 2026 00faithlss
 
 //! Instalación Vanilla desde los manifiestos oficiales, con caché verificada.
-//! El juego del usuario nunca se sustituye: binarios, índices y nativos viven
-//! exclusivamente dentro de `.icaro-minecraft`, junto a `instance.json`.
+//! Assets, bibliotecas y metadatos se comparten en la raíz de datos.
+//! El perfil y los nativos extraídos permanecen dentro de cada instancia.
 
 use crate::instancias::{Almacen, Instancia};
 use serde::{Deserialize, Serialize};
@@ -33,8 +33,22 @@ pub struct Instalado {
     pub asset_index: String,
     pub java_major: u32,
     pub java_component: String,
+    #[serde(default)]
+    pub java_perfil: Option<crate::java::Perfil>,
     pub game_arguments: Vec<String>,
     pub jvm_arguments: Vec<String>,
+}
+
+impl Instalado {
+    pub fn perfil_java(&self) -> crate::java::Perfil {
+        self.java_perfil
+            .clone()
+            .unwrap_or_else(|| crate::java::Perfil {
+                majors: vec![self.java_major],
+                component: self.java_component.clone(),
+                prism: false,
+            })
+    }
 }
 
 /// Los contadores representan archivos verificados, incluidos los reutilizados.
@@ -599,6 +613,83 @@ fn escribir_json<T: Serialize>(root: &Path, path: &Path, value: &T) -> Result<()
     fs::rename(&temporary.0, path).map_err(|_| Error::Disco)
 }
 static INSTALANDO: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+// El bloqueo del SO también coordina dos procesos del launcher. El archivo
+// permanece: borrarlo permitiría bloquear dos inodos distintos en Linux.
+async fn bloqueo_compartido(
+    root: &Path,
+    cancel: &CancellationToken,
+    progress: &impl Fn(Progreso),
+) -> Result<File, Error> {
+    let path = root.join("meta/minecraft/instalacion.lock");
+    segura(root, &path, true)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|_| Error::Disco)?;
+    let mut announced = false;
+    loop {
+        cancelado(cancel)?;
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if !announced {
+                    progress(Progreso {
+                        etapa: "Esperando otra preparación de Minecraft".into(),
+                        completados: 0,
+                        total: 0,
+                    });
+                    announced = true;
+                }
+                tokio::select! {
+                    _ = cancel.cancelled() => return Err(Error::Cancelada),
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
+            Err(_) => return Err(Error::Disco),
+        }
+    }
+}
+
+/// Reutiliza únicamente bytes que coinciden con el manifiesto oficial actual.
+/// La copia antigua se retira después de publicar el perfil completo.
+fn reutilizar(
+    root: &Path,
+    private: &Path,
+    old: &Path,
+    destination: &Path,
+    expected: &Descarga,
+    cancel: &CancellationToken,
+    migrated: &mut Vec<(PathBuf, PathBuf, Descarga)>,
+) -> Result<(), Error> {
+    validar_descarga(expected)?;
+    cancelado(cancel)?;
+    if !verificado(private, old, expected, cancel)? {
+        return Ok(());
+    }
+    if !verificado(root, destination, expected, cancel)? {
+        segura(root, destination, true)?;
+        let (temporary, mut output) = Temporal::crear(
+            destination
+                .parent()
+                .ok_or(Error::Datos)?
+                .join(format!(".icaro-{}.tmp", random()?)),
+        )?;
+        let mut input = File::open(old).map_err(|_| Error::Disco)?;
+        std::io::copy(&mut input, &mut output).map_err(|_| Error::Disco)?;
+        output.sync_all().map_err(|_| Error::Disco)?;
+        drop(output);
+        if !verificado(root, &temporary.0, expected, cancel)? {
+            return Err(Error::Integridad);
+        }
+        segura(root, destination, false)?;
+        fs::rename(&temporary.0, destination).map_err(|_| Error::Disco)?;
+    }
+    migrated.push((old.to_owned(), destination.to_owned(), expected.clone()));
+    Ok(())
+}
 struct Guardia(PathBuf);
 impl Guardia {
     fn adquirir(path: &Path) -> Result<Self, Error> {
@@ -662,18 +753,21 @@ pub async fn instalar(
         .canonicalize()
         .map_err(|_| Error::Disco)?;
     let _lock = Guardia::adquirir(&folder)?;
-    let root = folder.join(".icaro-minecraft");
-    segura(&folder, &root, false)?;
-    if !root.exists() {
-        fs::create_dir(&root).map_err(|_| Error::Disco)?
+    let private = folder.join(".icaro-minecraft");
+    let root = store.datos().map_err(|_| Error::Disco)?;
+    let _shared_lock = bloqueo_compartido(&root, &cancel, &progress).await?;
+    segura(&root, &private, false)?;
+    if !private.exists() {
+        fs::create_dir(&private).map_err(|_| Error::Disco)?
     }
-    if !fs::symlink_metadata(&root)
+    if !fs::symlink_metadata(&private)
         .map_err(|_| Error::Disco)?
         .is_dir()
     {
         return Err(Error::Datos);
     }
-    let marker_path = root.join(MARKER);
+    let marker_path = private.join(MARKER);
+    let mut migrated = Vec::new();
     progress(Progreso {
         etapa: "Comprobando archivos de Minecraft".into(),
         completados: 0,
@@ -689,7 +783,14 @@ pub async fn instalar(
         .map_err(|_| Error::Red)?;
 
     // La copia del catálogo solo identifica metadatos cuyo SHA-1 se vuelve a comprobar.
-    let manifest_path = root.join("catalogo.json");
+    let manifest_path = root.join("meta/minecraft/catalogo.json");
+    if !manifest_path.exists() {
+        if let Ok(manifest) =
+            leer_json::<crate::manifest::VersionManifest>(&private, &private.join("catalogo.json"))
+        {
+            escribir_json(&root, &manifest_path, &manifest)?;
+        }
+    }
     let cached: Option<crate::manifest::VersionManifest> = leer_json(&root, &manifest_path).ok();
     let cached_entry = cached
         .as_ref()
@@ -730,9 +831,34 @@ pub async fn instalar(
         return Err(Error::Datos);
     }
     let version_path = root
+        .join("meta/minecraft/versions")
+        .join(&instance.minecraft)
+        .join(&entry.sha1)
+        .join("version.json");
+    let old_version = private
         .join("versions")
         .join(&instance.minecraft)
         .join("version.json");
+    if let Ok(meta) = fs::symlink_metadata(&old_version) {
+        if meta.is_file() && meta.len() <= METADATA_LIMIT {
+            let expected = Descarga {
+                url: entry.url.clone(),
+                sha1: entry.sha1.clone(),
+                size: meta.len(),
+                path: String::new(),
+                id: String::new(),
+            };
+            reutilizar(
+                &root,
+                &private,
+                &old_version,
+                &version_path,
+                &expected,
+                &cancel,
+                &mut migrated,
+            )?;
+        }
+    }
     let mut version_file = None;
     if let Ok(meta) = fs::symlink_metadata(&version_path) {
         segura(&root, &version_path, false)?;
@@ -801,9 +927,8 @@ pub async fn instalar(
     }
     let mut files = vec![version_file];
     let assets = root.join("assets");
-    let index_path = assets
-        .join("indexes")
-        .join(format!("{}.json", version.asset_index.id));
+    let asset_id = format!("{}-{}", version.asset_index.id, version.asset_index.sha1);
+    let index_path = assets.join("indexes").join(format!("{asset_id}.json"));
     let index_file = nuevo_archivo(
         &version.asset_index,
         index_path.clone(),
@@ -814,6 +939,17 @@ pub async fn instalar(
         completados: 0,
         total: 0,
     });
+    reutilizar(
+        &root,
+        &private,
+        &private
+            .join("assets/indexes")
+            .join(format!("{}.json", version.asset_index.id)),
+        &index_path,
+        &version.asset_index,
+        &cancel,
+        &mut migrated,
+    )?;
     descargar(&client, &root, &index_file, &cancel).await?;
     files.push(index_file);
     let index: Indice = leer_json(&root, &index_path)?;
@@ -850,7 +986,9 @@ pub async fn instalar(
             .downloads
             .get("client")
             .ok_or_else(|| Error::NoSoportada("la versión no ofrece cliente".into()))?,
-        root.join("versions").join(&version.id).join("client.jar"),
+        root.join("meta/minecraft/clients")
+            .join(&version.downloads.get("client").ok_or(Error::Datos)?.sha1)
+            .join("client.jar"),
         "Descargando Minecraft",
     )?;
     let mut classpath = vec![];
@@ -861,7 +999,10 @@ pub async fn instalar(
             continue;
         }
         if let Some(artifact) = &library.downloads.artifact {
-            let path = root.join("libraries").join(relativa(&artifact.path)?);
+            let path = root
+                .join("libraries")
+                .join(&artifact.sha1)
+                .join(relativa(&artifact.path)?);
             files.push(nuevo_archivo(
                 artifact,
                 path.clone(),
@@ -876,7 +1017,10 @@ pub async fn instalar(
                 .classifiers
                 .get(&classifier)
                 .ok_or(Error::Datos)?;
-            let path = root.join("libraries").join(relativa(&download.path)?);
+            let path = root
+                .join("libraries")
+                .join(&download.sha1)
+                .join(relativa(&download.path)?);
             files.push(nuevo_archivo(
                 download,
                 path.clone(),
@@ -915,6 +1059,7 @@ pub async fn instalar(
         let log = root
             .join("assets")
             .join("log_configs")
+            .join(&logging.file.sha1)
             .join(relativa(&logging.file.id)?);
         jvm.push(logging.argument.replace("${path}", &log.to_string_lossy()));
         files.push(nuevo_archivo(
@@ -941,6 +1086,50 @@ pub async fn instalar(
             .is_none_or(|size| size > 16 * 1024 * 1024 * 1024)
     {
         return Err(Error::Datos);
+    }
+    for (position, file) in files.iter().enumerate() {
+        if position % 32 == 0 {
+            progress(Progreso {
+                etapa: "Reorganizando archivos verificados".into(),
+                completados: position as u64,
+                total: files.len() as u64,
+            });
+        }
+        let old = if file.ruta.starts_with(root.join("libraries")) {
+            Some(
+                private
+                    .join("libraries")
+                    .join(relativa(&file.descarga.path)?),
+            )
+        } else if let Ok(relative) = file.ruta.strip_prefix(assets.join("objects")) {
+            Some(private.join("assets/objects").join(relative))
+        } else if file.ruta.starts_with(assets.join("log_configs")) {
+            Some(
+                private
+                    .join("assets/log_configs")
+                    .join(relativa(&file.descarga.id)?),
+            )
+        } else if file.ruta.starts_with(root.join("meta/minecraft/clients")) {
+            Some(
+                private
+                    .join("versions")
+                    .join(&version.id)
+                    .join("client.jar"),
+            )
+        } else {
+            None
+        };
+        if let Some(old) = old {
+            reutilizar(
+                &root,
+                &private,
+                &old,
+                &file.ruta,
+                &file.descarga,
+                &cancel,
+                &mut migrated,
+            )?;
+        }
     }
     let total = files.len() as u64;
     let mut completed = 0u64;
@@ -1008,10 +1197,10 @@ pub async fn instalar(
     });
     let previous: Option<Marcador> = leer_json(&root, &marker_path).ok();
     let reuse = previous.filter(|marker| {
-        marker.schema == 1
+        marker.schema == 2
             && marker.sistema == format!("{os}-x86_64")
             && marker.instalado.version == version.id
-            && marker.instalado.natives.parent() == Some(root.as_path())
+            && marker.instalado.natives.parent() == Some(private.as_path())
             && segura(&root, &marker.instalado.natives, false).is_ok()
             && marker.instalado.natives.is_dir()
             && marker.archivos.len() == files.len()
@@ -1028,13 +1217,13 @@ pub async fn instalar(
     let (natives, natives_files) = if let Some(previous) = reuse {
         (previous.instalado.natives, previous.nativos)
     } else {
-        let natives = root.join(format!("natives-{}", random()?));
+        let natives = private.join(format!("natives-{}", random()?));
         fs::create_dir(&natives).map_err(|_| Error::Disco)?;
         match extraer_nativos(&native_archives, &natives, &cancel) {
             Ok(files) => (natives, files),
             Err(error) => {
                 // Solo se elimina la carpeta aleatoria creada en esta operación.
-                if natives.parent() == Some(root.as_path()) {
+                if natives.parent() == Some(private.as_path()) {
                     let _ = fs::remove_dir_all(&natives);
                 }
                 return Err(error);
@@ -1042,7 +1231,7 @@ pub async fn instalar(
         }
     };
     let game_assets = if index.virtual_ {
-        assets.join("virtual").join(&version.asset_index.id)
+        assets.join("virtual").join(&asset_id)
     } else {
         assets.clone()
     };
@@ -1063,18 +1252,39 @@ pub async fn instalar(
         major_version: 8,
         component: "jre-legacy".into(),
     });
-    if !matches!(java.major_version, 8 | 16 | 17 | 21 | 25) || !nombre_valido(&java.component) {
+    if (java.major_version == 0 || java.major_version > 255) || !nombre_valido(&java.component) {
         return Err(Error::NoSoportada(format!("Java {}", java.major_version)));
     }
+    let fallback = crate::java::Perfil {
+        majors: vec![java.major_version],
+        component: java.component.clone(),
+        prism: false,
+    };
+    let cached = leer_json::<Marcador>(&root, &marker_path)
+        .ok()
+        .filter(|m| m.instalado.version == version.id)
+        .and_then(|m| m.instalado.java_perfil)
+        .filter(|p| p.prism && p.validar().is_ok());
+    let java_perfil = if let Some(perfil) = cached {
+        perfil
+    } else {
+        crate::java::perfil_minecraft(&version.id, fallback, &cancel)
+            .await
+            .map_err(|e| match e {
+                crate::java::Error::Cancelada => Error::Cancelada,
+                _ => Error::Datos,
+            })?
+    };
     let installed = Instalado {
         version: version.id,
         main_class: version.main_class,
         classpath,
         natives,
         assets,
-        asset_index: version.asset_index.id,
-        java_major: java.major_version,
-        java_component: java.component,
+        asset_index: asset_id,
+        java_major: java_perfil.majors[0],
+        java_component: java_perfil.component.clone(),
+        java_perfil: Some(java_perfil),
         game_arguments,
         jvm_arguments: jvm,
     };
@@ -1083,13 +1293,29 @@ pub async fn instalar(
         &root,
         &marker_path,
         &Marcador {
-            schema: 1,
+            schema: 2,
             sistema: format!("{os}-x86_64"),
             instalado: installed.clone(),
             archivos: files,
             nativos: natives_files,
         },
     )?;
+    // Solo copias verificadas y ya publicadas en el almacén común.
+    for (old, destination, expected) in migrated {
+        if segura(&private, &old, false).is_ok()
+            && verificado(&root, &destination, &expected, &cancel).unwrap_or(false)
+            && verificado(&private, &old, &expected, &cancel).unwrap_or(false)
+        {
+            let _ = fs::remove_file(&old);
+            let mut parent = old.parent();
+            while let Some(dir) = parent.filter(|p| *p != private && p.starts_with(&private)) {
+                if fs::remove_dir(dir).is_err() {
+                    break;
+                }
+                parent = dir.parent();
+            }
+        }
+    }
     progress(Progreso {
         etapa: "Minecraft preparado".into(),
         completados: total,
@@ -1254,15 +1480,31 @@ pub fn listo(store: &Almacen, instance: &Instancia) -> bool {
         return false;
     };
     let Ok(os) = plataforma() else { return false };
-    if marker.schema != 1
+    if !matches!(marker.schema, 1 | 2)
         || marker.sistema != format!("{os}-x86_64")
         || marker.instalado.version != instance.minecraft
         || marker.archivos.is_empty()
     {
         return false;
     }
+    let Ok(shared) = store.datos() else {
+        return false;
+    };
     marker.archivos.iter().all(|file| {
-        segura(&root, &file.ruta, false).is_ok()
+        let allowed = if marker.schema == 1 {
+            file.ruta.starts_with(&root)
+        } else {
+            ["assets", "libraries", "meta/minecraft"]
+                .iter()
+                .any(|p| file.ruta.starts_with(shared.join(p)))
+        };
+        allowed
+            && segura(
+                if marker.schema == 1 { &root } else { &shared },
+                &file.ruta,
+                false,
+            )
+            .is_ok()
             && fs::symlink_metadata(&file.ruta).is_ok_and(|meta| {
                 meta.is_file() && !enlace(&meta) && meta.len() == file.descarga.size
             })
@@ -1293,6 +1535,171 @@ mod tests {
         let path = std::env::temp_dir().join(format!("icaro-minecraft-test-{}", random().unwrap()));
         fs::create_dir(&path).unwrap();
         path
+    }
+    fn fixture_legacy(store: &Almacen, instance: &Instancia) -> PathBuf {
+        use serde_json::json;
+        let root = store
+            .carpeta(&instance.id)
+            .unwrap()
+            .join(".icaro-minecraft");
+        fs::create_dir_all(&root).unwrap();
+        let download = |bytes: &[u8], path: &str| {
+            json!({
+                "url": "https://piston-data.mojang.com/fixture",
+                "sha1": crate::manifest::sha1_hex(bytes), "size": bytes.len(), "path": path
+            })
+        };
+        let resource = b"recurso compartido";
+        let hash = crate::manifest::sha1_hex(resource);
+        let index = serde_json::to_vec(
+            &json!({"objects": {"sound/test": {"hash": hash, "size": resource.len()}}}),
+        )
+        .unwrap();
+        let mut asset = download(&index, "");
+        asset["id"] = json!("fixture");
+        let version = serde_json::to_vec(&json!({
+            "id": instance.minecraft, "type": "release", "mainClass": "test.Main",
+            "downloads": {"client": download(b"client", "")},
+            "libraries": [{"name": "test:shared:1", "downloads": {"artifact": download(b"library", "test/shared/1/shared.jar")}}],
+            "assetIndex": asset, "javaVersion": {"majorVersion": 21, "component": "java-runtime-delta"},
+            "arguments": {"jvm": ["-cp", "${classpath}", "-DlibraryDirectory=${library_directory}"], "game": ["--assetsDir", "${assets_root}", "--assetIndex", "${assets_index_name}"]}
+        })).unwrap();
+        let manifest = json!({"latest":{"release": instance.minecraft, "snapshot": instance.minecraft}, "versions":[{
+            "id":instance.minecraft, "type":"release", "url":"https://piston-meta.mojang.com/fixture", "sha1":crate::manifest::sha1_hex(&version)
+        }]});
+        for (path, bytes) in [
+            (
+                root.join("catalogo.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            ),
+            (
+                root.join("versions")
+                    .join(&instance.minecraft)
+                    .join("version.json"),
+                version,
+            ),
+            (
+                root.join("versions")
+                    .join(&instance.minecraft)
+                    .join("client.jar"),
+                b"client".to_vec(),
+            ),
+            (
+                root.join("libraries/test/shared/1/shared.jar"),
+                b"library".to_vec(),
+            ),
+            (root.join("assets/indexes/fixture.json"), index),
+            (
+                root.join("assets/objects").join(&hash[..2]).join(hash),
+                resource.to_vec(),
+            ),
+        ] {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        // Evita consultas complementarias de Java: el fixture ya tiene perfil.
+        escribir_json(&root, &root.join(MARKER), &json!({
+            "schema": 1, "sistema": "fixture", "archivos": [], "nativos": [],
+            "instalado": {"version": instance.minecraft, "main_class":"test.Main", "classpath":[], "natives":root.join("old-natives"),
+            "assets":root.join("assets"), "asset_index":"fixture", "java_major":21, "java_component":"java-runtime-delta",
+            "java_perfil":{"majors":[21], "component":"java-runtime-delta", "prism":true}, "game_arguments":[], "jvm_arguments":[]}
+        })).unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn dos_instancias_migran_comparten_y_reparan_sin_red() {
+        let root = temp();
+        let store = Almacen::nuevo(root.join("instances"));
+        let mut a = store.crear("Primera", "fixture", 0).unwrap();
+        let b = store.crear("Segunda", "fixture", 0).unwrap();
+        let old_a = fixture_legacy(&store, &a);
+        let old_b = fixture_legacy(&store, &b);
+        let options = store.juego(&a.id).unwrap().join("options.txt");
+        fs::write(&options, "personal").unwrap();
+        let no_network = |p: Progreso| assert!(!p.etapa.starts_with("Descargando"), "{}", p.etapa);
+        let first = instalar(&store, &a, CancellationToken::new(), no_network)
+            .await
+            .unwrap();
+        assert!(listo(&store, &a));
+        assert!(!old_a.join("libraries").exists());
+        assert!(!old_a.join("assets").exists());
+        // La segunda copia válida repara incluso corrupción del mismo tamaño.
+        fs::write(&first.classpath[0], b"corrupt").unwrap();
+        let second = instalar(&store, &b, CancellationToken::new(), no_network)
+            .await
+            .unwrap();
+        assert_eq!(first.assets, second.assets);
+        assert_eq!(first.classpath, second.classpath);
+        assert_ne!(first.natives, second.natives);
+        assert_eq!(fs::read(&first.classpath[0]).unwrap(), b"library");
+        assert!(!old_b.join("libraries").exists());
+        assert!(listo(&store, &a) && listo(&store, &b));
+        // Un cambio de nombre solo reconstruye el estado privado; conserva el común.
+        a.nombre = "Renombrada".into();
+        store.guardar(&a).unwrap();
+        let renamed = instalar(&store, &a, CancellationToken::new(), no_network)
+            .await
+            .unwrap();
+        assert_eq!(first.classpath, renamed.classpath);
+        assert_eq!(
+            fs::read_to_string(store.juego(&a.id).unwrap().join("options.txt")).unwrap(),
+            "personal"
+        );
+        assert_eq!(leer(&store, &a).unwrap().assets, first.assets);
+        store.eliminar(&b.id).unwrap();
+        assert!(listo(&store, &a));
+        store.restaurar(&b.id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn migracion_cancelada_conserva_copias_y_perfil_anterior() {
+        let root = temp();
+        let store = Almacen::nuevo(root.join("instances"));
+        let instance = store.crear("Cancelada", "fixture", 0).unwrap();
+        let old = fixture_legacy(&store, &instance);
+        let before = fs::read(old.join(MARKER)).unwrap();
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        let result = instalar(&store, &instance, token, |p| {
+            if p.etapa == "Preparando componentes nativos" {
+                cancel.cancel();
+            }
+        })
+        .await;
+        assert!(matches!(result, Err(Error::Cancelada)));
+        assert_eq!(fs::read(old.join(MARKER)).unwrap(), before);
+        assert_eq!(
+            fs::read(old.join("libraries/test/shared/1/shared.jar")).unwrap(),
+            b"library"
+        );
+        instalar(&store, &instance, CancellationToken::new(), |p| {
+            assert!(!p.etapa.starts_with("Descargando"));
+        })
+        .await
+        .unwrap();
+        assert!(listo(&store, &instance));
+        assert!(!old.join("libraries").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn bloqueo_compartido_espera_y_cancela_sin_publicar() {
+        let root = temp();
+        let held = bloqueo_compartido(&root, &CancellationToken::new(), &|_| {})
+            .await
+            .unwrap();
+        let token = CancellationToken::new();
+        let other = token.clone();
+        let result = bloqueo_compartido(&root, &token, &|_| other.cancel()).await;
+        assert!(matches!(result, Err(Error::Cancelada)));
+        drop(held);
+        let reacquired = bloqueo_compartido(&root, &CancellationToken::new(), &|_| {})
+            .await
+            .unwrap();
+        drop(reacquired);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn reglas_de_so_arch_features_y_ultimo_match() {

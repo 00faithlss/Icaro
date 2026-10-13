@@ -26,6 +26,10 @@ use icaro_ui::servidores::{lista_servidores, red_privada, AccionesLista};
 mod archivos;
 #[path = "launcher_aux/estado.rs"]
 mod estado;
+#[path = "launcher_aux/almacenamiento_real.rs"]
+mod almacenamiento_real;
+#[path = "launcher_aux/java_real.rs"]
+mod java_real;
 #[path = "launcher_aux/capt.rs"]
 mod capt;
 #[path = "launcher_aux/mods.rs"]
@@ -108,6 +112,13 @@ struct App {
     editor: Option<usize>,
     general: EstadoGeneral,
     configs: Vec<ConfigJava>,
+    config_error: Option<String>,
+    almacenamiento: almacenamiento_real::Estado,
+    java_global: java_real::Preferencias,
+    java_detectadas: Vec<icaro_core::java::Java>,
+    java_estado: String,
+    java_generacion: u64,
+    java_prueba_generacion: u64,
     lista_grupos: Vec<String>,
     grupos: Vec<Option<String>>,
     cerrados: Vec<Option<String>>,
@@ -233,6 +244,8 @@ impl App {
 
 #[derive(Debug, Clone)]
 enum Mensaje {
+    Java(java_real::Accion),
+    Almacenamiento(almacenamiento_real::Accion),
     Verificacion(verificacion_real::Accion),
     Icono(icono_instancia::Accion),
     ExportarLista(exportar_lista_mods::Accion),
@@ -473,6 +486,7 @@ fn desfase_losa(app: &App) -> f32 {
 
 /// Escribe el estado organizado por el usuario solo cuando cambia.
 fn guardar_si_cambio(app: &mut App) {
+    if app.config_error.is_some() { return; }
     // Modpacks ya instalados (las 5 primeras instancias son las de ejemplo).
     let instalados: Vec<String> = instancias()
         .into_iter()
@@ -484,11 +498,14 @@ fn guardar_si_cambio(app: &mut App) {
     if !app.servicios.demo {
         guardado.asociar(app.servicios.instancias.registros.iter().map(|i| i.id.clone()).collect());
     }
+    guardado.java_global = app.java_global.clone();
     guardado.apariencia = estado::AparienciaGuardada { tema: app.tema, metal: app.aj.metal, escala: app.aj.escala, reducir: app.reducir };
     let texto = guardado.texto();
     if texto != app.ultimo_guardado {
-        estado::Guardado::escribir(&texto, app.servicios.demo);
-        app.ultimo_guardado = texto;
+        match estado::Guardado::escribir(&texto, app.servicios.demo) {
+            Ok(()) => app.ultimo_guardado = texto,
+            Err(error) => app.avisar(format!("No se pudo guardar la configuración: {error}")),
+        }
     }
 }
 
@@ -506,6 +523,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         return Task::none();
     }
     match m {
+        Mensaje::Almacenamiento(a) => return almacenamiento_real::actualizar(app,a),
+        Mensaje::Java(a) => return java_real::actualizar(app, a),
         Mensaje::Actualizacion(a) => return actualizacion_real::actualizar(app, a),
         Mensaje::Juego(a) => return juego_real::actualizar(app, a),
         Mensaje::CapturarDiseno => return window::get_latest().then(|id| id.map_or(Task::none(),|id| window::screenshot(id).map(Mensaje::DisenoCapturado))),
@@ -727,19 +746,21 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Alto(v) => app.general.alto = v,
         Mensaje::Completa(v) => app.general.pantalla_completa = v,
         Mensaje::Servidor(v) => app.general.servidor = Some(v),
-        Mensaje::JavaVersion(v) => app.configs[app.editor_inst].java = v,
+        Mensaje::JavaVersion(v) => { app.configs[app.editor_inst].java = v; app.configs[app.editor_inst].java_requiere_seleccion=false; app.configs[app.editor_inst].heredar = false; },
         Mensaje::MemMin(v) => {
             let c = &mut app.configs[app.editor_inst];
+            c.heredar_memoria = false;
             c.memoria_min = v;
             c.memoria_max = c.memoria_max.max(v);
         }
         Mensaje::MemMax(v) => {
             let c = &mut app.configs[app.editor_inst];
+            c.heredar_memoria = false;
             c.memoria_max = v;
             c.memoria_min = c.memoria_min.min(v);
         }
-        Mensaje::Metaspace(v) => app.configs[app.editor_inst].metaspace = v,
-        Mensaje::ArgsJvm(v) => app.configs[app.editor_inst].argumentos = v,
+        Mensaje::Metaspace(v) => {app.configs[app.editor_inst].heredar_memoria=false;app.configs[app.editor_inst].metaspace = v;},
+        Mensaje::ArgsJvm(v) => {app.configs[app.editor_inst].heredar_memoria=false;app.configs[app.editor_inst].argumentos = v;},
         Mensaje::Mundo(i) => app.mundo = i,
         Mensaje::ElegirArchivo(i) => app.exp.elegir(i),
         Mensaje::EditarArchivo(a) => app.exp.editar(a),
@@ -1164,7 +1185,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             icaro_ui::movimiento::fijar_reducir(app.reducir);
         }
         Mensaje::Simultaneas(n) => app.simultaneas = n.clamp(1, 8),
-        Mensaje::Ajuste(i) => app.ajuste = i,
+        Mensaje::Ajuste(i) => {app.ajuste = i;if i==3 {return almacenamiento_real::actualizar(app,almacenamiento_real::Accion::Medir);}},
         Mensaje::Arrastrar => {
             // Doble clic en la barra: maximizar o restaurar.
             let ahora = std::time::Instant::now();
@@ -1230,6 +1251,10 @@ fn instancias() -> Vec<DatosInstancia> {
 fn config_por_defecto() -> ConfigJava {
     ConfigJava {
         java: None,
+        heredar: true,
+        heredar_memoria: true,
+        java_requiere_seleccion: false,
+        descarga: true,
         memoria_min: 2048,
         memoria_max: 6144,
         metaspace: 512,
@@ -2900,9 +2925,15 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
         ),
         1 => pestana_java(
             p,
-            &app.configs[app.editor_inst],
+            &java_real::visible_config(app),
             &MensajesJava {
                 java: Mensaje::JavaVersion,
+                heredar_memoria: |v| Mensaje::Java(java_real::Accion::HeredarMemoria(v)),
+                heredar: |v| Mensaje::Java(java_real::Accion::Heredar(v)),
+                descarga: |v| Mensaje::Java(java_real::Accion::DescargaInstancia(v)),
+                detectar: Mensaje::Java(java_real::Accion::Detectar),
+                agregar: Mensaje::Java(java_real::Accion::Agregar(false)),
+                probar: |v| Mensaje::Java(java_real::Accion::Probar(v)),
                 memoria_min: Mensaje::MemMin,
                 memoria_max: Mensaje::MemMax,
                 metaspace: Mensaje::Metaspace,
@@ -2914,6 +2945,7 @@ fn pantalla_editor(app: &App, pestana: usize) -> Element<'_, Mensaje> {
                 InstalacionJava { version: "17.0.13".into(), proveedor: "Temurin".into(), gestionada: true, ruta: "…/icaro/java/17".into(), usado_por: "1.18 a 1.20.4".into(), existe: true },
                 InstalacionJava { version: "19".into(), proveedor: "No encontrado".into(), gestionada: false, ruta: "D:/jdk-19/bin/javaw.exe".into(), usado_por: "Ninguna".into(), existe: false },
             ] } else { juego_real::instalaciones_java(app) },
+            &java_real::resumen(app),
         ),
         2 => pestana_mods(app),
         3 => pestana_mods(app),
@@ -3315,7 +3347,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         };
         let ocupado = app.servicios.instancias.operando;
         let cuerpo = text(if app.servicios.demo { "Se borrarán la instancia, sus 214 mods y 3 mundos (2,4 GB). Esta acción no se puede deshacer." } else {
-            "Hay mundos sin una copia de seguridad vigente. La instancia se moverá a la papelera local y podrás recuperarla con Deshacer. Confirma para continuar con Picar."
+            "Hay mundos sin una copia de seguridad vigente. La instancia se moverá a la papelera del sistema y podrás recuperarla con Deshacer. Confirma para continuar con Picar."
         })
             .size(texto::BODY.0)
             .color(p.text_muted)
@@ -3553,21 +3585,27 @@ fn main() -> iced::Result {
 }
 
 fn iniciar_app(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo: bool, mut servicios: servicios::Estado) -> (App, Task<Mensaje>) {
-    if !servicios.demo { servicios.instancias.cargar(); }
+    if !servicios.demo { servicios.instancias.cargar(); let _=icaro_core::almacenamiento::registrar(&estado::directorio(false),"Inicio del launcher"); }
     let mut guardado = estado::Guardado::cargar(servicios.demo);
     if let Some(g)=&mut guardado {g.apariencia.normalizar();}
     let (mut app, inicio) = iniciar_con_guardado(seccion, piedra, menu, con_dialogo, servicios, guardado);
+    if let Some(error)=app.config_error.clone(){app.avisar(error);}
     if !app.servicios.demo {
         app.actualizacion.comprobando = true;
-        {let iconos=icono_instancia::cargar(&app); (app, Task::batch([inicio, actualizacion_real::comprobar(),iconos]))}
+        {let iconos=icono_instancia::cargar(&app); let java=java_real::detectar(&mut app); (app, Task::batch([inicio, actualizacion_real::comprobar(),iconos,java]))}
     } else { (app, inicio) }
 }
 
 fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo: bool, mut servicios: servicios::Estado, mut guardado: Option<estado::Guardado>) -> (App, Task<Mensaje>) {
         let demo = servicios.demo;
+        let mut config_error = None;
         if !demo {
+            if guardado.is_none() { guardado = Some(estado::Guardado::nuevo(&[], &[], &[], &[], &[])); }
             if let Some(g) = &mut guardado {
                 g.restaurar_instancias(servicios.instancias.registros.iter().map(|i| i.id.clone()).collect());
+                if let Err(error) = g.cargar_configs(&servicios.instancias.almacen) {
+                    config_error=Some(format!("No se pudo recuperar la configuración; se conservó el archivo para corregirlo: {error}"));
+                }
             }
         }
         *lista_instancias().lock().unwrap() = if demo { instancias_base() } else {
@@ -3607,6 +3645,8 @@ fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con
         icaro_ui::movimiento::fijar_reducir(prefs.reducir);
         (
             App {
+                config_error,
+                almacenamiento: Default::default(),
                 actualizacion: actualizacion_real::Estado::default(),
                 verificacion: Default::default(),
                 iconos: Default::default(),
@@ -3707,10 +3747,19 @@ fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con
                     },
                     |g| g.grupos.clone(),
                 ),
+                java_global: guardado.as_ref().map(|g| g.java_global.clone()).unwrap_or_default(),
+                java_detectadas: vec![],
+                java_estado: "Detecta instalaciones para comprobar Java antes de jugar.".into(),
+                java_generacion: 0,
+                java_prueba_generacion: 0,
                 configs: guardado.as_ref().map(|g| g.configs()).filter(|c| c.len() == total).unwrap_or_else(|| {
                     (0..total)
                         .map(|_| ConfigJava {
                             java: None,
+                            heredar: true,
+        heredar_memoria: true,
+        java_requiere_seleccion: false,
+                            descarga: true,
                             memoria_min: 2048,
                             memoria_max: 6144,
                             metaspace: 512,

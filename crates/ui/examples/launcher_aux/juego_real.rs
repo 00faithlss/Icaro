@@ -41,6 +41,7 @@ struct Solicitud {
     instancia: Instancia,
     jugar: bool,
     java: Option<std::path::PathBuf>,
+    descarga_java: bool,
 }
 pub struct Trabajo {
     pub nombre: String,
@@ -393,7 +394,7 @@ fn listo(app: &App, id: &str) {
         );
     }
 }
-fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::path::PathBuf>) {
+pub(crate) fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::path::PathBuf>) {
     let index = app
         .servicios
         .instancias
@@ -406,6 +407,7 @@ fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::path::PathBu
         .get(index)
         .cloned()
         .unwrap_or_else(crate::config_por_defecto);
+    let c = crate::java_real::memoria_efectiva(&c, &app.java_global);
     let resolution = (app.editor.is_some() && app.editor_inst == index)
         .then(|| {
             Some((
@@ -424,7 +426,7 @@ fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::path::PathBu
                 && app.editor_inst == index
                 && app.general.pantalla_completa,
         },
-        c.java.map(std::path::PathBuf::from),
+        crate::java_real::efectiva(&c, &app.java_global).0,
     )
 }
 pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
@@ -435,6 +437,9 @@ pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
     let Some(i) = app.servicios.instancias.registros.get(index).cloned() else {
         return Task::none();
     };
+    if app.configs.get(index).is_some_and(|c|c.java_requiere_seleccion && !c.heredar && c.java.is_none()) {
+        app.avisar("Esta instancia exportada usaba un Java manual. Selecciona una instalación o Automático en su pestaña Java.".into());return Task::none();
+    }
     if i.loader != "vanilla" {
         app.avisar("La instalación de este loader será la siguiente etapa. Puedes seguir gestionando sus mods.".into());
         return Task::none();
@@ -480,6 +485,7 @@ pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
         return Task::none();
     }
     let (_, java) = config(app, &i.id);
+    let descarga_java = app.configs.get(index).map(|c| crate::java_real::efectiva(c, &app.java_global).1).unwrap_or(app.java_global.descarga);
     let s = &mut app.servicios.juego;
     s.secuencia += 1;
     if !s.orden.contains(&i.id) {
@@ -506,6 +512,7 @@ pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
         instancia: i,
         jugar,
         java,
+        descarga_java,
     });
     siguiente(app)
 }
@@ -567,11 +574,11 @@ fn siguiente(app: &mut App) -> Task<Mensaje> {
                 })
                 .await
                 .map_err(|e| e.to_string())?;
-                let runtime = java::preparar(
+                let runtime = java::preparar_perfil(
                     &base,
-                    game.java_major,
-                    &game.java_component,
+                    &game.perfil_java(),
                     solicitud.java.as_deref(),
+                    solicitud.descarga_java,
                     cancel.clone(),
                     |p| {
                         let _ = tx.try_send((p.etapa.to_string(), p.completados, p.total));
@@ -1943,12 +1950,8 @@ pub fn fallo(app: &App) -> Element<'_, Mensaje> {
 pub fn instalaciones_java(app: &App) -> Vec<icaro_ui::editor::InstalacionJava> {
     let captura = std::env::var_os("ICARO_CAPTURA_DISENO").is_some();
     let mut detectadas: BTreeMap<std::path::PathBuf, (java::Java, Vec<String>)> = BTreeMap::new();
-    if !captura {
-        for runtime in java::gestionados(&crate::estado::directorio(false)) {
-            detectadas
-                .entry(runtime.executable.clone())
-                .or_insert((runtime, vec![]));
-        }
+    for runtime in &app.java_detectadas {
+        detectadas.entry(runtime.executable.clone()).or_insert((runtime.clone(), vec![]));
     }
     for (id, runtime) in &app.servicios.juego.java {
         let (_, usado) = detectadas
@@ -1963,11 +1966,11 @@ pub fn instalaciones_java(app: &App) -> Vec<icaro_ui::editor::InstalacionJava> {
     detectadas
         .into_values()
         .map(|(runtime, usado)| icaro_ui::editor::InstalacionJava {
-            version: runtime.version,
+            version: format!("{} · {}", runtime.version, runtime.arquitectura),
             proveedor: if runtime.managed {
                 "Mojang"
             } else {
-                "Seleccionado"
+                "Sistema"
             }
             .into(),
             gestionada: runtime.managed,
@@ -2101,6 +2104,7 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
                         instancia,
                         jugar: false,
                         java: None,
+                        descarga_java: true,
                     });
                 }
             }
@@ -2194,6 +2198,7 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
                     major: 21,
                     version: "21.0.4".into(),
                     managed: true,
+                    arquitectura: "amd64".into(),
                 },
             );
             tarjeta(app, &id, EstadoInstancia::Lista, "Lista para jugar");
@@ -2408,6 +2413,7 @@ mod tests {
             },
             jugar: false,
             java: None,
+            descarga_java: true,
         });
         estado.espera_sesion = Some("b".into());
         let cancel = CancellationToken::new();

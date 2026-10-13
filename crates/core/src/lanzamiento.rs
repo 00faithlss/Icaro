@@ -166,6 +166,17 @@ fn protegida(argumento: &str) -> bool {
 
 /// Las barras de las rutas Windows permanecen literales; solo \" y \' escapan
 /// una comilla. No expande variables, sustituciones, redirecciones ni comodines.
+/// Comparte la validación y las opciones JVM entre Probar y el lanzamiento real.
+pub(crate) fn argumentos_prueba(config: &Config) -> Result<Vec<String>, Error> {
+    validar(config)?;
+    let mut args = vec![
+        format!("-Xms{}M", config.memoria_min_mb),
+        format!("-Xmx{}M", config.memoria_max_mb),
+    ];
+    args.extend(argumentos_extra(&config.argumentos_jvm)?.iter().cloned());
+    Ok(args)
+}
+
 fn argumentos_extra(texto: &str) -> Result<Zeroizing<Vec<String>>, Error> {
     if texto.len() > 16 * 1024 || texto.chars().any(|c| c.is_control() && !c.is_whitespace()) {
         return Err(Error::ArgumentosJvm);
@@ -854,6 +865,7 @@ mod tests {
             asset_index: "17".into(),
             java_major: 21,
             java_component: "java-runtime-delta".into(),
+            java_perfil: None,
             game_arguments: vec![
                 "--username".into(),
                 "${auth_player_name}".into(),
@@ -870,6 +882,53 @@ mod tests {
                 "${classpath}".into(),
             ],
         }
+    }
+
+    #[test]
+    fn lanzamiento_resuelve_almacen_compartido_y_datos_privados() {
+        let mut installed = instalado();
+        let shared = std::env::temp_dir().join("Icaro datos compartidos");
+        let private = shared.join("instances/Primera/minecraft");
+        installed.assets = shared.join("assets");
+        installed.natives = shared.join("instances/Primera/.icaro-minecraft/natives");
+        installed.classpath = vec![
+            shared.join("libraries/hash/library.jar"),
+            shared.join("meta/minecraft/clients/hash/client.jar"),
+        ];
+        installed
+            .jvm_arguments
+            .push("-DlibraryDirectory=${library_directory}".into());
+        installed
+            .game_arguments
+            .extend(["--assetsDir".into(), "${assets_root}".into()]);
+        let args = preparar(
+            &installed,
+            &private,
+            "Jugador",
+            "uuid",
+            "token",
+            "xuid",
+            &Config::default(),
+        )
+        .unwrap();
+        assert!(args.contains(&format!(
+            "-DlibraryDirectory={}",
+            shared.join("libraries").display()
+        )));
+        let cp = args.iter().position(|a| a == "-cp").unwrap();
+        assert_eq!(
+            args[cp + 1],
+            std::env::join_paths(&installed.classpath)
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        assert!(args.contains(&private.to_string_lossy().into_owned()));
+        assert!(args.contains(&installed.assets.to_string_lossy().into_owned()));
+        assert!(args.contains(&format!(
+            "-Djava.library.path={}",
+            installed.natives.display()
+        )));
     }
 
     #[test]

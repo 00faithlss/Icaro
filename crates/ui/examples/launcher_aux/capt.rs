@@ -47,6 +47,8 @@ pub struct Estado {
     pub gabinete_encima: Option<usize>,
     /// Capturas enviadas a la papelera con su lugar, para Deshacer.
     pub papelera: Vec<(usize, Captura)>,
+    papelera_real: Vec<icaro_core::papelera::Ticket>,
+    eliminando: bool,
     pub aviso: Option<Aviso>,
     /// Muestra todas las pantallas sin datos.
     pub vacio: bool,
@@ -82,6 +84,7 @@ pub enum Accion {
     LimpiarSeleccion,
     VerTodas,
     Deshacer,
+    PapeleraTerminada(bool, Vec<icaro_core::papelera::Ticket>, Option<String>),
     // Visor
     VisorPaso(i32),
     VisorAcercar,
@@ -118,6 +121,8 @@ impl Estado {
             visor: None,
             gabinete_encima: None,
             papelera: Vec::new(),
+            papelera_real: Vec::new(),
+            eliminando: false,
             aviso: None,
             vacio: false,
             prensa: None,
@@ -221,6 +226,8 @@ impl Estado {
             visor: None,
             gabinete_encima: None,
             papelera: Vec::new(),
+            papelera_real: Vec::new(),
+            eliminando: false,
             aviso: None,
             vacio: std::env::var_os("ICARO_VACIO").is_some(),
             prensa: None,
@@ -494,7 +501,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             let i = captura_del_visor(app);
             abrir_carpeta(app, i);
         }
-        Accion::Eliminar(i) => eliminar(app, &[i]),
+        Accion::Eliminar(i) => return eliminar(app, &[i]),
         Accion::CopiarSeleccion => {
             if !app.servicios.demo {
                 if app.capt.seleccion.len() == 1 {
@@ -527,11 +534,29 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::EliminarSeleccion => {
             let lista = app.capt.seleccion.clone();
-            eliminar(app, &lista);
+            return eliminar(app, &lista);
         }
         Accion::LimpiarSeleccion => app.capt.seleccion.clear(),
         Accion::VerTodas => app.capt.filtro = 0,
-        Accion::Deshacer => deshacer(&mut app.capt),
+        Accion::PapeleraTerminada(undo,tickets,error) => {
+            app.capt.eliminando=false;
+            app.capt.papelera_real=tickets;
+            app.capt.avisar(error.unwrap_or_else(||if undo{"Capturas recuperadas.".into()}else{"Capturas enviadas a la papelera del sistema.".into()}),!app.capt.papelera_real.is_empty());
+            return refrescar(app);
+        }
+        Accion::Deshacer => {
+            if !app.servicios.demo {
+                if app.capt.eliminando{return Task::none();}
+                app.capt.eliminando=true;
+                let tickets=app.capt.papelera_real.clone();
+                return Task::perform(async move {tokio::task::spawn_blocking(move || {
+                    let mut pending=vec![];let mut error=None;
+                    for ticket in tickets {if let Err(e)=icaro_core::papelera::restaurar(&ticket){pending.push(ticket);error=Some(e);}}
+                    (pending,error)
+                }).await.unwrap_or_else(|_|(vec![],Some("No se pudo recuperar; revisa la papelera del sistema.".into())))},|(tickets,error)|Mensaje::Capt(Accion::PapeleraTerminada(true,tickets,error)));
+            }
+            deshacer(&mut app.capt);
+        },
         Accion::VisorPaso(d) => {
             if let Some(v) = &mut app.capt.visor {
                 let total = total_visor(&app.capt.capturas, &v.ambito) as i32;
@@ -559,7 +584,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::VisorEliminar => {
             if let Some(i) = captura_del_visor(app) {
-                eliminar(app, &[i]);
+                return eliminar(app, &[i]);
             }
         }
         Accion::GabinetePasar(i) => app.capt.gabinete_encima = i,
@@ -685,10 +710,18 @@ fn abrir_carpeta(app: &mut App, captura: Option<usize>) {
 }
 
 /// Envía capturas a la papelera; se pueden recuperar con Deshacer.
-fn eliminar(app: &mut App, indices: &[usize]) {
+fn eliminar(app: &mut App, indices: &[usize]) -> Task<Mensaje> {
     if !app.servicios.demo {
-        app.capt.avisar("Eliminar capturas todavía no está disponible. Los originales se conservan en su carpeta.", false);
-        return;
+        if app.capt.eliminando{return Task::none();}
+        let mut paths:Vec<_>=indices.iter().filter_map(|n|app.capt.capturas.get(*n)?.original.as_ref().map(|o|o.ruta.clone())).collect();
+        paths.sort();paths.dedup();
+        if paths.is_empty(){return Task::none();}
+        app.capt.eliminando=true;
+        return Task::perform(async move {tokio::task::spawn_blocking(move || {
+            let mut tickets=vec![];let mut error=None;
+            for path in paths { match disco::original_valido(&path).and_then(|_|icaro_core::papelera::enviar(&path)) {Ok(t)=>tickets.push(t),Err(e)=>{error=Some(e);break;}} }
+            (tickets,error)
+        }).await.unwrap_or_else(|_|(vec![],Some("No se pudo completar la eliminación; revisa la papelera del sistema.".into())))},|(tickets,error)|Mensaje::Capt(Accion::PapeleraTerminada(false,tickets,error)));
     }
     let mut orden: Vec<usize> = indices.to_vec();
     orden.sort_unstable();
@@ -700,7 +733,7 @@ fn eliminar(app: &mut App, indices: &[usize]) {
         }
     }
     if quitadas.is_empty() {
-        return;
+        return Task::none();
     }
     quitadas.reverse();
     let n = quitadas.len();
@@ -726,6 +759,7 @@ fn eliminar(app: &mut App, indices: &[usize]) {
     } else if let (Some(v), Some(total)) = (&mut app.capt.visor, total) {
         v.estado.ir_a(v.estado.indice.min(total - 1));
     }
+    Task::none()
 }
 
 fn deshacer(est: &mut Estado) {

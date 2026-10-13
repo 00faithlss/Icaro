@@ -21,8 +21,10 @@ tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "proce
 tokio-util = { version = "0.7", features = ["rt"] }
 webbrowser = "1"
 image = { version = "0.24.9", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+trash = "5.2.9"
 
 [target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 keyring = { version = "3.6", features = ["windows-native"] }
 winreg = "0.56"
 

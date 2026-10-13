@@ -232,6 +232,20 @@ pub fn pestana_general<'a, M: Clone + 'a>(
     pagina(rejilla.into())
 }
 
+/// Presentación de rutas Windows; el ejecutable conserva su ruta original.
+pub fn ruta_java_visible(ruta: &str) -> String {
+    if let Some(unc) = ruta.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc}");
+    }
+    if let Some(local) = ruta.strip_prefix(r"\\?\") {
+        let bytes = local.as_bytes();
+        if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' {
+            return local.to_owned();
+        }
+    }
+    ruta.to_owned()
+}
+
 /// Instalación de Java detectada.
 #[derive(Debug, Clone)]
 pub struct InstalacionJava {
@@ -247,6 +261,7 @@ pub struct InstalacionJava {
 fn tabla_instalaciones<'a, M: Clone + 'a>(
     p: Paleta,
     instalaciones: &[InstalacionJava],
+    m: &MensajesJava<M>,
 ) -> Element<'a, M> {
     let mut tabla = column![container(row![
         columna_titulo(p, "Java", 1),
@@ -266,7 +281,12 @@ fn tabla_instalaciones<'a, M: Clone + 'a>(
             proveedor = proveedor.push(insignia(p, Estado::Info, "Icaro Launcher"));
         }
         let accion = if i.existe {
-            boton(p, "Probar", Variante::Secundario, None::<M>)
+            boton(
+                p,
+                "Probar",
+                Variante::Secundario,
+                Some((m.probar)(i.ruta.clone())),
+            )
         } else {
             boton(p, "Quitar", Variante::Peligro, None::<M>)
         };
@@ -281,7 +301,7 @@ fn tabla_instalaciones<'a, M: Clone + 'a>(
                             .color(tono)
                             .width(Length::FillPortion(1)),
                         container(proveedor).width(Length::FillPortion(2)),
-                        text(i.ruta.clone())
+                        text(ruta_java_visible(&i.ruta))
                             .font(fuentes::MONO)
                             .size(texto::MONO_SM.0)
                             .color(tenue)
@@ -301,8 +321,18 @@ fn tabla_instalaciones<'a, M: Clone + 'a>(
         tabla,
         row![
             boton(p, "Descargar Java", Variante::Secundario, None::<M>),
-            boton(p, "Detectar instalaciones", Variante::Secundario, None::<M>),
-            boton(p, "Agregar ruta", Variante::Fantasma, None::<M>),
+            boton(
+                p,
+                "Detectar instalaciones",
+                Variante::Secundario,
+                Some(m.detectar.clone())
+            ),
+            boton(
+                p,
+                "Agregar ruta",
+                Variante::Fantasma,
+                Some(m.agregar.clone())
+            ),
         ]
         .spacing(espacio::S2),
     ]
@@ -536,8 +566,12 @@ pub fn impacto<'a, M: 'a>(p: Paleta, nivel: usize) -> Element<'a, M> {
 /// Configuración de Java de una instancia. Cada instancia tiene la suya.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigJava {
-    /// `None` deja que Icaro Launcher elija la versión según la del juego.
+    /// Selección propia; `None` usa Automático cuando no se heredan ajustes globales.
     pub java: Option<String>,
+    pub heredar: bool,
+    pub heredar_memoria: bool,
+    pub java_requiere_seleccion: bool,
+    pub descarga: bool,
     /// Memoria inicial de la JVM (`-Xms`), en MB.
     pub memoria_min: u32,
     /// Memoria máxima de la JVM (`-Xmx`), en MB.
@@ -566,6 +600,12 @@ impl ConfigJava {
 /// Mensajes de la pestaña Java.
 pub struct MensajesJava<M> {
     pub java: fn(Option<String>) -> M,
+    pub heredar: fn(bool) -> M,
+    pub heredar_memoria: fn(bool) -> M,
+    pub descarga: fn(bool) -> M,
+    pub detectar: M,
+    pub agregar: M,
+    pub probar: fn(String) -> M,
     pub memoria_min: fn(u32) -> M,
     pub memoria_max: fn(u32) -> M,
     pub metaspace: fn(u32) -> M,
@@ -583,13 +623,14 @@ pub fn pestana_java<'a, M: Clone + 'a>(
     m: &MensajesJava<M>,
     ram_total: u32,
     instalaciones: &[InstalacionJava],
+    estado_java: &str,
 ) -> Element<'a, M> {
     let mut opciones = vec![JAVA_AUTOMATICO.to_owned()];
     opciones.extend(
         instalaciones
             .iter()
             .filter(|i| i.existe)
-            .map(|i| format!("Java {} · {}", i.version, i.proveedor)),
+            .map(|i| format!("Java {} · {} · {}", i.version, i.proveedor, ruta_java_visible(&i.ruta))),
     );
     let elegida = cfg
         .java
@@ -598,8 +639,8 @@ pub fn pestana_java<'a, M: Clone + 'a>(
             instalaciones
                 .iter()
                 .find(|i| &i.ruta == path)
-                .map(|i| format!("Java {} · {}", i.version, i.proveedor))
-                .unwrap_or_else(|| path.clone())
+                .map(|i| format!("Java {} · {} · {}", i.version, i.proveedor, ruta_java_visible(&i.ruta)))
+                .unwrap_or_else(|| ruta_java_visible(path))
         })
         .unwrap_or_else(|| JAVA_AUTOMATICO.to_owned());
     let rutas: Vec<_> = instalaciones
@@ -607,12 +648,13 @@ pub fn pestana_java<'a, M: Clone + 'a>(
         .filter(|i| i.existe)
         .map(|i| {
             (
-                format!("Java {} · {}", i.version, i.proveedor),
+                format!("Java {} · {} · {}", i.version, i.proveedor, ruta_java_visible(&i.ruta)),
                 i.ruta.clone(),
             )
         })
         .collect();
     let al_elegir = m.java;
+    let ruta_manual = m.java;
     let version = selector(p, opciones, Some(elegida), move |o| {
         al_elegir(if o == JAVA_AUTOMATICO {
             None
@@ -647,8 +689,13 @@ pub fn pestana_java<'a, M: Clone + 'a>(
 
     pagina(
         column![
+            campo_rotulado(p, "Heredar memoria y argumentos globales", componentes::interruptor(p, cfg.heredar_memoria, (m.heredar_memoria)(!cfg.heredar_memoria))),
+            campo_rotulado(p, "Heredar Java de los ajustes globales", componentes::interruptor(p, cfg.heredar, (m.heredar)(!cfg.heredar))),
             campo_rotulado(p, "Versión de Java de esta instancia", version),
-            text("Con Automático, Icaro Launcher obtiene la versión de Java que pide Minecraft y reutiliza las instalaciones guardadas.")
+            campo_rotulado(p, "Ruta manual de Java", campo(p, "Automático", &ruta_java_visible(cfg.java.as_deref().unwrap_or("")), move |v: String| ruta_manual((!v.trim().is_empty()).then_some(v)))),
+            campo_rotulado(p, "Permitir descarga automática (al no heredar)", componentes::interruptor(p, cfg.descarga, (m.descarga)(!cfg.descarga))),
+            text(estado_java.to_owned()).size(texto::BODY_SM.0).color(p.text_muted),
+            text("Automático con descargas usa el runtime administrado del perfil. Sin descargas detecta Java compatible disponible. Probar comprueba también la memoria y los argumentos. La memoria es propia de cada instancia.")
                 .size(texto::BODY_SM.0)
                 .color(p.text_muted),
             memoria,
@@ -671,7 +718,7 @@ pub fn pestana_java<'a, M: Clone + 'a>(
                 .style(estilo::marco(p))
                 .into(),
             ),
-            campo_rotulado(p, "Instalaciones detectadas", tabla_instalaciones(p, instalaciones)),
+            campo_rotulado(p, "Instalaciones detectadas", tabla_instalaciones(p, instalaciones, m)),
         ]
         .spacing(espacio::S6)
         .into(),

@@ -38,6 +38,123 @@ pub struct Java {
     pub major: u32,
     pub version: String,
     pub managed: bool,
+    pub arquitectura: String,
+}
+
+/// Requisitos del perfil; nunca interpreta una versión mayor como un mínimo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Perfil {
+    pub majors: Vec<u32>,
+    pub component: String,
+    #[serde(default)]
+    pub prism: bool,
+}
+impl Perfil {
+    pub fn acepta(&self, major: u32) -> bool {
+        self.majors.contains(&major)
+    }
+    pub fn validar(&self) -> Result<(), Error> {
+        if self.majors.is_empty()
+            || self.majors.len() > 32
+            || self.majors.iter().any(|m| *m == 0 || *m > 255)
+            || !componente_valido(&self.component)
+        {
+            return Err(Error::Datos);
+        }
+        Ok(())
+    }
+    pub fn verificar(&self, java: Java) -> Result<Java, Error> {
+        self.validar()?;
+        if self.acepta(java.major) {
+            Ok(java)
+        } else if self.majors.len() == 1 {
+            Err(Error::Incompatible {
+                requerida: self.majors[0],
+                encontrada: java.major,
+            })
+        } else {
+            Err(Error::PerfilIncompatible {
+                compatibles: self.majors.clone(),
+                encontrada: java.major,
+            })
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MetadataJava {
+    uid: String,
+    version: String,
+    #[serde(rename = "formatVersion")]
+    format: u32,
+    #[serde(rename = "compatibleJavaMajors")]
+    majors: Vec<u32>,
+    #[serde(rename = "compatibleJavaName")]
+    component: String,
+}
+fn perfil_metadata(bytes: &[u8], version: &str) -> Result<Perfil, Error> {
+    let metadata: MetadataJava = serde_json::from_slice(bytes).map_err(|_| Error::Datos)?;
+    if metadata.uid != "net.minecraft" || metadata.version != version || metadata.format != 1 {
+        return Err(Error::Datos);
+    }
+    let perfil = Perfil {
+        majors: metadata.majors,
+        component: metadata.component,
+        prism: true,
+    };
+    perfil.validar()?;
+    Ok(perfil)
+}
+
+fn ordenar_java(javas: &mut [Java]) {
+    javas.sort_by(|a, b| {
+        b.major
+            .cmp(&a.major)
+            .then_with(|| version_numerica(&b.version).cmp(&version_numerica(&a.version)))
+            .then_with(|| a.executable.cmp(&b.executable))
+    });
+}
+
+fn version_numerica(version: &str) -> Vec<u32> {
+    version
+        .strip_prefix("1.")
+        .unwrap_or(version)
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|part| part.parse().ok())
+        .collect()
+}
+
+/// Complemento de compatibilidad de Prism. Un fallo de red conserva Mojang.
+pub async fn perfil_minecraft(
+    version: &str,
+    fallback: Perfil,
+    cancel: &CancellationToken,
+) -> Result<Perfil, Error> {
+    fallback.validar()?;
+    let mut url =
+        Url::parse("https://meta.prismlauncher.org/v1/net.minecraft/").map_err(|_| Error::Datos)?;
+    url.path_segments_mut()
+        .map_err(|_| Error::Datos)?
+        .pop_if_empty()
+        .push(&format!("{version}.json"));
+    let request = async {
+        let client = http::client()?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| http::Error::Network("metadatos de Prism"))?;
+        if !response.status().is_success() {
+            return Err(Error::Datos);
+        }
+        let bytes = http::body_bytes(response, "metadatos de Prism", MAX_MANIFEST).await?;
+        perfil_metadata(&bytes, version)
+    };
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(Error::Cancelada),
+        result = tokio::time::timeout(Duration::from_secs(8), request) => Ok(result.ok().and_then(Result::ok).unwrap_or(fallback)),
+    }
 }
 
 /// Las descargas informan bytes; las etapas sin una cantidad conocida usan 0/0.
@@ -64,6 +181,20 @@ pub enum Error {
     Ejecutable,
     #[error("Esta versión de Minecraft necesita Java {requerida}; el Java seleccionado es {encontrada}.")]
     Incompatible { requerida: u32, encontrada: u32 },
+    #[error("El perfil acepta Java {compatibles:?}; el seleccionado es Java {encontrada}.")]
+    PerfilIncompatible {
+        compatibles: Vec<u32>,
+        encontrada: u32,
+    },
+    #[error("La prueba de memoria o argumentos de Java falló: {0}")]
+    PruebaJvm(String),
+    #[error("Java usa arquitectura {encontrada}; se necesita {requerida}.")]
+    Arquitectura {
+        requerida: String,
+        encontrada: String,
+    },
+    #[error("Falta Java {0} compatible. La descarga automática está desactivada; selecciona una instalación local.")]
+    DescargaDesactivada(u32),
     #[error("Mojang no ofrece Java {0} para esta plataforma.")]
     NoDisponible(u32),
     #[error("La descarga automática de Java no está disponible para esta plataforma.")]
@@ -182,7 +313,7 @@ fn major_version(version: &str) -> Option<u32> {
 }
 
 fn parse_version(output: &str) -> Option<(u32, String)> {
-    for line in output.lines().take(16) {
+    for line in output.lines().take(256) {
         let line = line.trim();
         if !(line.starts_with("java version ")
             || line.starts_with("openjdk version ")
@@ -229,6 +360,16 @@ async fn inspeccionar(
     managed: bool,
     cancel: &CancellationToken,
 ) -> Result<Java, Error> {
+    inspeccionar_argumentos(path, major, managed, cancel, &[]).await
+}
+
+async fn inspeccionar_argumentos(
+    path: &Path,
+    major: u32,
+    managed: bool,
+    cancel: &CancellationToken,
+    argumentos: &[String],
+) -> Result<Java, Error> {
     comprobar_cancelacion(cancel)?;
     let path = fs::canonicalize(ejecutable(path)).map_err(|_| Error::Ejecutable)?;
     if !path.is_file() {
@@ -236,6 +377,8 @@ async fn inspeccionar(
     }
     let mut command = tokio::process::Command::new(&path);
     command
+        .args(argumentos)
+        .arg("-XshowSettings:properties")
         .arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -262,18 +405,38 @@ async fn inspeccionar(
             return Err(Error::Ejecutable);
         }
         let status = child.wait().await.map_err(|_| Error::Ejecutable)?;
-        if !status.success() {
-            return Err(Error::Ejecutable);
-        }
         out.extend_from_slice(&err);
-        parse_version(&String::from_utf8_lossy(&out)).ok_or(Error::Ejecutable)
+        if !status.success() {
+            return Err(if argumentos.is_empty() {
+                Error::Ejecutable
+            } else {
+                Error::PruebaJvm(
+                    String::from_utf8_lossy(&out)
+                        .trim()
+                        .chars()
+                        .take(1000)
+                        .collect(),
+                )
+            });
+        }
+        let output = String::from_utf8_lossy(&out);
+        let (major, version) = parse_version(&output).ok_or(Error::Ejecutable)?;
+        let arquitectura = output
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.trim().split_once('=')?;
+                (key.trim() == "os.arch").then(|| value.trim().to_owned())
+            })
+            .ok_or(Error::Ejecutable)?;
+        comprobar_arquitectura(&arquitectura)?;
+        Ok((major, version, arquitectura))
     };
-    let (found, version) = tokio::select! {
+    let (found, version, arquitectura) = tokio::select! {
         biased;
         _ = cancel.cancelled() => return Err(Error::Cancelada),
         result = tokio::time::timeout(Duration::from_secs(10), read) => result.map_err(|_| Error::Ejecutable)??,
     };
-    if found != major {
+    if major != 0 && found != major {
         return Err(Error::Incompatible {
             requerida: major,
             encontrada: found,
@@ -284,7 +447,59 @@ async fn inspeccionar(
         major: found,
         version,
         managed,
+        arquitectura,
     })
+}
+
+fn comprobar_arquitectura(found: &str) -> Result<(), Error> {
+    let normalized = match found {
+        "amd64" | "x86_64" => "x86_64",
+        "x86" | "i386" | "i486" | "i586" | "i686" => "x86",
+        "aarch64" | "arm64" => "aarch64",
+        other => other,
+    };
+    if normalized == std::env::consts::ARCH {
+        Ok(())
+    } else {
+        Err(Error::Arquitectura {
+            requerida: std::env::consts::ARCH.into(),
+            encontrada: found.into(),
+        })
+    }
+}
+
+/// Inventario local comprobado. Ejecutar desde una tarea, nunca desde la vista.
+pub async fn detectar(cancel: CancellationToken) -> Result<Vec<Java>, Error> {
+    let mut result = Vec::new();
+    for path in candidatos_sistema() {
+        match inspeccionar(&path, 0, false, &cancel).await {
+            Ok(java) => result.push(java),
+            Err(Error::Cancelada) => return Err(Error::Cancelada),
+            Err(_) => {}
+        }
+    }
+    ordenar_java(&mut result);
+    Ok(result)
+}
+
+pub async fn comprobar(path: &Path, major: u32, cancel: CancellationToken) -> Result<Java, Error> {
+    inspeccionar(path, major, false, &cancel).await
+}
+
+/// Inicializa la JVM con los mismos valores y parser usados al lanzar el juego.
+pub async fn probar(
+    path: &Path,
+    perfil: Option<&Perfil>,
+    config: &crate::lanzamiento::Config,
+    cancel: CancellationToken,
+) -> Result<Java, Error> {
+    let args = crate::lanzamiento::argumentos_prueba(config)
+        .map_err(|e| Error::PruebaJvm(e.to_string()))?;
+    let java = inspeccionar_argumentos(path, 0, false, &cancel, &args).await?;
+    match perfil {
+        Some(perfil) => perfil.verificar(java),
+        None => Ok(java),
+    }
 }
 
 fn candidatos_sistema() -> Vec<PathBuf> {
@@ -327,21 +542,131 @@ fn candidatos_sistema() -> Vec<PathBuf> {
                 }
             }
         }
+        for variable in [
+            "ProgramFiles",
+            "ProgramW6432",
+            "ProgramFiles(x86)",
+            "LOCALAPPDATA",
+        ] {
+            if let Some(base) = std::env::var_os(variable) {
+                for vendor in [
+                    "Java",
+                    "Eclipse Adoptium",
+                    "Eclipse Foundation",
+                    "Microsoft",
+                    "Amazon Corretto",
+                    "Zulu",
+                    "BellSoft",
+                    "Programs/Eclipse Adoptium",
+                ] {
+                    agregar_instalaciones(&PathBuf::from(&base).join(vendor), &mut paths);
+                }
+            }
+        }
     }
     #[cfg(target_os = "linux")]
-    if let Some(home) = std::env::var_os("HOME") {
-        if let Ok(entries) = fs::read_dir(PathBuf::from(home).join(".jvm")) {
-            paths.extend(
-                entries
-                    .take(32)
-                    .flatten()
-                    .map(|entry| entry.path().join("bin").join(nombre_java())),
+    {
+        for base in ["/usr/lib/jvm", "/usr/java", "/opt/java"] {
+            agregar_instalaciones(Path::new(base), &mut paths);
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            agregar_instalaciones(&home.join(".jvm"), &mut paths);
+            agregar_instalaciones(&home.join(".sdkman/candidates/java"), &mut paths);
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            agregar_runtimes_minecraft(
+                &PathBuf::from(appdata).join(".minecraft/runtime"),
+                &mut paths,
+            );
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            agregar_runtimes_minecraft(
+                &PathBuf::from(local).join(
+                    "Packages/Microsoft.4297127D64EC6_8wekyb3d8bbwe/LocalCache/Local/runtime",
+                ),
+                &mut paths,
             );
         }
     }
+    #[cfg(not(windows))]
+    if let Some(home) = std::env::var_os("HOME") {
+        let root = if cfg!(target_os = "macos") {
+            "Library/Application Support/minecraft/runtime"
+        } else {
+            ".minecraft/runtime"
+        };
+        agregar_runtimes_minecraft(&PathBuf::from(home).join(root), &mut paths);
+    }
+    depurar_candidatos(paths)
+}
+
+/// Solo inspecciona un nivel en ubicaciones conocidas; no recorre todo el disco.
+fn agregar_instalaciones(base: &Path, paths: &mut Vec<PathBuf>) {
+    paths.push(base.join("bin").join(nombre_java()));
+    if let Ok(entries) = fs::read_dir(base) {
+        let mut homes: Vec<_> = entries
+            .take(256)
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        homes.sort();
+        paths.extend(
+            homes
+                .into_iter()
+                .map(|home| home.join("bin").join(nombre_java())),
+        );
+    }
+}
+
+fn agregar_runtimes_minecraft(root: &Path, paths: &mut Vec<PathBuf>) {
+    let Ok(root) = fs::canonicalize(root) else {
+        return;
+    };
+    let mut pending = vec![(root.clone(), 0)];
+    let mut visited = BTreeSet::new();
+    while let Some((dir, depth)) = pending.pop() {
+        if visited.len() >= 512 || !visited.insert(dir.clone()) {
+            continue;
+        }
+        paths.push(dir.join("bin").join(nombre_java()));
+        if depth >= 6 {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut children: Vec<_> = entries
+            .take(256)
+            .flatten()
+            .filter_map(|entry| {
+                if !entry.file_type().ok()?.is_dir() {
+                    return None;
+                }
+                if matches!(entry.file_name().to_str(), Some("lib" | "legal" | "bin")) {
+                    return None;
+                }
+                let path = fs::canonicalize(entry.path()).ok()?;
+                path.starts_with(&root).then_some(path)
+            })
+            .collect();
+        children.sort();
+        pending.extend(children.into_iter().rev().map(|path| (path, depth + 1)));
+    }
+}
+
+fn depurar_candidatos(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
-    paths.retain(|p| seen.insert(p.clone()));
     paths
+        .into_iter()
+        .filter_map(|path| {
+            let path = fs::canonicalize(path).ok()?;
+            (path.is_file() && seen.insert(path.clone())).then_some(path)
+        })
+        .collect()
 }
 
 fn enlace(meta: &fs::Metadata) -> bool {
@@ -786,6 +1111,13 @@ pub fn gestionados(base: &Path) -> Vec<Java> {
             major,
             version,
             managed: true,
+            arquitectura: String::from_utf8_lossy(&release)
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("OS_ARCH=")
+                        .map(|v| v.trim_matches('"').to_owned())
+                })
+                .unwrap_or_else(|| "Sin comprobar".into()),
         });
     }
     result.sort_by(|a, b| {
@@ -1033,13 +1365,122 @@ pub async fn preparar(
     cancel: CancellationToken,
     progress: impl Fn(Progreso) + Send + Sync,
 ) -> Result<Java, Error> {
+    preparar_con_candidatos(
+        base,
+        major,
+        component,
+        preferida,
+        cancel,
+        progress,
+        true,
+        candidatos_sistema,
+    )
+    .await
+}
+
+/// Permite usar Java local o guardado sin autorizar nuevas descargas.
+pub async fn preparar_con_descarga(
+    base: &Path,
+    major: u32,
+    component: &str,
+    preferida: Option<&Path>,
+    descarga: bool,
+    cancel: CancellationToken,
+    progress: impl Fn(Progreso) + Send + Sync,
+) -> Result<Java, Error> {
+    preparar_con_candidatos(
+        base,
+        major,
+        component,
+        preferida,
+        cancel,
+        progress,
+        descarga,
+        candidatos_sistema,
+    )
+    .await
+}
+
+async fn preparar_con_candidatos(
+    base: &Path,
+    major: u32,
+    component: &str,
+    preferida: Option<&Path>,
+    cancel: CancellationToken,
+    progress: impl Fn(Progreso) + Send + Sync,
+    descarga: bool,
+    candidatos: impl FnOnce() -> Vec<PathBuf>,
+) -> Result<Java, Error> {
+    let perfil = Perfil {
+        majors: vec![major],
+        component: component.into(),
+        prism: false,
+    };
+    preparar_perfil_con_candidatos(
+        base, &perfil, preferida, cancel, progress, descarga, candidatos,
+    )
+    .await
+}
+
+pub async fn preparar_perfil(
+    base: &Path,
+    perfil: &Perfil,
+    preferida: Option<&Path>,
+    descarga: bool,
+    cancel: CancellationToken,
+    progress: impl Fn(Progreso) + Send + Sync,
+) -> Result<Java, Error> {
+    preparar_perfil_con_candidatos(
+        base,
+        perfil,
+        preferida,
+        cancel,
+        progress,
+        descarga,
+        candidatos_sistema,
+    )
+    .await
+}
+
+async fn preparar_perfil_con_candidatos(
+    base: &Path,
+    perfil: &Perfil,
+    preferida: Option<&Path>,
+    cancel: CancellationToken,
+    progress: impl Fn(Progreso) + Send + Sync,
+    descarga: bool,
+    candidatos: impl FnOnce() -> Vec<PathBuf>,
+) -> Result<Java, Error> {
     comprobar_cancelacion(&cancel)?;
-    if major == 0 || major > 255 || !componente_valido(component) {
-        return Err(Error::Datos);
-    }
+    perfil.validar()?;
+    let major = perfil.majors[0];
+    let component = perfil.component.as_str();
     anunciar(&progress, "Comprobando Java");
     if let Some(path) = preferida {
-        return inspeccionar(path, major, false, &cancel).await;
+        let managed = fs::canonicalize(base.join("java"))
+            .ok()
+            .zip(fs::canonicalize(ejecutable(path)).ok())
+            .is_some_and(|(root, executable)| executable.starts_with(root));
+        return perfil.verificar(inspeccionar(path, 0, managed, &cancel).await?);
+    }
+    // Como Prism: la descarga habilitada selecciona el runtime administrado.
+    // La selección manual siempre tiene prioridad; sin descargas se detecta Java local.
+    if !descarga {
+        let mut compatibles = Vec::new();
+        for path in candidatos() {
+            match inspeccionar(&path, 0, false, &cancel)
+                .await
+                .and_then(|java| perfil.verificar(java))
+            {
+                Ok(java) => compatibles.push(java),
+                Err(Error::Cancelada) => return Err(Error::Cancelada),
+                Err(_) => {}
+            }
+        }
+        ordenar_java(&mut compatibles);
+        if let Some(java) = compatibles.into_iter().next() {
+            return Ok(java);
+        }
     }
     let platform = plataforma()?;
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -1051,15 +1492,34 @@ pub async fn preparar(
     let base = crear_carpeta(base)?;
     let root = crear_carpeta(&base.join("java"))?;
     let prefix = format!("{component}-{platform}-");
-    if let Some(java) = runtime_guardado(&root, &prefix, major, &cancel).await? {
-        return Ok(java);
-    }
-    for path in candidatos_sistema() {
-        match inspeccionar(&path, major, false, &cancel).await {
-            Ok(java) => return Ok(java),
-            Err(Error::Cancelada) => return Err(Error::Cancelada),
-            Err(_) => {}
+    for compatible in &perfil.majors {
+        if let Some(java) = runtime_guardado(&root, &prefix, *compatible, &cancel).await? {
+            return Ok(java);
         }
+    }
+    if !descarga {
+        // Permitir también runtimes guardados para otros componentes compatibles.
+        let mut prefixes = BTreeSet::new();
+        for entry in fs::read_dir(&root)
+            .map_err(|_| Error::Disco)?
+            .take(256)
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some((component, _)) = name.split_once(&format!("-{platform}-")) {
+                if componente_valido(component) {
+                    prefixes.insert(format!("{component}-{platform}-"));
+                }
+            }
+        }
+        for prefix in prefixes {
+            for compatible in &perfil.majors {
+                if let Some(java) = runtime_guardado(&root, &prefix, *compatible, &cancel).await? {
+                    return Ok(java);
+                }
+            }
+        }
+        return Err(Error::DescargaDesactivada(major));
     }
     anunciar(&progress, "Obteniendo Java de Mojang");
     let client = client()?;
@@ -1078,9 +1538,10 @@ pub async fn preparar(
         .and_then(|p| p.get(component))
         .and_then(|r| {
             r.iter()
-                .find(|r| major_version(&r.version.name) == Some(major))
+                .find(|r| major_version(&r.version.name).is_some_and(|m| perfil.acepta(m)))
         })
         .ok_or(Error::NoDisponible(major))?;
+    let major = major_version(&runtime.version.name).ok_or(Error::Datos)?;
     if runtime.manifest.size > MAX_MANIFEST as u64 {
         return Err(Error::Datos);
     }
@@ -1438,6 +1899,343 @@ mod tests {
         let temp_root = fs::canonicalize(std::env::temp_dir()).unwrap();
         assert_eq!(absolute_base.parent(), Some(temp_root.as_path()));
         fs::remove_dir_all(absolute_base).unwrap();
+    }
+
+    #[test]
+    fn deteccion_ordenada_elimina_duplicados_y_rutas_ausentes() {
+        let root = std::env::temp_dir().join(format!("icaro-java-detect-{}", nonce().unwrap()));
+        for name in ["jdk-b", "jdk-a"] {
+            let bin = root.join(name).join("bin");
+            fs::create_dir_all(&bin).unwrap();
+            fs::write(bin.join(nombre_java()), b"fixture").unwrap();
+        }
+        let preferred = root.join("jdk-b/bin").join(nombre_java());
+        let mut paths = vec![preferred.clone()];
+        agregar_instalaciones(&root, &mut paths);
+        let paths = depurar_candidatos(paths);
+        assert_eq!(
+            paths,
+            vec![
+                fs::canonicalize(preferred).unwrap(),
+                fs::canonicalize(root.join("jdk-a/bin").join(nombre_java())).unwrap(),
+            ]
+        );
+        let root = fs::canonicalize(root).unwrap();
+        assert_eq!(
+            root.parent(),
+            Some(fs::canonicalize(std::env::temp_dir()).unwrap().as_path())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn java_local_prioritario_y_respaldo_sin_red() {
+        // Ejecutables aislados: no depende del Java del equipo ni modifica PATH.
+        let root = std::env::temp_dir().join(format!("icaro-java-priority-{}", nonce().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("fixture.rs");
+        fs::write(&source, r#"fn main() {
+            let exe = std::env::current_exe().unwrap();
+            let version = if exe.file_stem().unwrap().to_string_lossy().contains("17") { "17.0.1" } else { "21.0.1" };
+            let args: Vec<_> = std::env::args().skip(1).collect();
+            for arg in &args {
+                if let Some(path) = arg.strip_prefix("-Dtest.capture=") { std::fs::write(path, args.join("\n")).unwrap(); }
+            }
+            if args.iter().any(|arg| arg == "-XX:IcaroInvalidFlag=true") {
+                eprintln!("Unrecognized VM option IcaroInvalidFlag"); std::process::exit(1);
+            }
+            eprintln!("os.arch = {}", std::env::consts::ARCH);
+            eprintln!("openjdk version \"{}\"", version);
+        }"#).unwrap();
+        let local = root.join(if cfg!(windows) {
+            "local21.exe"
+        } else {
+            "local21"
+        });
+        let build = tokio::process::Command::new("rustc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&local)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            build.status.success(),
+            "{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let incompatible = local.with_file_name(if cfg!(windows) {
+            "local17.exe"
+        } else {
+            "local17"
+        });
+        fs::copy(&local, &incompatible).unwrap();
+        let base = root.join("data");
+        let resolve = |candidates: Vec<PathBuf>| {
+            preparar_con_candidatos(
+                &base,
+                21,
+                "java-runtime-delta",
+                None,
+                CancellationToken::new(),
+                |_| {},
+                false,
+                move || candidates,
+            )
+        };
+        let java = resolve(vec![incompatible.clone(), local.clone()])
+            .await
+            .unwrap();
+        assert_eq!(java.executable, fs::canonicalize(&local).unwrap());
+        assert!(!java.managed);
+        assert!(matches!(
+            preparar_con_candidatos(
+                &root.join("sin-java"),
+                21,
+                "java-runtime-delta",
+                None,
+                CancellationToken::new(),
+                |_| {},
+                false,
+                Vec::new
+            )
+            .await,
+            Err(Error::DescargaDesactivada(21))
+        ));
+        assert!(
+            !base.exists(),
+            "Java local no debe crear almacenamiento ni descargar"
+        );
+
+        let bytes = fs::read(&local).unwrap();
+        let manifest = Manifiesto {
+            files: BTreeMap::from([
+                ("bin".into(), Entrada::Directory),
+                (
+                    format!("bin/{}", nombre_java()),
+                    Entrada::File {
+                        downloads: Descargas {
+                            raw: download(&bytes),
+                        },
+                        executable: true,
+                    },
+                ),
+            ]),
+        };
+        let data = serde_json::to_vec(&manifest).unwrap();
+        let managed = base.join("java").join(format!(
+            "java-runtime-delta-{}-{:x}",
+            plataforma().unwrap(),
+            Sha1::digest(&data)
+        ));
+        fs::create_dir_all(managed.join("bin")).unwrap();
+        let managed_exe = managed.join("bin").join(nombre_java());
+        fs::copy(&local, &managed_exe).unwrap();
+        fs::write(managed.join(MANIFEST), data).unwrap();
+        let java = resolve(vec![local.clone()]).await.unwrap();
+        assert_eq!(java.executable, fs::canonicalize(&local).unwrap());
+        assert!(
+            !java.managed,
+            "El sistema tiene prioridad sobre el runtime guardado"
+        );
+        let profile = Perfil {
+            majors: vec![17, 21],
+            component: "java-runtime-delta".into(),
+            prism: true,
+        };
+        let automatic = preparar_perfil_con_candidatos(
+            &base,
+            &profile,
+            None,
+            CancellationToken::new(),
+            |_| {},
+            true,
+            || panic!("Con descargas no se busca Java del sistema"),
+        )
+        .await
+        .unwrap();
+        assert!(automatic.managed);
+        assert_eq!(
+            automatic.executable,
+            fs::canonicalize(&managed_exe).unwrap()
+        );
+        let manual = preparar_perfil_con_candidatos(
+            &base,
+            &profile,
+            Some(&incompatible),
+            CancellationToken::new(),
+            |_| {},
+            true,
+            || panic!("No sustituir selección manual compatible"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(manual.major, 17);
+        let detected = preparar_perfil_con_candidatos(
+            &base,
+            &profile,
+            None,
+            CancellationToken::new(),
+            |_| {},
+            false,
+            || vec![incompatible.clone(), local.clone()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(detected.major, 21);
+        let capture = root.join("argumentos.txt");
+        let config = crate::lanzamiento::Config { memoria_min_mb: 256, memoria_max_mb: 512,
+            argumentos_jvm: format!("-XX:+UseG1GC -XX:MaxMetaspaceSize=256M -Dtest.label=\"dos palabras\" -Dtest.capture=\"{}\"", capture.display()),
+            ..Default::default() };
+        probar(&local, Some(&profile), &config, CancellationToken::new())
+            .await
+            .unwrap();
+        let args = fs::read_to_string(&capture).unwrap();
+        for arg in [
+            "-Xms256M",
+            "-Xmx512M",
+            "-XX:+UseG1GC",
+            "-XX:MaxMetaspaceSize=256M",
+            "-Dtest.label=dos palabras",
+        ] {
+            assert!(args.lines().any(|a| a == arg), "Argumento ausente: {arg}");
+        }
+        let invalid = crate::lanzamiento::Config {
+            argumentos_jvm: "-XX:IcaroInvalidFlag=true".into(),
+            ..config.clone()
+        };
+        assert!(matches!(
+            probar(&local, None, &invalid, CancellationToken::new()).await,
+            Err(Error::PruebaJvm(_))
+        ));
+        let invalid_memory = crate::lanzamiento::Config {
+            memoria_min_mb: 1024,
+            memoria_max_mb: 256,
+            ..config
+        };
+        assert!(matches!(
+            probar(&local, None, &invalid_memory, CancellationToken::new()).await,
+            Err(Error::PruebaJvm(_))
+        ));
+        let fallback = resolve(vec![incompatible.clone()]).await.unwrap();
+        assert!(fallback.managed);
+        assert_eq!(fallback.executable, fs::canonicalize(&managed_exe).unwrap());
+        assert!(matches!(
+            preparar_con_candidatos(
+                &base,
+                21,
+                "java-runtime-delta",
+                Some(&incompatible),
+                CancellationToken::new(),
+                |_| {},
+                false,
+                || panic!("No sustituir Java manual")
+            )
+            .await,
+            Err(Error::Incompatible {
+                requerida: 21,
+                encontrada: 17
+            })
+        ));
+        let root = fs::canonicalize(root).unwrap();
+        assert_eq!(
+            root.parent(),
+            Some(fs::canonicalize(std::env::temp_dir()).unwrap().as_path())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn arquitectura_java_debe_corresponder_a_los_nativos() {
+        assert!(comprobar_arquitectura(std::env::consts::ARCH).is_ok());
+        assert!(matches!(
+            comprobar_arquitectura("desconocida"),
+            Err(Error::Arquitectura { .. })
+        ));
+        if cfg!(target_arch = "x86_64") {
+            assert!(comprobar_arquitectura("amd64").is_ok());
+            assert!(matches!(
+                comprobar_arquitectura("x86"),
+                Err(Error::Arquitectura { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn metadatos_de_perfil_respetan_identidad_y_lista_explicita() {
+        let data = br#"{"uid":"net.minecraft","version":"fixture","formatVersion":1,"compatibleJavaMajors":[17,21],"compatibleJavaName":"java-runtime-delta"}"#;
+        let profile = perfil_metadata(data, "fixture").unwrap();
+        assert!(profile.prism && profile.acepta(17) && profile.acepta(21));
+        assert!(!profile.acepta(25));
+        assert!(perfil_metadata(data, "otra-version").is_err());
+        let empty = br#"{"uid":"net.minecraft","version":"fixture","formatVersion":1,"compatibleJavaMajors":[],"compatibleJavaName":"java-runtime-delta"}"#;
+        assert!(perfil_metadata(empty, "fixture").is_err());
+        let properties = "    java.property = value\n".repeat(80) + "openjdk version \"25.0.1\"\n";
+        assert_eq!(parse_version(&properties).unwrap().0, 25);
+    }
+
+    #[test]
+    fn runtime_oficial_anidado_se_detecta_sin_recorrer_librerias() {
+        let root = std::env::temp_dir().join(format!("icaro-minecraft-java-{}", nonce().unwrap()));
+        let bin = root.join("java-runtime-delta/windows-x64/java-runtime-delta/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join(nombre_java()), b"fixture").unwrap();
+        let library = root.join("lib/unused/bin");
+        fs::create_dir_all(&library).unwrap();
+        fs::write(library.join(nombre_java()), b"No es otro runtime").unwrap();
+        let mut paths = Vec::new();
+        agregar_runtimes_minecraft(&root, &mut paths);
+        assert_eq!(
+            depurar_candidatos(paths),
+            vec![fs::canonicalize(bin.join(nombre_java())).unwrap()]
+        );
+        let root = fs::canonicalize(root).unwrap();
+        assert_eq!(
+            root.parent(),
+            Some(fs::canonicalize(std::env::temp_dir()).unwrap().as_path())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "Ejecuta una JVM local indicada explícitamente en ICARO_QA_JAVA"]
+    async fn prueba_jvm_real_con_memoria_argumentos_y_error() {
+        let path =
+            PathBuf::from(std::env::var_os("ICARO_QA_JAVA").expect("ICARO_QA_JAVA requerido"));
+        let config = crate::lanzamiento::Config {
+            memoria_min_mb: 256,
+            memoria_max_mb: 512,
+            argumentos_jvm: "-XX:+UseG1GC -XX:MaxMetaspaceSize=256M -Dtest.label=\"dos palabras\""
+                .into(),
+            ..Default::default()
+        };
+        let java = probar(&path, None, &config, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(!java.version.is_empty());
+        let invalid = crate::lanzamiento::Config {
+            argumentos_jvm: "-XX:IcaroInvalidFlag=true".into(),
+            ..config
+        };
+        assert!(matches!(
+            probar(&path, None, &invalid, CancellationToken::new()).await,
+            Err(Error::PruebaJvm(_))
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "Consulta de lectura a los metadatos públicos de Prism"]
+    async fn perfil_prism_real_por_version() {
+        let fallback = Perfil {
+            majors: vec![16],
+            component: "java-runtime-alpha".into(),
+            prism: false,
+        };
+        let profile = perfil_minecraft("1.17.1", fallback, &CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(profile.prism);
+        assert!(profile.validar().is_ok());
     }
 
     /// Ejecutar sólo de forma explícita: descarga el runtime oficial en Temp,

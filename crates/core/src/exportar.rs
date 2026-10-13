@@ -345,8 +345,11 @@ pub fn archivo(
         if formato == Formato::Icaro {
             zip.start_file("instance.json", opt)
                 .map_err(|_| "No se pudo escribir el ZIP.")?;
-            zip.write_all(&serde_json::to_vec_pretty(i).map_err(|_| "Metadatos inválidos.")?)
-                .map_err(|_| "No se pudo guardar la configuración.")?;
+            let metadata = metadata_portable(store, i)?;
+            zip.write_all(
+                &serde_json::to_vec_pretty(&metadata).map_err(|_| "Metadatos inválidos.")?,
+            )
+            .map_err(|_| "No se pudo guardar la configuración.")?;
             if let Some(pin) = &loader {
                 zip.start_file("loader.json", opt)
                     .map_err(|_| "No se pudo escribir el ZIP.")?;
@@ -393,7 +396,7 @@ pub fn archivo(
         // La identidad y el icono pertenecen a la instancia, fuera de minecraft.
         let instance_root = store.carpeta(&i.id).map_err(|e| e.to_string())?;
         let metadata_names: &[&str] = if formato == Formato::Icaro {
-            &["instance.cfg", "icon.png", "icono.json"]
+            &["icon.png", "icono.json"]
         } else {
             &["icon.png"]
         };
@@ -600,6 +603,35 @@ pub fn medir(store: &Almacen, id: &str) -> Resultado<Medidas> {
     }
     Ok(sizes)
 }
+fn metadata_portable(store: &Almacen, i: &Instancia) -> Resultado<serde_json::Value> {
+    let mut metadata = serde_json::to_value(i).map_err(|_| "Metadatos inválidos")?;
+    metadata["schema"] = 2.into();
+    if let Some(settings) = store.configuracion(&i.id).map_err(|e| e.to_string())? {
+        let mut portable = serde_json::Map::new();
+        for key in [
+            "java",
+            "heredar",
+            "heredar_memoria",
+            "descarga",
+            "memoria_min",
+            "memoria_max",
+            "metaspace",
+            "argumentos",
+            "java_requiere_seleccion",
+        ] {
+            if let Some(value) = settings.get(key) {
+                portable.insert(key.into(), value.clone());
+            }
+        }
+        if portable.get("java").and_then(|v| v.as_str()).is_some() {
+            portable.insert("java".into(), serde_json::Value::Null);
+            portable.insert("java_requiere_seleccion".into(), true.into());
+        }
+        metadata["configuracion"] = portable.into();
+    }
+    Ok(metadata)
+}
+
 pub fn zip(
     store: &Almacen,
     i: &Instancia,
@@ -655,7 +687,8 @@ pub fn zip(
         zip.start_file("instance.json", opt)
             .map_err(|_| "No se pudo escribir el ZIP.")?;
         zip.write_all(
-            &serde_json::to_vec_pretty(i).map_err(|_| "No se pudo guardar la configuración.")?,
+            &serde_json::to_vec_pretty(&metadata_portable(store, i)?)
+                .map_err(|_| "No se pudo guardar la configuración.")?,
         )
         .map_err(|_| "No se pudo escribir el ZIP.")?;
         for (path, name, _) in list {
@@ -785,6 +818,12 @@ mod tests {
     fn zip_arbol_exporta_ambos_formatos_y_conserva_destinos_existentes() {
         use std::io::Read;
         let (root, store, i) = fixture();
+        store.guardar_configuracion(&i.id,&serde_json::json!({"java":"C:/Java/private/java.exe","memoria_max":8192,"heredar":false,"dato_local":"C:/private"})).unwrap();
+        fs::write(
+            store.carpeta(&i.id).unwrap().join("instance.cfg"),
+            b"Local=C:/private",
+        )
+        .unwrap();
         let mut a = arbol(&store, &i.id).unwrap();
         a.seleccionar(Seleccion::Compartir);
         let target = root.join("out/icaro.zip");
@@ -795,7 +834,18 @@ mod tests {
         .unwrap();
         assert_eq!(avances.last(), Some(&(13, 13)));
         let mut archive = zip::ZipArchive::new(fs::File::open(&target).unwrap()).unwrap();
-        assert!(archive.by_name("instance.json").is_ok());
+        let mut metadata = String::new();
+        archive
+            .by_name("instance.json")
+            .unwrap()
+            .read_to_string(&mut metadata)
+            .unwrap();
+        assert!(!metadata.contains("C:/"));
+        assert!(archive.by_name("instance.cfg").is_err());
+        let metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(metadata["configuracion"]["memoria_max"], 8192);
+        assert_eq!(metadata["configuracion"]["java_requiere_seleccion"], true);
+        assert!(!metadata["configuracion"]["heredar"].as_bool().unwrap());
         assert!(archive.by_name("minecraft/mods/a.jar").is_ok());
         assert!(archive.by_name("minecraft/saves/Mundo/level.dat").is_err());
         drop(archive);
