@@ -15,5 +15,7 @@
 | [Implementación pendiente](pendientes-implementacion.md) | Límites actuales y criterios para completar las funciones restantes |
 | [Actualizaciones del launcher](actualizaciones-launcher.md) | Pantalla, descarga verificada y contrato de publicación de releases portables |
 | [Cuenta y estudio de skin](cuenta.md) | Pantallas de cuenta, estados de sesión y cómo abrirlos en la maqueta |
+| [Servidores y ZeroTier](servidores.md) | Lista real, conexión por instancia, detección de redes y límites de sincronización |
+| [Instalador de Windows](instalador-windows.md) | Alcance pendiente, empaquetado, conservación de datos y validación |
 | [Movimiento](movimiento.md) | Animaciones del launcher, visor y opción de reducir movimiento |
 | [Créditos](creditos.md) |  Atribuciones y licencias de imágenes, tipografías y otros recursos utilizados |

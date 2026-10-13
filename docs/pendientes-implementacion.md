@@ -50,10 +50,22 @@ Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; F
 ## 4. Cuenta, servidores y publicación
 
 - [ ] Completar PantallaCuenta y EstudioSkin con la composición original y acciones reales.
-- [ ] Implementar servidores y sincronización de mods. Por ahora Servidores muestra EnConstruccion en modo real.
+- [ ] Completar el recorrido de servidores, ZeroTier y sincronización descrito abajo. La lista, consulta de estado, conexión con una instancia y detección de ZeroTier ya están conectadas; falta gestión de pertenencia a redes y sincronización.
 - [ ] Resolver la integración opcional de CurseForge cuando exista acceso válido a su API y condiciones de distribución.
 - [ ] Completar el traslado de la raíz de datos y la bandeja, y revisar los comportamientos de cierre; tamaños, caché, rotación y recuperación de operaciones ya están conectados.
 - [ ] Publicar el ejecutable y los metadatos de actualización y probar una actualización completa. La comprobación y descarga del actualizador ya están conectadas; ver el [contrato de publicación](actualizaciones-launcher.md).
+
+### Alcance de Servidores, ZeroTier y sincronización
+
+El [roadmap general](../README.md#servidores-zerotier-y-sincronización) cuenta ocho tareas separadas para este recorrido. La lista reutiliza las tarjetas existentes con datos reales; la detección de ZeroTier consulta su servicio y redes. Las pantallas de unirse a redes y sincronización todavía contienen ejemplos y no se habilitan en este recorrido.
+
+**Servidores:** ya se persisten dirección, puerto e instancia, se consulta disponibilidad y datos publicados y se prepara el lanzamiento hacia el servidor. Falta la validación de conexión dentro del juego con equipos reales y resolver DNS SRV en las consultas de estado. Los servidores directos deben poder utilizarse sin ZeroTier.
+
+**ZeroTier:** la detección de instalación y consulta acotada de versión, estado y redes están conectadas; servicio no consultable se informa sin inventar resultados. Falta gestionar la pertenencia a una red por su ID, distinguir la espera de autorización y mostrar la IP asignada. Informar ausencia, permisos insuficientes y fallos de conexión; ofrecer salida de la red. La creación y administración de redes y miembros requiere definir su integración antes de habilitar los botones de la maqueta.
+
+**Sincronización:** definir cómo publica el servidor o anfitrión un manifiesto de mods con versiones, hashes y fuentes de descarga. La lista de jugadores o el estado de Minecraft no proporcionan por sí solos ese inventario. Comparar contra la instancia, mostrar los cambios antes de aplicarlos y conservar mods exclusivos de cliente y archivos locales ajenos. Verificar descargas, preparar cambios con respaldo y permitir cancelar o recuperar un fallo. Reutilizar la gestión de mods y los componentes de revisión existentes.
+
+**Criterio de finalización:** desde equipos reales, guardar un servidor, conectar directamente o mediante una red ZeroTier autorizada, revisar y sincronizar mods, jugar y reconectar. Comprobar en Windows y Arch Linux los errores de servicio, autorización pendiente, manifiesto incompatible y descarga interrumpida sin perder los archivos anteriores.
 
 ## 5. Validación y diseño
 
@@ -61,6 +73,15 @@ Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; F
 - [ ] Revisar foco, teclado, ventanas pequeñas, escala, ambos temas, metales, rendimiento y virtualización.
 - [ ] Completar las transiciones y efectos pendientes del System Design, respetando Reducir movimiento.
 - [ ] Validar el empaquetado y los recorridos completos con archivos reales antes de la primera publicación.
+
+## 6. Instalador de Windows y distribución
+
+- [ ] Crear un instalador por usuario, con identidad e icono de Ícaro, accesos directos y registro de desinstalación.
+- [ ] Separar la carpeta del programa de los datos de usuario; desinstalar conserva instancias, ajustes y cuentas.
+- [ ] Automatizar la compilación del instalador y del portable con versiones consistentes, requisitos revisados y hashes reales.
+- [ ] Validar instalación limpia, actualización, reinstalación y desinstalación en un equipo de prueba.
+
+Las tres casillas del roadmap general agrupan creación, empaquetado y validación. El instalador no sustituye los assets portables y latest.json que necesita el actualizador actual. No se habilitará actualización instalada como verificada antes de probarla. Ver [instalador de Windows](instalador-windows.md).
 
 ## Correcciones recientes
 

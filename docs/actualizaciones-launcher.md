@@ -1,5 +1,7 @@
 # Actualizaciones de Icaro Launcher
 
+El [instalador de Windows](instalador-windows.md) está incorporado al roadmap como trabajo pendiente. Su creación y validación no equivalen a publicar una release ni a validar el actualizador portable en una instalación nueva.
+
 La pantalla sigue `ActualizacionLauncher` del System Design: Saturno en el lateral, versión y tamaño reales, notas agrupadas y acciones **Actualizar ahora**, **Al cerrar Icaro Launcher** y **Más tarde**. Se abre desde **Ajustes → Acerca de → Actualización**; la comprobación por sí sola no interrumpe al usuario. Una nueva versión se anuncia con el banner informativo existente.
 
 La comprobación consulta las releases estables de `00faithlss/Icaro-launcher` en la API oficial de GitHub. No ofrece borradores, versiones previas ni versiones iguales o anteriores. Si el repositorio todavía no tiene releases, informa que no hay una versión publicada más reciente; no usa los ejemplos 1.3 y 1.2.4 del diseño como versiones reales.

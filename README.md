@@ -5,9 +5,9 @@ Launcher de Minecraft escrito en Rust, para Windows y Linux.
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
-[![Avance del roadmap: 71% — 52 de 73 tareas completadas](docs/assets/progreso.svg)](#roadmap)
+[![Avance del roadmap: 67% — 56 de 83 tareas completadas](docs/assets/progreso.svg)](#roadmap)
 
-**71% del roadmap implementado · 52/73 tareas.** Cada casilla tiene el mismo peso.
+**67% del roadmap implementado · 56/83 tareas.** Cada casilla tiene el mismo peso.
 <!-- avance:fin -->
 
 Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da nombre al proyecto. Hefesto, el herrero, está en los ajustes, Atlas en el mundo y Faetón en los errores. Hay más figuras repartidas por el launcher, y descubrirlas es parte de usarlo.
@@ -151,6 +151,14 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Pantalla `ActualizacionLauncher`, comprobación de releases y descarga portable verificada con SHA-256; aplicar ahora o al cerrar en Windows x86-64.
 - [ ] Publicar releases con ejecutable y `latest.json`, y probar una actualización completa. [Contrato de publicación](docs/actualizaciones-launcher.md).
 
+### Instalador de Windows y distribución
+
+- [ ] Crear un instalador de Windows por usuario con icono, accesos directos y desinstalador; conservar instancias y datos al desinstalar.
+- [ ] Automatizar la compilación y el empaquetado del instalador y del ejecutable portable, con versiones coherentes, requisitos comprobados y hashes verificables.
+- [ ] Validar instalación limpia, actualización, reinstalación y desinstalación en Windows, incluida la conservación de cuentas, ajustes e instancias.
+
+El instalador y las releases son entregas separadas. El contrato y las decisiones pendientes se describen en la [guía de distribución para Windows](docs/instalador-windows.md).
+
 ### Próximas entregas, en orden
 
 Consulta el [detalle de implementación pendiente](docs/pendientes-implementacion.md) para el alcance y las comprobaciones de loaders oficiales, importación de packs y funciones restantes.
@@ -159,14 +167,26 @@ Consulta el [detalle de implementación pendiente](docs/pendientes-implementacio
 2. **Validación multiplataforma:** repetir el recorrido de Vanilla en Arch Linux y completar las opciones de cierre en Windows; el lanzamiento real en Windows ya fue confirmado.
 3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. El cambio de versión ya permite respaldo, copia y actualización de mods; los instaladores de Quilt, Forge y NeoForge siguen pendientes.
 4. **Editor completo:** conectar mundos, prioridad de resourcepacks, otros motores de shaders, integridad y eliminación/recuperación de archivos y capturas; completar el historial persistente y unificar los instaladores en la cola global. Recursos, shaders, capturas y consola ya tienen sus recorridos reales descritos arriba.
-5. **Cuenta y servicios adicionales:** completar Cuenta y Estudio de skin, servidores y proveedores opcionales.
-6. **Primera publicación:** validar Windows y Arch Linux, rendimiento, teclado, ventanas angostas y empaquetado.
+5. **Servidores y servicios adicionales:** conectar servidores con una instancia compatible, detectar ZeroTier y gestionar la conexión a su red, comparar y sincronizar mods con revisión previa. Completar Cuenta y Estudio de skin y proveedores opcionales.
+6. **Primera publicación:** crear y validar el instalador de Windows y el paquete portable; automatizar artefactos, requisitos y hashes. Validar Windows y Arch Linux, rendimiento, teclado y ventanas angostas.
+
+### Servidores, ZeroTier y sincronización
+
+Servidores ya guarda una lista real, consulta el estado de Minecraft y lanza la instancia vinculada hacia su dirección. ZeroTier se detecta y consulta mediante su CLI oficial; unirse a nuevas redes y sincronizar mods siguen pendientes. El recorrido completo se validará con equipos reales en Windows y Arch Linux. Consulta la [guía de servidores](docs/servidores.md).
+
+- [x] Añadir, editar, eliminar y guardar servidores reales con dirección, puerto e instancia asociada.
+- [x] Consultar el estado del servidor y mostrar disponibilidad, latencia, versión y jugadores cuando el servidor entregue esos datos; DNS ordinario e IP conectados, resolución SRV pendiente.
+- [x] Lanzar la instancia elegida y conectar al servidor con comprobación de compatibilidad de Minecraft y loader.
+- [x] Detectar ZeroTier instalado, su versión, servicio y estado real; explicar los casos ausente, detenido o sin acceso.
+- [ ] Conectar una red ZeroTier por su ID y mostrar pertenencia, autorización e IP asignada; permitir salir de la red y recuperarse de errores.
+- [ ] Comparar los mods de la instancia con un manifiesto compartido por el servidor o anfitrión: faltantes, versiones distintas y archivos que sobran, respetando mods exclusivos de cliente.
+- [ ] Revisar y aplicar la sincronización con hashes, respaldo, cancelación y recuperación ante fallos; conservar archivos locales ajenos y permitir sincronizar y jugar.
+- [ ] Validar el recorrido de servidor directo y ZeroTier, incluida sincronización y reconexión, con equipos reales en Windows y Arch Linux.
 
 ### Integraciones y validaciones restantes
 
 - [ ] Integración opcional de CurseForge, sujeta al acceso a su API y a las condiciones de distribución.
-- [ ] Conexión a servidores y sincronización de mods con un servidor.
-- [ ] Red privada y bandeja del sistema; publicar los artefactos y validar la actualización del propio launcher de extremo a extremo.
+- [ ] Bandeja del sistema y comportamiento al cerrar el launcher mientras el juego sigue abierto.
 - [ ] Verificación y reparación de instancias e integración de la revisión de archivos de origen desconocido con los importes; la revisión manual de archivos ya está conectada.
 - [ ] Completar adaptación a ventanas angostas, escala, foco y navegación por teclado según el diseño original.
 - [ ] Persistir las preferencias generales y conectar sus efectos reales: idioma, inicio con el sistema y comportamiento al jugar/cerrar.
