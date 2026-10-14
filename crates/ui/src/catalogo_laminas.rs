@@ -60,6 +60,7 @@ laminas! {
     HuidaCiudad => "huida-ciudad",
     FaetonPaisaje => "faeton-paisaje",
     HilosMascara => "hilos-mascara",
+    HilosSol => "hilos-sol",
     // Láminas de fondo negro: iguales en ambos temas.
     Umbral => "umbral" @unica,
     Mano => "mano" @unica,

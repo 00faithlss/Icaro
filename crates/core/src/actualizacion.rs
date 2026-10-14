@@ -2,7 +2,7 @@
 // Copyright (C) 2026 00faithlss
 
 //! Actualizaciones publicadas: metadatos de GitHub, descarga acotada y SHA-256.
-//! Solo admite el ejecutable portable declarado en latest.json de una release estable.
+//! Admite el portable o el instalador declarado en latest.json de una release.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -24,6 +24,8 @@ pub struct Nota {
 #[derive(Debug, Clone, Deserialize)]
 struct Manifest {
     version: String,
+    #[serde(default)]
+    compilacion: u64,
     #[serde(default)]
     notas: Vec<Nota>,
     plataformas: BTreeMap<String, Artefacto>,
@@ -50,6 +52,10 @@ struct Asset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Disponible {
     pub version: String,
+    #[serde(default)]
+    pub compilacion: u64,
+    #[serde(default)]
+    instalador: bool,
     pub notas: Vec<Nota>,
     pub bytes: u64,
     url: String,
@@ -58,16 +64,51 @@ pub struct Disponible {
 #[derive(Debug, Clone)]
 pub struct Preparada {
     pub version: String,
+    pub compilacion: u64,
     archivo: PathBuf,
     sha256: String,
     bytes: u64,
+    instalador: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Resultado {
+    esquema: u8,
+    pub version: String,
+    pub compilacion: u64,
+    pub correcto: bool,
+}
+
+fn ruta_resultado(exe: &Path) -> Result<PathBuf, Error> {
+    let exe = exe.canonicalize().map_err(|_| Error::Disco)?;
+    let identidad = exe.to_string_lossy().to_lowercase();
+    Ok(carpeta().join(format!("resultado-{:x}.json", Sha256::digest(identidad.as_bytes()))))
+}
+
+/// Resultado de esta instalación: vuelve a la misma pantalla al reabrir Ícaro.
+pub fn tomar_resultado(version: &str, compilacion: u64) -> Option<Resultado> {
+    let exe = std::env::current_exe().ok()?;
+    let path = ruta_resultado(&exe).ok()?;
+    leer_resultado(&path, version, compilacion).ok()
+}
+fn leer_resultado(path: &Path, version: &str, compilacion: u64) -> Result<Resultado, Error> {
+    use std::io::Read;
+    rechazar_enlaces(path)?;
+    let mut bytes = vec![];
+    std::fs::File::open(path).map_err(|_| Error::Disco)?.take(4097).read_to_end(&mut bytes).map_err(|_| Error::Disco)?;
+    if bytes.len() > 4096 { return Err(Error::Datos); }
+    let mut resultado: Resultado = serde_json::from_slice(&bytes).map_err(|_| Error::Datos)?;
+    if resultado.esquema != 1 || numeros(&resultado.version).is_none() { return Err(Error::Datos); }
+    resultado.correcto &= resultado.version == version && resultado.compilacion == compilacion;
+    std::fs::remove_file(path).map_err(|_| Error::Disco)?;
+    Ok(resultado)
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
     #[error("No se pudo comprobar la actualización. Revisa tu conexión e inténtalo de nuevo.")]
     Red,
-    #[error("La versión publicada aún no incluye una actualización portable para este equipo.")]
+    #[error("La versión publicada aún no incluye una actualización para este equipo.")]
     SinArtefacto,
     #[error("La información de la actualización no es válida.")]
     Datos,
@@ -99,6 +140,23 @@ fn numeros(v: &str) -> Option<[u64; 3]> {
         partes[2].parse().ok()?,
     ])
 }
+fn tag(version: &str, compilacion: u64) -> String {
+    if compilacion == 0 { format!("v{version}") } else { format!("v{version}-build.{compilacion}") }
+}
+
+/// Una instalación registrada solo se actualiza con su instalador completo.
+pub fn instalada() -> bool {
+    #[cfg(windows)]
+    {
+        let Ok(exe) = std::env::current_exe() else { return false; };
+        let registry = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        let Ok(key) = registry.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{A758C875-3CA1-42F0-A1E8-85F1D58F7E42}_is1") else { return false; };
+        let Ok(location) = key.get_value::<String, _>("InstallLocation") else { return false; };
+        return matches!((exe.parent().and_then(|p| p.canonicalize().ok()), Path::new(&location).canonicalize().ok()), (Some(executable), Some(installed)) if executable == installed);
+    }
+    #[cfg(not(windows))]
+    false
+}
 fn asset_valido(url: &str, tag: &str, nombre: &str) -> bool {
     if nombre.is_empty()
         || !nombre
@@ -109,25 +167,35 @@ fn asset_valido(url: &str, tag: &str, nombre: &str) -> bool {
     }
     url == format!("https://github.com/00faithlss/Icaro-launcher/releases/download/{tag}/{nombre}")
 }
+#[cfg(test)]
 fn resolver(
     release: Release,
     manifest: Manifest,
     actual: &str,
+) -> Result<Option<Disponible>, Error> {
+    resolver_compilacion(release, manifest, actual, 0, false)
+}
+fn resolver_compilacion(
+    release: Release,
+    manifest: Manifest,
+    actual: &str,
+    compilacion_actual: u64,
+    instalador: bool,
 ) -> Result<Option<Disponible>, Error> {
     if release.draft || release.prerelease {
         return Ok(None);
     }
     let actual = numeros(actual).ok_or(Error::Datos)?;
     let version = numeros(&manifest.version).ok_or(Error::Datos)?;
-    if numeros(&release.tag_name) != Some(version) {
+    if release.tag_name != tag(&manifest.version, manifest.compilacion) {
         return Err(Error::Datos);
     }
-    if version <= actual {
+    if version < actual || (version == actual && manifest.compilacion <= compilacion_actual) {
         return Ok(None);
     }
     let artefacto = manifest
         .plataformas
-        .get(PLATAFORMA)
+        .get(if instalador { "windows-x86_64-setup" } else { PLATAFORMA })
         .ok_or(Error::SinArtefacto)?;
     if !artefacto.archivo.ends_with(".exe")
         || artefacto.sha256.len() != 64
@@ -152,6 +220,8 @@ fn resolver(
     }
     Ok(Some(Disponible {
         version: manifest.version.trim_start_matches('v').into(),
+        compilacion: manifest.compilacion,
+        instalador,
         notas: manifest.notas,
         bytes: asset.size,
         url: asset.browser_download_url.clone(),
@@ -161,6 +231,9 @@ fn resolver(
 
 /// Sin releases publicadas (404) es un resultado normal, no una actualización ficticia.
 pub async fn comprobar(actual: &str) -> Result<Option<Disponible>, Error> {
+    comprobar_compilacion(actual, 0).await
+}
+pub async fn comprobar_compilacion(actual: &str, compilacion_actual: u64) -> Result<Option<Disponible>, Error> {
     let client = cliente()?;
     let respuesta = client
         .get(RELEASE)
@@ -178,10 +251,6 @@ pub async fn comprobar(actual: &str) -> Result<Option<Disponible>, Error> {
         .await
         .map_err(|_| Error::Datos)?;
     if release.draft || release.prerelease {
-        return Ok(None);
-    }
-    let version = numeros(&release.tag_name).ok_or(Error::Datos)?;
-    if version <= numeros(actual).ok_or(Error::Datos)? {
         return Ok(None);
     }
     let asset = release
@@ -205,7 +274,7 @@ pub async fn comprobar(actual: &str) -> Result<Option<Disponible>, Error> {
     let manifest = crate::http::body_json(respuesta, "GitHub", 1024 * 1024)
         .await
         .map_err(|_| Error::Datos)?;
-    resolver(release, manifest, actual)
+    resolver_compilacion(release, manifest, actual, compilacion_actual, instalada())
 }
 
 pub fn carpeta() -> PathBuf {
@@ -311,9 +380,11 @@ pub async fn descargar<F: Fn(u64, u64)>(d: Disponible, progreso: F) -> Result<Pr
             .map_err(|_| Error::Disco)?;
         Ok(Preparada {
             version: d.version,
+            compilacion: d.compilacion,
             archivo: destino,
             sha256: d.sha256,
             bytes: d.bytes,
+            instalador: d.instalador,
         })
     }
     .await;
@@ -333,7 +404,7 @@ fn validar_descarga(d: &Disponible) -> Result<(), Error> {
         || url.fragment().is_some()
         || partes.len() != 6
         || partes[..4] != ["00faithlss", "Icaro-launcher", "releases", "download"]
-        || numeros(partes[4]) != numeros(&d.version)
+        || partes[4] != tag(&d.version, d.compilacion)
         || numeros(&d.version).is_none()
         || !partes[5].ends_with(".exe")
         || !asset_valido(&d.url, partes[4], partes[5])
@@ -379,11 +450,12 @@ pub fn aplicar(preparada: &Preparada, reiniciar: bool) -> Result<(), Error> {
     }
     let destino = std::env::current_exe().map_err(|_| Error::Disco)?;
     rechazar_enlaces(&destino)?;
-    lanzar(&origen, &destino, esperado, reiniciar)
+    if preparada.instalador != instalada() { return Err(Error::Datos); }
+    lanzar(&origen, &destino, esperado, reiniciar, preparada)
 }
 
 #[cfg(windows)]
-fn lanzar(origen: &Path, destino: &Path, hash: &str, reiniciar: bool) -> Result<(), Error> {
+fn lanzar(origen: &Path, destino: &Path, hash: &str, reiniciar: bool, preparada: &Preparada) -> Result<(), Error> {
     use std::io::Write;
     use std::os::windows::process::CommandExt;
     let mut aleatorio = [0u8; 16];
@@ -420,27 +492,35 @@ fn lanzar(origen: &Path, destino: &Path, hash: &str, reiniciar: bool) -> Result<
     .arg("-Target")
     .arg(destino)
     .arg("-Hash")
-    .arg(hash);
+    .arg(hash)
+    .arg("-Outcome")
+    .arg(ruta_resultado(destino)?)
+    .arg("-Version")
+    .arg(&preparada.version)
+    .arg("-BuildNumber")
+    .arg(preparada.compilacion.to_string());
     if reiniciar {
         cmd.arg("-Restart");
     }
+    if preparada.instalador { cmd.arg("-Installer"); }
     cmd.creation_flags(0x08000000)
         .spawn()
         .map_err(|_| Error::Disco)?;
     Ok(())
 }
 #[cfg(not(windows))]
-fn lanzar(_: &Path, _: &Path, _: &str, _: bool) -> Result<(), Error> {
+fn lanzar(_: &Path, _: &Path, _: &str, _: bool, _: &Preparada) -> Result<(), Error> {
     Err(Error::Plataforma)
 }
 
-const SCRIPT: &str = r#"param([int]$ProcessId, [string]$Source, [string]$Target, [string]$Hash, [switch]$Restart)
+const SCRIPT: &str = r#"param([int]$ProcessId, [string]$Source, [string]$Target, [string]$Hash, [switch]$Restart, [switch]$Installer, [string]$Outcome, [string]$Version, [UInt64]$BuildNumber)
 $ErrorActionPreference = 'Stop'
 $taskBackup = $Target + '.icaro-anterior-' + [Guid]::NewGuid().ToString('N')
 $taskNew = $Target + '.icaro-nuevo-' + [Guid]::NewGuid().ToString('N')
 $taskSourceStream = $null
 $taskOutputStream = $null
 $taskReplaced = $false
+$taskSuccess = $false
 function Assert-RegularPath([string]$taskPath) {
     $taskCheck = [IO.Path]::GetFullPath($taskPath)
     while ($taskCheck) {
@@ -463,6 +543,15 @@ try {
     $taskActualHash = [BitConverter]::ToString($taskAlgorithm.ComputeHash($taskSourceStream)).Replace('-', '')
     $taskAlgorithm.Dispose()
     if ($taskActualHash -ne $Hash) { throw 'Integridad' }
+    if ($Installer) {
+        $taskInstallDir = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Target))
+        Assert-RegularPath $taskInstallDir
+        $taskLog = $Source + '.install.log'
+        $taskSetup = Start-Process -FilePath $Source -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/SP-','/NORESTART','/NOCLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS',('/DIR="' + $taskInstallDir + '"'),('/LOG="' + $taskLog + '"')) -WindowStyle Hidden -Wait -PassThru
+        if ($taskSetup.ExitCode -ne 0) { throw ('Instalador: ' + $taskSetup.ExitCode) }
+        $taskSuccess = $true
+        return
+    }
     $taskSourceStream.Position = 0
     $taskOutputStream = [IO.File]::Open($taskNew, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
     $taskSourceStream.CopyTo($taskOutputStream)
@@ -480,15 +569,14 @@ try {
         } catch { Start-Sleep -Milliseconds 250 }
     }
     if (-not $taskReplaced) { throw 'No se pudo reemplazar el launcher' }
-    if ($Restart) { Start-Process -FilePath $Target -WindowStyle Hidden }
+    $taskSuccess = $true
 } catch {
     $taskFailure = $_.Exception.Message
     if ($taskReplaced -and (Test-Path -LiteralPath $taskBackup)) {
         try {
             Assert-RegularPath $taskBackup
             Assert-RegularPath $Target
-            [IO.File]::Replace($taskBackup, $Target, $null)
-            if ($Restart) { Start-Process -FilePath $Target -WindowStyle Hidden }
+            [IO.File]::Replace($taskBackup, $Target, [NullString]::Value)
         } catch { }
     }
     try {
@@ -502,18 +590,71 @@ try {
 } finally {
     if ($taskOutputStream) { $taskOutputStream.Dispose() }
     if ($taskSourceStream) { $taskSourceStream.Dispose() }
+    if ($Outcome) {
+        $taskReceiptTemp = $Outcome + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+        try {
+            Assert-RegularPath $Outcome
+            Assert-RegularPath $taskReceiptTemp
+            $taskReceipt = @{esquema=1;version=$Version;compilacion=$BuildNumber;correcto=$taskSuccess} | ConvertTo-Json -Compress
+            [IO.File]::WriteAllText($taskReceiptTemp, $taskReceipt, [Text.UTF8Encoding]::new($false))
+            if (Test-Path -LiteralPath $Outcome) { [IO.File]::Replace($taskReceiptTemp, $Outcome, [NullString]::Value) }
+            else { [IO.File]::Move($taskReceiptTemp, $Outcome) }
+        } catch { }
+    }
+    # Tanto éxito como fallo vuelven al launcher; no aparece otro asistente.
+    if ($Restart -and (Test-Path -LiteralPath $Target)) { Start-Process -FilePath $Target -WindowStyle Normal }
 }
 "#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct ArchivoResultado(PathBuf);
+    impl ArchivoResultado {
+        fn nuevo(bytes: &[u8]) -> Self {
+            let mut id = [0u8; 16];
+            getrandom::fill(&mut id).unwrap();
+            let nombre: String = id.iter().map(|b| format!("{b:02x}")).collect();
+            let ruta = std::env::temp_dir().join(format!("icaro-resultado-{nombre}.json"));
+            use std::io::Write;
+            let mut archivo = std::fs::OpenOptions::new().create_new(true).write(true).open(&ruta).unwrap();
+            archivo.write_all(bytes).unwrap();
+            Self(ruta)
+        }
+    }
+    impl Drop for ArchivoResultado {
+        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+    }
+    #[test]
+    fn el_resultado_se_consume_una_sola_vez_y_solo_confirma_el_binario_esperado() {
+        let bytes = br#"{"esquema":1,"version":"0.2.0","compilacion":42,"correcto":true}"#;
+        let archivo = ArchivoResultado::nuevo(bytes);
+        assert!(leer_resultado(&archivo.0, "0.2.0", 42).unwrap().correcto);
+        assert!(!archivo.0.exists());
+        assert!(leer_resultado(&archivo.0, "0.2.0", 42).is_err());
+        for (version, build) in [("0.1.0", 42), ("0.2.0", 41)] {
+            let archivo = ArchivoResultado::nuevo(bytes);
+            assert!(!leer_resultado(&archivo.0, version, build).unwrap().correcto);
+        }
+        let archivo = ArchivoResultado::nuevo(br#"{"esquema":1,"version":"0.2.0","compilacion":42,"correcto":false}"#);
+        assert!(!leer_resultado(&archivo.0, "0.2.0", 42).unwrap().correcto);
+    }
+    #[test]
+    fn no_acepta_resultados_corruptos_ni_excesivos() {
+        for bytes in [br#"{"esquema":2,"version":"0.2.0","compilacion":42,"correcto":true}"#.as_slice(),
+            br#"{"esquema":1,"version":"invalid","compilacion":42,"correcto":true}"#,
+            b"{broken", &[b' '; 4097]] {
+            let archivo = ArchivoResultado::nuevo(bytes);
+            assert!(matches!(leer_resultado(&archivo.0,"0.2.0",42),Err(Error::Datos)));
+        }
+    }
     fn datos() -> (Release, Manifest) {
         let release = Release { tag_name: "v0.2.0".into(), draft: false, prerelease: false,
             assets: vec![Asset { name: "icaro-windows-x86_64.exe".into(), size: 200,
                 browser_download_url: "https://github.com/00faithlss/Icaro-launcher/releases/download/v0.2.0/icaro-windows-x86_64.exe".into() }] };
         let manifest = Manifest {
             version: "0.2.0".into(),
+            compilacion: 0,
             notas: vec![Nota {
                 tipo: "mejora".into(),
                 texto: "Consola más rápida.".into(),
@@ -568,5 +709,31 @@ mod tests {
         assert!(validar_descarga(&d).is_err());
         d.url = "https://github.com/00faithlss/Icaro-launcher/releases/download/v0.3.0/icaro.exe".into();
         assert!(validar_descarga(&d).is_err());
+    }
+    #[test]
+    fn una_compilacion_nueva_de_la_misma_version_se_actualiza_sin_downgrade() {
+        let (mut r, mut m) = datos();
+        m.compilacion = 42;
+        r.tag_name = tag(&m.version, m.compilacion);
+        r.assets[0].browser_download_url = format!("https://github.com/00faithlss/Icaro-launcher/releases/download/{}/{}", r.tag_name, r.assets[0].name);
+        let d = resolver_compilacion(r.clone(), m.clone(), "0.2.0", 41, false).unwrap().unwrap();
+        assert_eq!(d.compilacion, 42);
+        assert!(validar_descarga(&d).is_ok());
+        assert!(resolver_compilacion(r.clone(), m.clone(), "0.2.0", 42, false).unwrap().is_none());
+        assert!(resolver_compilacion(r, m, "0.3.0", 0, false).unwrap().is_none());
+    }
+    #[test]
+    fn la_instalacion_exige_el_setup_y_no_sustituye_solo_el_portable() {
+        let (r, m) = datos();
+        assert!(matches!(resolver_compilacion(r, m, "0.1.0", 0, true), Err(Error::SinArtefacto)));
+        let (mut r, mut m) = datos();
+        let mut setup = m.plataformas[PLATAFORMA].clone();
+        setup.archivo = "icaro-setup.exe".into();
+        m.plataformas.insert("windows-x86_64-setup".into(), setup.clone());
+        r.assets.push(Asset {name:setup.archivo.clone(),size:120,browser_download_url:format!("https://github.com/00faithlss/Icaro-launcher/releases/download/v0.2.0/{}",setup.archivo)});
+        let d = resolver_compilacion(r, m, "0.1.0", 0, true).unwrap().unwrap();
+        assert!(d.instalador);
+        assert_eq!(d.bytes,120);
+        assert!(validar_descarga(&d).is_ok());
     }
 }

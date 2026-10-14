@@ -25,7 +25,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 - [x] Menú de Mods anclado al botón y reposicionado al maximizar; Agregar acepta ZIP de recursos/shaders beta o de otra versión; ArchivosNoVerificados limita la lámina y usa interlineado absoluto.
 - [x] Tiendas de mods, resourcepacks y shaders con composición y cesta compartidas; filtros de entorno distinguen cliente, servidor y ambos.
 - [x] Apariencia, insignias, progreso y toasts recuperan los componentes originales y sus estados reales.
-- [x] Servidores muestra EnConstruccion en modo real; la maqueta de servidores permanece separada.
+- [x] Servidores guarda y consulta la lista real y conecta la instancia vinculada; la maqueta permanece separada.
 - [x] Rutas legibles e `instance.json` de esquema 2, migración conservadora de CFG e identificación de archivos no verificados.
 - [x] ExportarInstancia nuevo con árbol, selección por grupos, presets y ZIP Ícaro/Prism.
 - [x] IconoInstancia: editor y menú, imagen/capturas/generado, recorte, estilos y guardado reversible.
@@ -64,16 +64,16 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `Chips`, `Insignia`, `Pestanas`, `Contador`, `Senal` | Implementado | Filtros, estados acompañados de texto, pestañas y contadores usados en las vistas. |
 | `Progreso`, `BloqueCodigo` | Parcial | Bloques por conteos, continuo por bytes, indeterminado, spinner y esqueleto con animación y movimiento reducido. Operaciones reales de mods, Vanilla y Java conectadas; integridad completa pendiente. |
 | `Tabla` | Parcial | Tabla de versiones en la página del proyecto. Falta completar su uso y navegación en las demás tablas del diseño. |
-| `Tarjeta`, `Avatar` | Parcial | Tarjetas y representaciones de respaldo disponibles; iconos de proyectos y creadores desde Modrinth. Falta la textura real de la cuenta y los datos de servidores. |
+| `Tarjeta`, `Avatar` | Parcial | Tarjetas y representaciones de respaldo disponibles; iconos de proyectos y creadores desde Modrinth. La cuenta ya muestra su textura real; falta completar los demás avatares y datos opcionales. |
 | `DeslizadorMemoria` | Parcial | Configuración por instancia guardada; memoria mínima/máxima y Metaspace aplicados al proceso; límites según RAM real en Windows/Linux. Java compatible detectado o descargado. Falta completar recomendaciones y advertencias de reserva para sistema/otras instancias. |
 | `Dialogo`, `MenuContextual`, `Toast` | Implementado | Diálogos con velo y menús. Cola de hasta tres toasts con entrada, fundido, pausa al pasar el cursor, Escape y acciones. Errores con detalle; Deshacer de mods de diez segundos. |
 | `Tooltip` | Parcial | Ayudas disponibles en algunos controles; falta cubrir todos los botones de solo icono y el modo angosto. |
 | `Banda`, `Detalle`, `Lamina`, `Cover` | Implementado | Grabados, recortes, portadas de respaldo y composición de títulos sobre bloques propios. Las capturas reales como portada siguen pendientes. |
 | `Lupa` | Parcial | Utilidades existentes y zoom del visor. La lupa sobre las láminas del launcher todavía no está aplicada. |
 | `ListaVirtual` | Parcial | Selectores de versiones y consola dibujan solo filas visibles; compatibilidad en segundo plano con caché y cuatro destinos simultáneos. Catálogos con paginación; falta extender la virtualización al explorador de archivos. |
-| `ListaReordenable` | Parcial | Hay interacción de orden en la maqueta de servidores. Falta aplicarla a recursos reales y persistir sus prioridades en el juego. |
+| `ListaReordenable` | Parcial | El arrastre de servidores reales guarda el orden al soltar y Escape lo cancela. Falta aplicarla a recursos reales y persistir sus prioridades en el juego. |
 | `SelectorColor` | Pendiente | Falta conectar el selector definido a iconos/colores de instancia y revisar su composición original. |
-| `ZonaSoltar` | Parcial | Hay estados de arrastre en las maquetas. Falta conectar la importación real de packs, recursos y skins con la zona original. |
+| `ZonaSoltar` | Parcial | Hay estados de arrastre en las maquetas. Skins ya valida y carga PNG reales por arrastre; falta conectar la importación local de packs/recursos. |
 
 ## Ventana, bienvenida y sesión
 
@@ -124,16 +124,16 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | --- | --- | --- |
 | `PantallaDescargas`, `ColaDescargas` | Parcial | Cola real de MRPACK/Vanilla/Fabric/Java con pausa, reanudación, cancelación y reintento en las filas originales. Quitar un registro terminado o fallido oculta su progreso sin borrar la instancia ni sus archivos. Falta historial persistente y unificar mods y demás instaladores en la cola global. |
 | `PantallaConsola`, `Consola` | Implementado | Barra interior del diseño con filtros independientes y conteos, búsqueda con resaltado, autoscroll con pausa al subir e Ir al final, copiar/limpiar e iconos. Render de filas visibles, selector por instancia, último registro desde latest.log, exportación TXT y vacío con San Jerónimo. Registros en vivo acotados y credenciales ocultas. |
-| `PantallaServidores`, `TarjetaServidor` | Maqueta | Lista, tarjetas y reordenación disponibles. Falta añadir/guardar servidores reales, consultar su estado y jugar con la instancia elegida. |
-| `RedPrivada`, `SincronizarMods` | Maqueta | Pantallas originales disponibles. Falta conectar red, comparación de manifiestos y sincronización real. |
-| `PantallaCuenta` | A evaluar | La cuenta real usa una vista simplificada; la composición original con skin de frente/espalda, Apolo, capas e historial está en la maqueta. Evaluar su recuperación y conectar datos/acciones reales. |
-| `EstudioSkin` | Maqueta | Composición y controles disponibles; faltan textura, modelo/capas reales, validación de PNG y aplicación a Microsoft/Minecraft. |
+| `PantallaServidores`, `TarjetaServidor` | Parcial | Lista real, PanelLateral de 400 px, edición y eliminación sin borrar la instancia, arrastre persistente, estado y DNS SRV, lanzamiento hacia la dirección vinculada y sincronización previa opcional. Falta validar conexión dentro del juego con equipos reales en Windows/Arch. |
+| `RedPrivada`, `SincronizarMods` | Parcial | Pasos y láminas originales, detección y solicitud de pertenencia a ZeroTier por ID, autorización e IP reales. Servicio del anfitrión y revisión/aplicación exacta de mods de Modrinth con progreso por fila, respaldo y cancelación; prueba HTTP con mods reales. Faltan instalación/elevación automática de ZeroTier, salida desde la interfaz, miembros/controlador y validación con dos equipos. |
+| `PantallaCuenta` | Parcial | Composición original recuperada: Apolo, cuerpo de frente/espalda, perfil/skin reales, historial local y cierre de sesión. Cambiar nombre abre Minecraft.net; gestión de varias cuentas y capes pendiente. |
+| `EstudioSkin` | Parcial | Textura real, modelo clásico/delgado, capas exteriores, rotación, selector/arrastre de PNG, validación completa de 64 × 64 y subida real a Minecraft. Falta prueba manual de subida y selector de capes propias. |
 | `PantallaAjustes`, `FilaAjuste` | Parcial | Índice y filas existentes; los ajustes de Java por instancia se guardan. Falta persistir las preferencias generales y conectar los controles que todavía describen servicios no implementados. |
 | `AjustesGenerales` | Parcial | Controles disponibles, abrir carpeta real y mantener/minimizar al iniciar Java. Faltan persistencia general, idioma completo, inicio con el sistema y bandeja para cerrar launcher conservando el juego. |
 | `Apariencia` | Implementado | Tinta/Piedra/Sistema, Mármol/Plata/Bronce, escala de 80 a 150 % y reducir movimiento guardados; seguimiento del tema de Windows. Validación manual de escritorios Linux pendiente. |
 | `AjustesJava` | Parcial | Configuración por instancia guardada y aplicada; selección automática según metadatos, detección de Java del sistema y descarga verificada del runtime oficial. Ajustes/editor muestran runtimes reales guardados; sliders limitados por la RAM real. Selección global y por instancia, rutas manuales, detección acotada de runtimes del launcher oficial y prueba con memoria/argumentos conectadas. Faltan completar recomendaciones de memoria y validación nativa en Linux. |
 | `AjustesAlmacenamiento`, `Almacenamiento` | Parcial | Tamaños reales fuera del hilo de dibujo, limpieza limitada a caché, rotación de registros, traslado explícito de papeleras antiguas y recuperación de transacciones. Falta traslado de la raíz de datos y validación nativa en Linux. |
-| `ActualizacionLauncher` | Parcial | Pantalla y banner con versiones y notas reales; consulta GitHub, verifica tamaño/SHA-256 y aplica ahora o al cerrar con recuperación del ejecutable anterior. Requiere release portable y `latest.json` publicados; automático para Windows x86-64. |
+| `ActualizacionLauncher` | Parcial | Banner y pantalla originales, versión/compilación, progreso y SHA-256. El workflow publica paquetes desde main y ramas/tags de versión; instalada usa Inno Setup silencioso y portable conserva reemplazo atómico. Vuelve a la misma pantalla con el resultado tras el reinicio. Primera publicación remota y recorrido completo todavía pendientes de validar. |
 | `Integridad` | Maqueta | Cuadrícula y progreso de ejemplo disponibles. Falta revisar/reparar todos los archivos reales de una instancia; la verificación de mods descargados ya existe en otro flujo. |
 | `ArchivosNoVerificados` | Implementado | Lista real con SHA-512, identificación por Modrinth, caché, confiar y quitar/deshacer. Sin evidencia de malware no se inventa una acusación. Integración con futuros importes pendiente. |
 | `PantallaError`, `InformeFallo` | Parcial | Fallos reales del juego con código de salida, causa desconocida cuando corresponde, registro y copia de informe en la composición original. Falta diagnóstico específico de conflictos y exportación del informe a archivo. |
@@ -148,13 +148,13 @@ Los nuevos instaladores deben conservar la [organización de datos](organizacion
 
 1. **Instancia jugable:** extender el instalador a loaders manteniendo los componentes ya conectados; repetir en Linux el recorrido de Vanilla confirmado en Windows. Completar historial de descargas y unificar los instaladores en la cola global.
 2. **Editor y acciones:** completar General/Java, recuperación de Archivos/Capturas, prioridad de Recursos y Mundos; importar/clonar y exportar MRPACK. El cambio de versión con respaldo/copia ya está conectado; Fabric ya se prepara con la versión elegida; faltan los instaladores de Quilt, Forge y NeoForge.
-3. **Cuenta:** evaluar la diferencia de PantallaCuenta y conectar su composición original junto con EstudioSkin y todos los estados de sesión.
+3. **Cuenta:** probar subida de skin con una cuenta real, conectar capes propias y gestión persistente de varias cuentas. La composición original y el estudio ya usan texturas reales.
 4. **Servicios adicionales:** servidores, red/sincronización, integridad, integración de archivos sin verificar con futuros importes, almacenamiento y bandeja. Publicar los artefactos para validar la actualización del launcher ya implementada.
 5. **Revisión transversal:** ventanas angostas, escala, metales, foco y teclado, tooltips, virtualización y movimientos pendientes; comprobar ambas paletas.
 
 ## Diferencias para evaluar
 
-- **Cuenta:** recuperar la composición original en lugar de mantener la pantalla real simplificada.
+- **Cuenta:** composición original recuperada; conservarla al añadir varias cuentas y capes, usando componentes originales.
 - **BibliotecaMods:** decidir dónde encaja la biblioteca entre instancias, conservando la sección Modpacks actual.
 - **Movimiento:** revisar el fundido actual frente a las transiciones y efectos originales antes de cambiarlo.
 - **Inicio de sesión:** conservar el recorrido por navegador ya aprobado; revisar código/QR únicamente si se retoma ese modo y se resuelve su redirección.

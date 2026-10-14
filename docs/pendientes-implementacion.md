@@ -49,11 +49,23 @@ Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; F
 
 ## 4. Cuenta, servidores y publicación
 
-- [ ] Completar PantallaCuenta y EstudioSkin con la composición original y acciones reales.
-- [ ] Implementar servidores y sincronización de mods. Por ahora Servidores muestra EnConstruccion en modo real.
+- [x] Conectar PantallaCuenta y EstudioSkin originales con perfil/PNG reales, modelo, capas, historial y subida; validación manual de la subida pendiente.
+- [ ] Completar el recorrido de servidores, ZeroTier y sincronización descrito abajo. Lista, estado/SRV, conexión con una instancia, solicitud de pertenencia a redes y sincronización de Modrinth están conectados; quedan permisos/instalación de ZeroTier, salida, miembros y pruebas entre equipos.
 - [ ] Resolver la integración opcional de CurseForge cuando exista acceso válido a su API y condiciones de distribución.
 - [ ] Completar el traslado de la raíz de datos y la bandeja, y revisar los comportamientos de cierre; tamaños, caché, rotación y recuperación de operaciones ya están conectados.
 - [ ] Publicar el ejecutable y los metadatos de actualización y probar una actualización completa. La comprobación y descarga del actualizador ya están conectadas; ver el [contrato de publicación](actualizaciones-launcher.md).
+
+### Alcance de Servidores, ZeroTier y sincronización
+
+El [roadmap general](../README.md#servidores-zerotier-y-sincronización) cuenta ocho tareas separadas. Las pantallas originales de lista, PanelLateral, RedPrivada y SincronizarMods usan datos reales; los ejemplos quedan en la maqueta aislada. Ver [servidores](servidores.md) y [servicio del anfitrión](sincronizacion-servidores.md).
+
+**Servidores:** se guardan dirección, puerto, instancia y orden por arrastre, se consulta estado con IP/DNS/SRV y se prepara el lanzamiento por perfil. Falta validar la conexión dentro del juego con equipos reales. Los servidores directos funcionan sin ZeroTier; la consulta del servicio de sincronización usa la IP privada elegida.
+
+**ZeroTier:** detección y solicitud de pertenencia por ID conectadas a la CLI oficial, con autorización, IP y aviso al aceptar. La CLI necesita sus permisos habituales; faltan instalación/elevación automática y salida desde la interfaz. Crear una red abre Central. Miembros y su administración necesitan una fuente del controlador; los peers locales no se presentan como amigos.
+
+**Sincronización:** servicio explícito en el PC del anfitrión que comparte el índice de una instancia cliente, con versiones exactas de Modrinth. Consulta previa a Jugar, revisión de diferencias, hashes/tamaño, conservación de archivos locales y preparación con respaldo/cancelación conectadas; prueba con mods reales por HTTP local. Faltan integración visual del publicador con diseño aprobado, proveedores adicionales y prueba entre equipos ZeroTier.
+
+**Criterio de finalización:** desde equipos reales, guardar un servidor, conectar directamente o mediante una red ZeroTier autorizada, revisar y sincronizar mods, jugar y reconectar. Comprobar en Windows y Arch Linux los errores de servicio, autorización pendiente, manifiesto incompatible y descarga interrumpida sin perder los archivos anteriores.
 
 ## 5. Validación y diseño
 
@@ -62,6 +74,17 @@ Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; F
 - [ ] Completar las transiciones y efectos pendientes del System Design, respetando Reducir movimiento.
 - [ ] Validar el empaquetado y los recorridos completos con archivos reales antes de la primera publicación.
 
+## 6. Instalador de Windows y distribución
+
+- [x] Crear un instalador por usuario, con identidad e icono de Ícaro, accesos directos y registro de desinstalación.
+- [x] Separar la carpeta del programa de los datos de usuario; desinstalar retira archivos registrados y conserva los datos externos al programa y archivos ajenos.
+- [x] Automatizar la compilación del instalador y del portable con versiones consistentes, requisitos revisados y hashes reales.
+- [ ] Validar instalación limpia, actualización, reinstalación y desinstalación en un equipo de prueba.
+
+Las tres casillas del roadmap general agrupan creación, empaquetado y validación. El workflow prepara assets portables, setup y latest.json; la actualización instalada usa el instalador completo, pendiente de validar desde una release remota. No se habilitará actualización instalada como verificada antes de probarla. Ver [instalador de Windows](instalador-windows.md).
+
 ## Correcciones recientes
 
 La creación/preparación de instancias mantiene estable el estado del botón frente a eventos intercalados de descarga y verificación. La trama de Preparando es estática y no cambia cada fotograma. Ya se incorporaron la exportación de instancia, los seis formatos de lista de mods, el editor de iconos con vista previa inmediata, los avisos, apariencia, verificación de archivos y la confirmación de eliminación con bloques y grietas en toda la tarjeta; sus límites siguen registrados en el roadmap del diseño.
+
+La composición original de Cuenta/Estudio, PNG real, modelo/capas, subida e historial local están conectados. Pendientes: prueba manual con una cuenta real, capes propias, varias cuentas y cambio de nombre dentro de Ícaro. Ver [cuenta](cuenta.md).

@@ -13,7 +13,10 @@
 | [Instancias locales](instancias-locales.md) | Metadatos, migración, cambios de versión, eliminación y exportación |
 | [Organización de datos](organizacion-datos.md) | Almacén compartido, configuración por instancia, runtimes y mantenimiento |
 | [Implementación pendiente](pendientes-implementacion.md) | Límites actuales y criterios para completar las funciones restantes |
-| [Actualizaciones del launcher](actualizaciones-launcher.md) | Pantalla, descarga verificada y contrato de publicación de releases portables |
-| [Cuenta y estudio de skin](cuenta.md) | Pantallas de cuenta, estados de sesión y cómo abrirlos en la maqueta |
+| [Actualizaciones del launcher](actualizaciones-launcher.md) | Pantalla, descarga verificada y publicación desde main/versiones y actualización instalada o portable |
+| [Cuenta y estudio de skin](cuenta.md) | Pantallas de cuenta, perfil y PNG reales, modelos, historial y límites actuales |
+| [Servidores y ZeroTier](servidores.md) | Lista real, conexión por instancia, detección de redes y límites de sincronización |
+| [Sincronización con el anfitrión](sincronizacion-servidores.md) | Servicio en el PC del amigo, revisión de mods y descargas exactas de Modrinth |
+| [Instalador de Windows](instalador-windows.md) | Inno Setup, empaquetado automatizado, conservación de datos y validación |
 | [Movimiento](movimiento.md) | Animaciones del launcher, visor y opción de reducir movimiento |
 | [Créditos](creditos.md) |  Atribuciones y licencias de imágenes, tipografías y otros recursos utilizados |

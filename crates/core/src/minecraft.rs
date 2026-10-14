@@ -40,6 +40,8 @@ pub struct Instalado {
     #[serde(default)]
     pub java_perfil: Option<crate::java::Perfil>,
     pub game_arguments: Vec<String>,
+    #[serde(default)]
+    pub quick_play_multiplayer: Option<bool>,
     pub jvm_arguments: Vec<String>,
 }
 
@@ -1665,7 +1667,10 @@ pub async fn instalar(
             ))
         })?;
     }
+    let quick_play = version.arguments.as_ref().is_some_and(|a|
+        serde_json::to_value(&a.game).ok().is_some_and(|v|v.to_string().contains("\"--quickPlayMultiplayer\"")));
     let installed = Instalado {
+        quick_play_multiplayer: Some(quick_play),
         version: version.id,
         perfil_id: fabric.as_ref().map(|b| b.profile.id.clone()),
         main_class: fabric

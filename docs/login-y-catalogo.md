@@ -71,7 +71,7 @@ Para probar el guardado, crea dos instancias con nombres y portadas distintos, c
 
 ## Modrinth
 
-La sección **Modpacks** consulta packs del catálogo público. **Agregar mods** abre `TiendaMods`, con los filtros laterales y la lista de instalación del System Design, limitada a la versión de Minecraft y el loader de la instancia. **Volver a mis mods** regresa a sus archivos instalados. Vanilla no muestra la pestaña ni el contador de mods. Los MRPACK de Modrinth crean una instancia nueva con Minecraft y el loader definidos por el pack; admiten Vanilla/Fabric, revisión de opcionales, verificación y reintento. Los recursos y shaders ZIP se instalan desde sus tiendas. La importación de archivos locales y los demás loaders siguen pendientes.
+La sección **Modpacks** reutiliza `TiendaMods`: búsqueda, categorías, Minecraft, loader, orden y resultados en lista. **Elegir versión** abre la tabla del proyecto; cada fila instala su versión exacta en una instancia nueva, sin elegir automáticamente la última. **Agregar mods** abre `TiendaMods`, con los filtros laterales y la lista de instalación del System Design, limitada a la versión de Minecraft y el loader de la instancia. **Volver a mis mods** regresa a sus archivos instalados. Vanilla no muestra la pestaña ni el contador de mods. Los MRPACK de Modrinth crean una instancia nueva con Minecraft y el loader definidos por el pack; admiten Vanilla/Fabric, revisión de opcionales, verificación y reintento. Los recursos y shaders ZIP se instalan desde sus tiendas. La importación de archivos locales y los demás loaders siguen pendientes.
 
 Las consultas se realizan en segundo plano, con una breve espera al escribir, paginación y descarte de respuestas anteriores. El catálogo de modpacks permite filtrar por versión estable de Minecraft y loader, y ordenar por relevancia, descargas, actualización o fecha de publicación. Las opciones proceden de Modrinth y los filtros se conservan al volver de una ficha. Una respuesta HTTP 429 impone una espera antes de consultar de nuevo.
 
@@ -152,3 +152,7 @@ La prueba opcional del visor consulta la imagen «FPS in high render distance» 
 Crear Vanilla o Fabric prepara sus archivos oficiales con Java según el perfil. La familia se elige al crear la instancia; sus versiones solo se muestran al seleccionar ese loader. Cambiar versión modifica Minecraft; Cambiar versión del loader modifica únicamente la versión del mismo loader.
 
 Instalar modpack revisa el MRPACK, permite elegir archivos opcionales y crea una instancia independiente con la versión de Minecraft y el loader del pack. La cola permite pausar, cancelar y reintentar. Quitar de Descargas en un registro completado o fallido oculta ese registro; conserva la instancia y sus archivos. El historial todavía no se guarda entre sesiones.
+
+## Servidores
+
+La sección permite guardar, editar, quitar y ordenar servidores por arrastre, consultar Minecraft con DNS SRV y preparar la conexión mediante una instancia vinculada. RedPrivada consulta ZeroTier y solicita pertenencia por ID cuando su CLI tiene permisos. SincronizarMods obtiene el índice del servicio del anfitrión y aplica versiones exactas de Modrinth con revisión previa. Quedan instalación/permisos automáticos de ZeroTier y pruebas entre equipos. Consulta [servidores y ZeroTier](servidores.md) y [sincronización](sincronizacion-servidores.md).

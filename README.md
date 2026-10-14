@@ -5,9 +5,9 @@ Launcher de Minecraft escrito en Rust, para Windows y Linux.
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
-[![Avance del roadmap: 71% — 52 de 73 tareas completadas](docs/assets/progreso.svg)](#roadmap)
+[![Avance del roadmap: 73% — 61 de 83 tareas completadas](docs/assets/progreso.svg)](#roadmap)
 
-**71% del roadmap implementado · 52/73 tareas.** Cada casilla tiene el mismo peso.
+**73% del roadmap implementado · 61/83 tareas.** Cada casilla tiene el mismo peso.
 <!-- avance:fin -->
 
 Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da nombre al proyecto. Hefesto, el herrero, está en los ajustes, Atlas en el mundo y Faetón en los errores. Hay más figuras repartidas por el launcher, y descubrirlas es parte de usarlo.
@@ -30,7 +30,7 @@ Icaro Launcher está en desarrollo. La interfaz ya permite recorrer instancias, 
 
 El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, comprueba tamaño y SHA-1 y reutiliza la instalación guardada. Java respeta la selección manual y la compatibilidad del perfil. En automático, con descargas habilitadas prepara el runtime gestionado; con descargas deshabilitadas detecta Java local compatible, incluidos runtimes del launcher oficial. Consulta [Vanilla y Java](docs/vanilla-y-java.md) para probar el recorrido.
 
-Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** instala los MRPACK de Modrinth en nuevas instancias Vanilla o Fabric, con revisión previa, elección de archivos opcionales, hashes verificados y pausa/cancelación en Descargas. Los packs de Quilt, Forge y NeoForge requieren sus instaladores pendientes.
+Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** reutiliza la tienda original con resultados en lista y filtros. **Elegir versión** abre la tabla del proyecto y permite instalar su versión exacta. Instala los MRPACK de Modrinth en nuevas instancias Vanilla o Fabric, con revisión previa, elección de archivos opcionales, hashes verificados y pausa/cancelación en Descargas. Los packs de Quilt, Forge y NeoForge requieren sus instaladores pendientes.
 
 Las instancias usan carpetas legibles por nombre, mantienen su identidad interna y guardan su configuración en `instance.json`. La carpeta `.icaro` contiene el perfil instalado y los nativos; assets, bibliotecas y clientes se comparten entre instancias. Las rutas anteriores se migran al recuperar las instancias, conservando sus mundos. El editor permite cambiar el icono desde su imagen o el menú de acciones, recortarlo y volver al icono generado. Consulta [instancias locales](docs/instancias-locales.md).
 
@@ -92,7 +92,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Bienvenida sin cuenta activa, acceso como invitado y progreso de las etapas del inicio de sesión.
 - [x] API de código de dispositivo con vencimiento y cancelación; emisión real probada. El código y QR no están disponibles en la interfaz real por la redirección fallida observada.
 - [ ] Validar manualmente renovación, cierre de sesión y funcionamiento del almacén de credenciales en Linux.
-- [ ] Conectar la pantalla original de Cuenta y Estudio de skin: textura real, capas, historial y aplicación de skins.
+- [x] Conectar la pantalla original de Cuenta y Estudio de skin: textura real, capas, historial y aplicación de skins. La subida está conectada a Minecraft; falta la prueba manual con una cuenta real.
 - [ ] Gestión persistente de varias cuentas.
 
 ### Instancias y archivos
@@ -148,8 +148,16 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 
 ### Actualizaciones del launcher
 
-- [x] Pantalla `ActualizacionLauncher`, comprobación de releases y descarga portable verificada con SHA-256; aplicar ahora o al cerrar en Windows x86-64.
+- [x] Pantalla `ActualizacionLauncher`, comprobación de releases y descarga verificada con SHA-256; aplicar ahora o al cerrar en Windows x86-64. Setup silencioso en segundo plano, progreso dentro de Ícaro y vuelta a esta misma pantalla con el resultado tras el reinicio.
 - [ ] Publicar releases con ejecutable y `latest.json`, y probar una actualización completa. [Contrato de publicación](docs/actualizaciones-launcher.md).
+
+### Instalador de Windows y distribución
+
+- [x] Crear un instalador de Windows por usuario con icono, accesos directos y desinstalador; conservar instancias y datos al desinstalar.
+- [x] Automatizar la compilación y el empaquetado del instalador y del ejecutable portable, con versiones coherentes, requisitos comprobados y hashes verificables.
+- [ ] Validar instalación limpia, actualización, reinstalación y desinstalación en Windows, incluida la conservación de cuentas, ajustes e instancias.
+
+El instalador y las releases son entregas separadas. El contrato y las decisiones pendientes se describen en la [guía de distribución para Windows](docs/instalador-windows.md).
 
 ### Próximas entregas, en orden
 
@@ -159,14 +167,26 @@ Consulta el [detalle de implementación pendiente](docs/pendientes-implementacio
 2. **Validación multiplataforma:** repetir el recorrido de Vanilla en Arch Linux y completar las opciones de cierre en Windows; el lanzamiento real en Windows ya fue confirmado.
 3. **Importación y modpacks:** importar MRPACK/ZIP y otros launchers, duplicar instancias y exportar MRPACK. El cambio de versión ya permite respaldo, copia y actualización de mods; los instaladores de Quilt, Forge y NeoForge siguen pendientes.
 4. **Editor completo:** conectar mundos, prioridad de resourcepacks, otros motores de shaders, integridad y eliminación/recuperación de archivos y capturas; completar el historial persistente y unificar los instaladores en la cola global. Recursos, shaders, capturas y consola ya tienen sus recorridos reales descritos arriba.
-5. **Cuenta y servicios adicionales:** completar Cuenta y Estudio de skin, servidores y proveedores opcionales.
-6. **Primera publicación:** validar Windows y Arch Linux, rendimiento, teclado, ventanas angostas y empaquetado.
+5. **Servidores y servicios adicionales:** conectar servidores con una instancia compatible, detectar ZeroTier y gestionar la conexión a su red, comparar y sincronizar mods con revisión previa. Completar Cuenta y Estudio de skin y proveedores opcionales.
+6. **Primera publicación:** crear y validar el instalador de Windows y el paquete portable; automatizar artefactos, requisitos y hashes. Validar Windows y Arch Linux, rendimiento, teclado y ventanas angostas.
+
+### Servidores, ZeroTier y sincronización
+
+Servidores guarda su lista y orden por arrastre, usa el PanelLateral original, consulta Minecraft con DNS SRV y lanza la instancia vinculada. RedPrivada permite solicitar pertenencia mediante la CLI de ZeroTier. La sincronización consulta un servicio en el PC del anfitrión y revisa/aplica versiones exactas de Modrinth antes de Jugar. Faltan instalación/permisos automáticos de ZeroTier y validación con dos equipos. Consulta [servidores](docs/servidores.md) y [sincronización con el anfitrión](docs/sincronizacion-servidores.md).
+
+- [x] Añadir, editar, eliminar y guardar servidores reales con dirección, puerto e instancia asociada.
+- [x] Consultar estado, latencia, versión y jugadores cuando el servidor entregue esos datos; DNS ordinario, IP y resolución SRV conectados.
+- [x] Lanzar la instancia elegida y conectar al servidor con comprobación de compatibilidad de Minecraft y loader.
+- [x] Detectar ZeroTier instalado, su versión, servicio y estado real; explicar los casos ausente, detenido o sin acceso.
+- [ ] Conectar una red ZeroTier por su ID y mostrar pertenencia, autorización e IP asignada; permitir salir de la red y recuperarse de errores.
+- [x] Comparar los mods de la instancia con un manifiesto compartido por el anfitrión: faltantes, versiones distintas y proyectos previamente sincronizados que ya no usa, respetando mods exclusivos de cliente.
+- [x] Revisar y aplicar la sincronización de Modrinth con hashes, respaldo, cancelación y recuperación ante fallos; conservar archivos locales ajenos y permitir sincronizar y jugar.
+- [ ] Validar el recorrido de servidor directo y ZeroTier, incluida sincronización y reconexión, con equipos reales en Windows y Arch Linux.
 
 ### Integraciones y validaciones restantes
 
 - [ ] Integración opcional de CurseForge, sujeta al acceso a su API y a las condiciones de distribución.
-- [ ] Conexión a servidores y sincronización de mods con un servidor.
-- [ ] Red privada y bandeja del sistema; publicar los artefactos y validar la actualización del propio launcher de extremo a extremo.
+- [ ] Bandeja del sistema y comportamiento al cerrar el launcher mientras el juego sigue abierto.
 - [ ] Verificación y reparación de instancias e integración de la revisión de archivos de origen desconocido con los importes; la revisión manual de archivos ya está conectada.
 - [ ] Completar adaptación a ventanas angostas, escala, foco y navegación por teclado según el diseño original.
 - [ ] Persistir las preferencias generales y conectar sus efectos reales: idioma, inicio con el sistema y comportamiento al jugar/cerrar.
@@ -186,6 +206,7 @@ Icaro Launcher utiliza los siguientes componentes directos. Las versiones indica
 | [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) | 0.11.3 | Lectura de descripciones Markdown del catálogo | [MIT][mit] |
 | [Tokio](https://github.com/tokio-rs/tokio) | 1.53.2 | Ejecución asíncrona | [MIT][mit] |
 | [reqwest](https://github.com/seanmonstar/reqwest) | 0.12.28 | Peticiones HTTP | [MIT][mit] OR [Apache-2.0][apache] |
+| [hickory-resolver](https://github.com/hickory-dns/hickory-dns) | 0.24.4 | Resolución DNS SRV de servidores | [MIT][mit] OR [Apache-2.0][apache] |
 | [Serde](https://github.com/serde-rs/serde) | 1.0.229 | Serialización de datos | [MIT][mit] OR [Apache-2.0][apache] |
 | [serde_json](https://github.com/serde-rs/json) | 1.0.151 | Lectura y escritura de JSON | [MIT][mit] OR [Apache-2.0][apache] |
 | [sha1 · RustCrypto](https://github.com/RustCrypto/hashes) | 0.10.7 | Verificación de los manifiestos de Mojang | [MIT][mit] OR [Apache-2.0][apache] |

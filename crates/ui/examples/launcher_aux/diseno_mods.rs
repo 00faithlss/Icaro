@@ -4,7 +4,7 @@
 //! TiendaMods, FilaMod, ModsInstancia y FichaMod del RAR, con datos reales.
 use crate::{mods_reales, servicios, App, Mensaje};
 use icaro_core::{
-    modrinth::{Catalog, Order, Project, Version},
+    modrinth::{Catalog, Kind, Order, Project, Version},
     mods,
 };
 use icaro_ui::{
@@ -444,28 +444,29 @@ pub fn regla<'a>(p: Paleta) -> Element<'a, Mensaje> {
 pub fn tienda(app: &App) -> Element<'_, Mensaje> {
     let p = app.paleta();
     let s = &app.servicios;
+    let modpack = app.seccion == icaro_ui::shell::Seccion::Modpacks && app.editor.is_none();
     let (mc, ld) = crate::juego_de_instancia(app);
     let instance = mods_reales::instancia(app).map_or("", |i| i.nombre.as_str());
     let tipo = match app.editor {Some(3)=>Some(mods::TipoPack::Recursos),Some(8)=>Some(mods::TipoPack::Shaders),_=>None};
-    let titulo = match tipo {Some(mods::TipoPack::Recursos)=>"AGREGAR RECURSOS",Some(mods::TipoPack::Shaders)=>"AGREGAR SHADERS",_=>"AGREGAR MODS"};
-    let header = row![
+    let titulo = if modpack { "MODPACKS" } else { match tipo {Some(mods::TipoPack::Recursos)=>"AGREGAR RECURSOS",Some(mods::TipoPack::Shaders)=>"AGREGAR SHADERS",_=>"AGREGAR MODS"} };
+    let mut header = row![
         text(titulo)
             .font(fuentes::DISPLAY)
             .size(32)
             .color(p.text),
-        componentes::insignia_contorno(p, &format!("{instance} · {mc} · {ld}")),
-        Space::with_width(Length::Fill),
+    ].spacing(12).align_y(Alignment::Center);
+    if !modpack {
+        header = header.push(componentes::insignia_contorno(p, &format!("{instance} · {mc} · {ld}")));
+    }
+    let header = header.push(Space::with_width(Length::Fill)).push(
         container(componentes::campo_con_icono(
             p,
             Icono::Buscar,
-            match tipo {Some(mods::TipoPack::Recursos)=>"Buscar resourcepacks",Some(mods::TipoPack::Shaders)=>"Buscar shaders",_=>"Buscar mods"},
+            if modpack { "Buscar modpacks" } else { match tipo {Some(mods::TipoPack::Recursos)=>"Buscar resourcepacks",Some(mods::TipoPack::Shaders)=>"Buscar shaders",_=>"Buscar mods"} },
             &s.query,
             |q| Mensaje::Servicio(servicios::Accion::Consulta(q))
         ))
-        .width(320)
-    ]
-    .spacing(12)
-    .align_y(Alignment::Center);
+        .width(320));
     let mut filters = column![
         componentes::etiqueta(p, "Fuente"),
         row![
@@ -477,11 +478,13 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
     ]
     .spacing(12)
     .width(216);
-    let categories: &[(&str,&str)] = match tipo {
+    let categories: &[(&str,&str)] = if modpack {
+        &[("adventure","Aventura"),("technology","Tecnología"),("magic","Magia"),("optimization","Optimización"),("quests","Misiones"),("kitchen-sink","Variado")]
+    } else { match tipo {
         Some(mods::TipoPack::Recursos)=>&[("16x","16×"),("32x","32×"),("64x","64×"),("128x","128×"),("realistic","Realista"),("vanilla-like","Estilo Vanilla")],
         Some(mods::TipoPack::Shaders)=>&[("realistic","Realista"),("fantasy","Fantasía"),("vanilla-like","Estilo Vanilla"),("low","Ligero"),("medium","Medio"),("high","Alto")],
         _=>&[("optimization","Optimización"),("utility","Utilidad"),("worldgen","Mapas"),("decoration","Decoración"),("technology","Tecnología"),("adventure","Aventura")],
-    };
+    } };
     for &(key,label) in categories {
         filters = filters.push(componentes::casilla(
             p,
@@ -490,7 +493,20 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
             move |_| m(Accion::Categoria(key.into())),
         ));
     }
-    if tipo.is_none() {
+    if modpack {
+        let mut versions = vec!["Todas las versiones".to_owned()];
+        let mut loaders = vec!["Todos los loaders".to_owned()];
+        if let Some(tags) = &s.tags {
+            versions.extend(tags.versions.iter().filter(|v| v.version_type == "release").map(|v| v.version.clone()));
+            loaders.extend(tags.loaders.iter().filter(|l| l.supported_project_types.iter().any(|t| t == Kind::Modpack.as_str())).map(|l| crate::ficha::loader(&l.name)));
+        }
+        filters = filters.push(regla(p))
+            .push(componentes::etiqueta(p, "Minecraft"))
+            .push(componentes::selector(p, versions, Some(s.minecraft.clone()), |v| Mensaje::Servicio(servicios::Accion::Minecraft(v))))
+            .push(componentes::etiqueta(p, "Loader"))
+            .push(componentes::selector(p, loaders, Some(s.loader.clone()), |v| Mensaje::Servicio(servicios::Accion::Loader(v))))
+            .push(componentes::boton_compacto(p, "Restablecer filtros", Variante::Fantasma, Some(Mensaje::Servicio(servicios::Accion::LimpiarFiltros))));
+    } else if tipo.is_none() {
     filters = filters
         .push(regla(p))
         .push(componentes::etiqueta(p, "Lado"));
@@ -502,7 +518,7 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
                     text(*label).size(texto::BODY_SM.0).color(p.text)
                 ]
                 .spacing(8)
-                .align_y(Alignment::Center),
+                .align_y(Alignment::Center).wrap(),
             )
             .on_press(m(Accion::Lado(i)))
             .padding(0)
@@ -550,10 +566,10 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
                         .color(p.text_muted)
                 ]
                 .spacing(8)
-                .align_y(Alignment::Center),
+                .align_y(Alignment::Center).wrap(),
             )
             .padding(0)
-            .on_press(Mensaje::PanelMod(Some(h.project_id.clone())))
+            .on_press(if modpack { Mensaje::Servicio(servicios::Accion::Proyecto(h.project_id.clone())) } else { Mensaje::PanelMod(Some(h.project_id.clone())) })
             .style(icaro_ui::estilo::sin_estilo(p.text));
             let mut tags = row![].spacing(6).align_y(Alignment::Center);
             for k in h
@@ -571,9 +587,10 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
                 ))
                 .font(fuentes::MONO)
                 .size(texto::MONO_SM.0)
+                .wrapping(iced::widget::text::Wrapping::None)
                 .color(p.text_muted),
             );
-            let selected =
+            let selected = !modpack &&
                 cesta(app).is_some_and(|c| c.raices.iter().any(|v| v.project_id == h.project_id));
             results = results.push(
                 container(
@@ -586,11 +603,11 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
                             )
                             .size(texto::BODY_SM.0)
                             .color(p.text_muted),
-                            tags
+                            tags.wrap()
                         ]
                         .spacing(6)
                         .width(Length::Fill),
-                        if let Some(t)=tipo {mods_reales::packs::accion_cesta(app,t,&h.project_id,None)}else{accion(app, &h.project_id, None, false)}
+                        if modpack {crate::modpacks_reales::accion(app,&h.project_id,None)}else if let Some(t)=tipo {mods_reales::packs::accion_cesta(app,t,&h.project_id,None)}else{accion(app, &h.project_id, None, false)}
                     ]
                     .spacing(16)
                     .align_y(Alignment::Center),
@@ -644,28 +661,30 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
         results = results.push(icaro_ui::superficies::banner(p,componentes::Estado::Aviso,Icono::Aviso,
             "No se pudo consultar el catálogo.",e,Some(("Reintentar",Mensaje::Servicio(servicios::Accion::Buscar)))));
     }
-    let mut main = column![
-        componentes::boton_con_icono(
+    let mut main = column![].spacing(24).height(Length::Fill).padding(24);
+    if !modpack {
+        main = main.push(componentes::boton_con_icono(
             p,
             Icono::Atras,
             match tipo {Some(mods::TipoPack::Recursos)=>"Volver a mis recursos",Some(mods::TipoPack::Shaders)=>"Volver a mis shaders",_=>"Volver a mis mods"},
             Variante::Fantasma,
             Some(Mensaje::VistaMods(0)),
             true
-        ),
-        header,
-        mods_reales::estado_operacion(app),
-        row![
+        ));
+    }
+    main = main.push(header);
+    if modpack {
+        main = main.push(text("Elige la versión del modpack. Se instalará en una instancia nueva con su Minecraft y loader.").size(texto::BODY_SM.0).color(p.text_muted));
+    } else {
+        main = main.push(mods_reales::estado_operacion(app));
+    }
+    main = main.push(row![
             crate::desplazable_pub(filters.into()),
             crate::desplazable_pub(results.into())
         ]
         .spacing(32)
-        .height(Length::Fill)
-    ]
-    .spacing(24)
-    .height(Length::Fill)
-    .padding(24);
-    if let Some(c) = cesta(app) {
+        .height(Length::Fill));
+    if let Some(c) = cesta(app).filter(|_| !modpack) {
         if c.busy {
             main = main.push(text("Preparando la lista y sus dependencias…").color(p.text_muted));
         }
@@ -673,7 +692,7 @@ pub fn tienda(app: &App) -> Element<'_, Mensaje> {
             main = main.push(text(e).color(p.warning));
         }
     }
-    column![main, if let Some(t)=tipo {mods_reales::packs::barra_cesta(app,t)}else{barra(app)}].height(Length::Fill).into()
+    column![main, if modpack {Space::with_height(0).into()}else if let Some(t)=tipo {mods_reales::packs::barra_cesta(app,t)}else{barra(app)}].height(Length::Fill).into()
 }
 fn barra(app: &App) -> Element<'_, Mensaje> {
     let p = app.paleta();

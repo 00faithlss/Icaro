@@ -3,7 +3,7 @@
 
 //! ActualizacionLauncher del System Design, con releases y notas reales.
 use crate::{pantallas, App, Mensaje};
-use icaro_core::actualizacion::{self, Disponible, Preparada};
+use icaro_core::actualizacion::{self, Disponible, Preparada, Resultado};
 use icaro_ui::{
     componentes::{self, Estado as Senal, Variante},
     fuentes,
@@ -24,9 +24,11 @@ pub struct Estado {
     pub comprobada: bool,
     pub error: Option<String>,
     pub descargando: bool,
+    pub aplicando: bool,
     pub avance: f32,
     pub preparada: Option<Preparada>,
     pub al_cerrar: bool,
+    pub resultado: Option<Resultado>,
     anterior: Option<pantallas::Pantalla>,
 }
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ pub enum Accion {
     MasTarde,
     Progreso(u64, u64),
     Descargada(bool, Result<Preparada, String>),
+    AplicacionLanzada(Result<(), String>),
 }
 pub fn m(a: Accion) -> Mensaje {
     Mensaje::Actualizacion(a)
@@ -46,7 +49,7 @@ pub fn m(a: Accion) -> Mensaje {
 pub fn comprobar() -> Task<Mensaje> {
     Task::perform(
         async {
-            actualizacion::comprobar(env!("CARGO_PKG_VERSION"))
+            actualizacion::comprobar_compilacion(env!("CARGO_PKG_VERSION"), env!("ICARO_COMPILACION").parse().unwrap_or(0))
                 .await
                 .map_err(|e| e.to_string())
         },
@@ -76,7 +79,7 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
             }
         }
         Accion::Comprobar => {
-            if !app.actualizacion.comprobando && !app.actualizacion.descargando {
+            if !app.actualizacion.comprobando && !app.actualizacion.descargando && !app.actualizacion.aplicando {
                 app.actualizacion.comprobando = true;
                 app.actualizacion.error = None;
                 return comprobar();
@@ -91,7 +94,7 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
                         .actualizacion
                         .preparada
                         .as_ref()
-                        .is_some_and(|p| d.as_ref().is_none_or(|n| n.version != p.version))
+                        .is_some_and(|p| d.as_ref().is_none_or(|n| n.version != p.version || n.compilacion != p.compilacion))
                     {
                         app.actualizacion.preparada = None;
                         app.actualizacion.al_cerrar = false;
@@ -104,7 +107,7 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
         }
         Accion::Ahora | Accion::AlCerrar => {
             let ahora = matches!(accion, Accion::Ahora);
-            if app.actualizacion.descargando {
+            if app.actualizacion.descargando || app.actualizacion.aplicando {
                 return Task::none();
             }
             if ahora && juego_abierto(app) {
@@ -114,10 +117,16 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
             }
             if let Some(p) = app.actualizacion.preparada.as_ref() {
                 if ahora {
-                    match actualizacion::aplicar(p, true) {
-                        Ok(()) => return crate::juego_real::cerrar(app),
-                        Err(e) => app.actualizacion.error = Some(e.to_string()),
-                    }
+                    let preparada=p.clone();
+                    app.actualizacion.aplicando=true;
+                    app.actualizacion.al_cerrar=false;
+                    app.actualizacion.resultado=None;
+                    app.pantalla=Some(pantallas::Pantalla::Actualizacion);
+                    return Task::perform(async move {
+                        tokio::task::spawn_blocking(move ||actualizacion::aplicar(&preparada,true))
+                            .await.map_err(|_|"No se pudo preparar la actualización.".to_owned())?
+                            .map_err(|e|e.to_string())
+                    },|r|m(Accion::AplicacionLanzada(r)));
                 } else {
                     app.actualizacion.al_cerrar = true;
                     app.pantalla = app.actualizacion.anterior;
@@ -128,6 +137,7 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
                 return Task::none();
             };
             app.actualizacion.descargando = true;
+            app.actualizacion.resultado = None;
             app.actualizacion.error = None;
             app.actualizacion.avance = 0.;
             return Task::run(
@@ -150,11 +160,14 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
             );
         }
         Accion::MasTarde => {
-            if app.actualizacion.descargando {
+            if app.actualizacion.descargando || app.actualizacion.aplicando {
                 return Task::none();
             }
             app.actualizacion.al_cerrar = false;
-            app.pantalla = app.actualizacion.anterior;
+            app.pantalla = if app.actualizacion.resultado.is_some() && !app.servicios.demo
+                && app.servicios.session.is_none() {
+                Some(pantallas::Pantalla::Primera)
+            } else { app.actualizacion.anterior };
         }
         Accion::Progreso(n, total) => {
             app.actualizacion.avance = if total == 0 {
@@ -184,11 +197,20 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
                 }
             }
         }
+        Accion::AplicacionLanzada(r) if app.actualizacion.aplicando => {
+            app.actualizacion.aplicando=false;
+            match r {
+                Ok(())=>return crate::juego_real::cerrar(app),
+                Err(e)=>{app.actualizacion.preparada=None;app.actualizacion.al_cerrar=false;app.actualizacion.error=Some(e);},
+            }
+        }
+        Accion::AplicacionLanzada(_)=>{},
     }
     Task::none()
 }
 /// Invocar antes del cierre normal. No fuerza el cierre de un juego.
 pub fn al_cerrar(app: &mut App) -> bool {
+    if app.actualizacion.aplicando { return false; }
     if !app.actualizacion.al_cerrar {
         return true;
     }
@@ -279,7 +301,7 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
                 .align_y(Alignment::Center),
             );
         }
-    } else {
+    } else if e.resultado.is_none() {
         notas = notas.push(
             text(if e.comprobando {
                 "Comprobando actualizaciones…"
@@ -291,6 +313,13 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
             .size(texto::BODY.0)
             .color(p.text_muted),
         );
+    }
+    if let Some(resultado)=&e.resultado {
+        notas=notas.push(text(if resultado.correcto {
+            "Actualización instalada correctamente. Puedes seguir usando Ícaro."
+        } else {
+            "No se pudo completar la actualización. Vuelve a intentarlo desde esta pantalla."
+        }).size(texto::BODY.0).color(if resultado.correcto {p.success}else{p.error}));
     }
     if let Some(error) = &e.error {
         notas = notas.push(text(error.clone()).size(texto::BODY_SM.0).color(p.error));
@@ -305,6 +334,11 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
             .size(texto::MONO_SM.0)
             .color(p.text_muted),
         );
+        notas=notas.push(icaro_ui::progreso::continuo(p,e.avance,app.reducir));
+    }
+    if e.aplicando {
+        notas=notas.push(text("Verificando y preparando la actualización… Ícaro se reiniciará y volverá a esta pantalla.")
+            .size(texto::BODY_SM.0).color(p.text_muted));
     }
     if e.al_cerrar {
         notas = notas.push(
@@ -327,20 +361,20 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
                 Icono::Actualizar,
                 "Actualizar ahora",
                 Variante::Primario,
-                (!e.descargando && !juego_abierto(app)).then(|| m(Accion::Ahora)),
+                (!e.descargando && !e.aplicando && !juego_abierto(app)).then(|| m(Accion::Ahora)),
                 false
             ),
             componentes::boton(
                 p,
                 "Al cerrar Icaro Launcher",
                 Variante::Secundario,
-                (!e.descargando).then(|| m(Accion::AlCerrar))
+                (!e.descargando && !e.aplicando).then(|| m(Accion::AlCerrar))
             ),
             componentes::boton(
                 p,
                 "Más tarde",
                 Variante::Fantasma,
-                (!e.descargando).then(|| m(Accion::MasTarde))
+                (!e.descargando && !e.aplicando).then(|| m(Accion::MasTarde))
             )
         ]
         .spacing(espacio::S2)
@@ -433,4 +467,51 @@ pub fn preparar_diseno(app: &mut App) {
 pub fn preparar_diseno_al_cerrar(app: &mut App) {
     preparar_diseno(app);
     app.actualizacion.al_cerrar = true;
+}
+
+/// Estados de la misma pantalla original, sin descarga ni reemplazo reales.
+pub fn preparar_diseno_estado(app: &mut App, escena: &str) {
+    preparar_diseno(app);
+    match escena.trim_end_matches("-angosto") {
+        "actualizacion-descargando" => {app.actualizacion.descargando=true;app.actualizacion.avance=0.62;},
+        "actualizacion-preparando" => app.actualizacion.aplicando=true,
+        "actualizacion-completada" | "actualizacion-error" => {
+            let correcto=escena.starts_with("actualizacion-completada");
+            app.actualizacion.resultado=Some(serde_json::from_value(serde_json::json!({
+                "esquema":1,"version":env!("CARGO_PKG_VERSION"),"compilacion":0,"correcto":correcto
+            })).unwrap());
+            if correcto {app.actualizacion.disponible=None;}
+        },
+        _=>{},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn app() -> App {
+        let (mut app,_) = crate::iniciar_con_guardado(crate::Seccion::Instancias,false,None,false,crate::servicios::Estado::nuevo(true),None);
+        preparar_diseno(&mut app);
+        app
+    }
+    #[test]
+    fn la_preparacion_bloquea_otro_intento_el_cierre_y_el_juego() {
+        let mut app=app();app.actualizacion.aplicando=true;
+        assert!(!al_cerrar(&mut app));
+        for accion in [Accion::Ahora,Accion::AlCerrar,Accion::MasTarde,Accion::Comprobar] {
+            let _=actualizar(&mut app,accion);
+        }
+        assert!(app.actualizacion.aplicando && !app.actualizacion.descargando && !app.actualizacion.comprobando);
+        assert_eq!(app.pantalla,Some(pantallas::Pantalla::Actualizacion));
+        let _=crate::juego_real::iniciar(&mut app,0,true);
+        assert!(app.servicios.juego.trabajos.is_empty());
+        assert_eq!(app.pantalla,Some(pantallas::Pantalla::Actualizacion));
+        let _=actualizar(&mut app,Accion::AplicacionLanzada(Err("Prueba: archivo bloqueado".into())));
+        assert!(!app.actualizacion.aplicando && !app.actualizacion.al_cerrar);
+        assert!(app.actualizacion.error.as_deref().unwrap().contains("bloqueado"));
+        assert_eq!(app.pantalla,Some(pantallas::Pantalla::Actualizacion));
+        // Una respuesta duplicada no puede cerrar el launcher después del fallo.
+        let _=actualizar(&mut app,Accion::AplicacionLanzada(Ok(())));
+        assert_eq!(app.pantalla,Some(pantallas::Pantalla::Actualizacion));
+    }
 }

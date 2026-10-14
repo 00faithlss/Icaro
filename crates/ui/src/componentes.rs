@@ -605,7 +605,7 @@ pub fn pestanas<'a, M: Clone + 'a>(
         let mut contenido = row![text(nombre.to_uppercase())
             .font(fuentes::ETIQUETA)
             .size(texto::LABEL.0)
-            .color(color)]
+            .color(color).wrapping(iced::widget::text::Wrapping::None)]
         .spacing(espacio::S2)
         .align_y(iced::Alignment::Center);
         if let Some(n) = conteo {
@@ -647,7 +647,7 @@ pub fn pestanas<'a, M: Clone + 'a>(
             .style(estilo::sin_estilo(color)),
         );
     }
-    column![fila, regla(crate::tema::borde::FINO, p.border)].into()
+    column![fila.wrap(), regla(crate::tema::borde::FINO, p.border)].into()
 }
 
 /// Migas de pan. Todas menos la última son enlaces.

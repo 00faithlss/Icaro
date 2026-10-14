@@ -27,6 +27,7 @@ const HISTORIAL: [&str; 5] = ["busto", "barba", "skin-a", "skin-b", "skin-c"];
 
 /// Estado de la sesión y del estudio de skin.
 pub struct Sesion {
+    pub cuenta: crate::cuenta_real::Estado,
     pub estado: EstadoSesion,
     /// Menú de cuentas abierto desde la barra lateral.
     pub menu: bool,
@@ -48,6 +49,7 @@ pub struct Sesion {
 impl Sesion {
     pub fn nueva(estado: EstadoSesion) -> Self {
         Self {
+            cuenta: Default::default(),
             estado,
             menu: false,
             menu_desde: None,
@@ -155,12 +157,15 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 app.pantalla = Some(pantallas::Pantalla::Cuenta);
                 return crate::servicios::actualizar(app, crate::servicios::Accion::Logout);
             }
-            Accion::AbrirEstudio | Accion::Aplicar | Accion::UsarDeNuevo | Accion::Cargar => {
-                app.avisar("La edición de skins todavía está en desarrollo.".into());
-                return Task::none();
-            }
+            Accion::Gestionar => return crate::cuenta_real::actualizar(app,crate::cuenta_real::Accion::Abrir(false)),
+            Accion::AbrirEstudio => return crate::cuenta_real::actualizar(app,crate::cuenta_real::Accion::Abrir(true)),
+            Accion::Aplicar | Accion::UsarDeNuevo => return crate::cuenta_real::actualizar(app,crate::cuenta_real::Accion::Aplicar(matches!(a,Accion::UsarDeNuevo))),
+            Accion::Cargar => return crate::cuenta_real::actualizar(app,crate::cuenta_real::Accion::ElegirArchivo),
+            Accion::Soltar(path) => return crate::cuenta_real::actualizar(app,crate::cuenta_real::Accion::Archivo(Some(path.clone()))),
+            Accion::ElegirSkin(i) => return crate::cuenta_real::actualizar(app,crate::cuenta_real::Accion::Elegir(*i)),
             _ => {}
         }
+        if app.sesion.subiendo.is_some() && matches!(a,Accion::Modelo(_)|Accion::Capa(_,_)|Accion::Girar(_)|Accion::VolverCuenta) { return Task::none(); }
     }
     let pant = |app: &mut App, p| {
         app.pantalla = Some(p);
@@ -263,6 +268,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
 
 /// Termina la subida simulada cuando pasa su tiempo.
 pub fn avanzar(app: &mut App) {
+    if !app.servicios.demo {return;}
     if let Some(inicio) = app.sesion.subiendo {
         if app.ahora.saturating_duration_since(inicio).as_millis() >= MS_SUBIDA {
             app.sesion.subiendo = None;
@@ -296,9 +302,10 @@ pub fn vista_cuenta(app: &App) -> Element<'_, Mensaje> {
             nombre,
             correo,
             proximo_cambio: "22-10-2026",
-            historial: &HISTORIAL,
+            historial: HISTORIAL.to_vec(),
             en_uso: s.en_uso,
             elegida: s.elegida,
+            textura: None, historial_real: vec![], delgado: false,
         },
         MensajesCuenta {
             abrir_estudio: m(Accion::AbrirEstudio),
@@ -309,6 +316,7 @@ pub fn vista_cuenta(app: &App) -> Element<'_, Mensaje> {
             volver_a_entrar: m(Accion::VolverAEntrar),
             comprar: m(Accion::Comprar),
             jugar_invitado: m(Accion::JugarComoInvitado),
+            cambiar_nombre: None,
         },
     )
 }
@@ -329,6 +337,8 @@ pub fn vista_estudio(app: &App) -> Element<'_, Mensaje> {
             textura: s.textura.as_deref(),
             error: s.error.as_deref(),
             soltando: s.soltando,
+            rgba: s.cuenta.seleccion.as_ref().or(s.cuenta.actual.as_ref()).map(|t|t.rgba.as_ref()),
+            puede_aplicar: app.servicios.demo || s.cuenta.seleccion.is_some() || s.cuenta.actual.is_some(),
         },
         MensajesEstudio {
             volver: m(Accion::VolverCuenta),

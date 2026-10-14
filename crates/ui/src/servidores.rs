@@ -43,7 +43,7 @@ pub struct Servidor {
 }
 
 /// Alto de una fila: relleno de 16, icono de 48 y regla fina arriba y abajo.
-pub const ALTO_FILA: f32 = 82.0;
+pub const ALTO_FILA: f32 = 100.0;
 /// Separación entre filas.
 pub const SEPARACION: f32 = 12.0;
 
@@ -71,8 +71,11 @@ impl Arrastre {
 /// Mensajes que emite la lista.
 pub struct AccionesLista<M> {
     pub jugar: fn(usize) -> M,
+    pub editar: Option<fn(usize) -> M>,
+    pub eliminar: Option<fn(usize) -> M>,
+    pub permitir_sin_estado: bool,
     /// El asa de la fila `i` se presionó: empieza el arrastre.
-    pub tomar: fn(usize) -> M,
+    pub tomar: Option<fn(usize) -> M>,
     /// El puntero entró (`Some`) o salió (`None`) de una fila.
     pub sobre: fn(Option<usize>) -> M,
 }
@@ -195,9 +198,9 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
         EstadoServidor::EnLinea { jugadores, maximo, ms } => {
             format!("{} · {jugadores} / {maximo} · {ms} ms", s.direccion)
         }
-        EstadoServidor::FueraDeLinea(_) => format!("{} · fuera de línea", s.direccion),
+        EstadoServidor::FueraDeLinea(estado) => format!("{} · {estado}", s.direccion),
     };
-    let datos = column![
+    let mut datos = column![
         titulo,
         text(linea)
             .font(fuentes::MONO)
@@ -206,14 +209,17 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
     ]
     .spacing(2)
     .width(Length::Fill);
+    if let Some(motd)=&s.motd{
+        datos=datos.push(text(motd.clone()).size(texto::BODY_SM.0).color(p.text_muted));
+    }
 
-    let jugar = if en_linea {
+    let jugar = if en_linea || acciones.permitir_sin_estado {
         boton_con_icono(p, Icono::Jugar, "Jugar", Variante::Primario, Some((acciones.jugar)(i)), false)
     } else {
         boton_con_icono(p, Icono::Jugar, "Jugar", Variante::Secundario, None, false)
     };
 
-    let asa = mouse_area(
+    let asa:Element<'a,M> = if let Some(tomar)=acciones.tomar {mouse_area(
         container(icono(
             Icono::Arrastrar,
             Tam::Base,
@@ -221,10 +227,12 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
         ))
         .center(Length::Fixed(24.0)),
     )
-    .on_press((acciones.tomar)(i))
-    .interaction(mouse::Interaction::Grab);
+    .on_press(tomar(i))
+    .interaction(mouse::Interaction::Grab).into()}else{Space::with_width(0).into()};
 
-    let fila = row![asa, avatar_servidor(p, &s.nombre), datos, jugar]
+    let mut controles=row![jugar].spacing(8).align_y(Alignment::Center);
+    if let Some(eliminar)=acciones.eliminar {controles=controles.push(boton_con_icono(p,Icono::Papelera,"",Variante::Fantasma,Some(eliminar(i)),true));}
+    let fila = row![asa, avatar_servidor(p, &s.nombre), datos, controles]
         .spacing(espacio::S4)
         .align_y(Alignment::Center);
     let resaltada = vista.levantada || vista.encima || vista.colocando.is_some_and(|t| t < 2.0 / 3.0);
@@ -262,10 +270,10 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
         }
         None => tarjeta.into(),
     };
-    mouse_area(tarjeta)
+    let tarjeta=mouse_area(tarjeta)
         .on_enter((acciones.sobre)(Some(i)))
-        .on_exit((acciones.sobre)(None))
-        .into()
+        .on_exit((acciones.sobre)(None));
+    if let Some(editar)=acciones.editar{tarjeta.on_press(editar(i)).into()}else{tarjeta.into()}
 }
 
 /// Hueco rayado del alto de una fila: el sitio donde caerá la fila que se
@@ -375,14 +383,14 @@ pub fn red_privada<'a, M: Clone + 'a>(
         "Red privada desconectada"
     };
     let detalle = row![
-        text(format!("{red} · tu IP "))
+        text(if ip.is_empty() {red.to_owned()} else {format!("{red} · tu IP ")})
             .size(texto::BODY_SM.0)
             .color(p.text_muted),
         text(ip.to_owned())
             .font(fuentes::MONO)
             .size(texto::MONO_SM.0)
             .color(p.text),
-        text(format!(" · {} de {} en línea", en_linea.0, en_linea.1))
+        text(if en_linea.1>0{format!(" · {} de {} en línea", en_linea.0, en_linea.1)}else{String::new()})
             .size(texto::BODY_SM.0)
             .color(p.text_muted),
     ]

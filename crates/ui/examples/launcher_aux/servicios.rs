@@ -27,6 +27,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Estado {
+    pub sincronizacion:crate::sincronizacion_real::Estado,
+    pub red_privada:crate::red_privada_real::Estado,
+    pub servidores:crate::servidores_reales::Estado,
     pub modpacks:crate::modpacks_reales::Estado,
     pub juego: crate::juego_real::Estado,
     pub mods: crate::mods_reales::Estado,
@@ -36,7 +39,7 @@ pub struct Estado {
     pub demo: bool,
     pub session: Option<Arc<Session>>,
     vault: Arc<Vault>,
-    catalog: Result<Catalog, modrinth::Error>,
+    pub(crate) catalog: Result<Catalog, modrinth::Error>,
     auth_id: u64,
     auth_cancel: Option<CancellationToken>,
     pub auth_busy: bool,
@@ -53,10 +56,10 @@ pub struct Estado {
     busy: bool,
     pub error: Option<String>,
     pub ficha: ficha::Estado,
-    minecraft: String,
-    loader: String,
+    pub(crate) minecraft: String,
+    pub(crate) loader: String,
     pub order: Order,
-    tags: Option<Tags>,
+    pub(crate) tags: Option<Tags>,
     tags_busy: bool,
     tags_error: Option<String>,
     pub images: catalogo::Imagenes,
@@ -72,6 +75,9 @@ impl Default for Estado {
 impl Estado {
     pub fn nuevo(demo: bool) -> Self {
         Self {
+            sincronizacion:Default::default(),
+            red_privada:Default::default(),
+            servidores:Default::default(),
             modpacks:Default::default(),
             juego: Default::default(),
             mods: Default::default(),
@@ -187,6 +193,7 @@ pub enum Accion {
     Pagina(u32),
     Buscada(u64, Result<Results, String>),
     Proyecto(String),
+    ProyectoVersiones(String),
     ProyectoRecibido(u64, Result<(Project, Vec<Version>), String>),
     Volver,
     CerrarPanel,
@@ -440,7 +447,7 @@ pub fn buscar(app: &mut App, offset: u32, debounce: bool) -> Task<Mensaje> {
     app.servicios.busy = true;
     app.servicios.error = None;
     let catalog = app.servicios.catalog.clone();
-    let categories = if matches!(app.editor, Some(2 | 3 | 8)) {
+    let categories = if filter.kind == Kind::Modpack || matches!(app.editor, Some(2 | 3 | 8)) {
         app.tienda_cat.clone()
     } else {
         vec![]
@@ -1099,6 +1106,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             return buscar(app, 0, false);
         }
         Accion::LimpiarFiltros => {
+            app.tienda_cat.clear();
             app.servicios.minecraft = "Todas las versiones".into();
             app.servicios.loader = "Todos los loaders".into();
             app.servicios.order = Order::Relevance;
@@ -1176,6 +1184,8 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             app.pantalla = None;
         }
         Accion::Logout => {
+            app.sesion.cuenta.invalidar();
+            app.sesion.subiendo = None;
             app.servicios.juego.cancelar_todo();
             app.servicios.cancel();
             app.servicios.session = None;
@@ -1227,6 +1237,9 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             match result {
                 Ok(session) => {
                     app.servicios.remembered = stored;
+                    if app.servicios.session.as_ref().map(|s| &s.profile.id) != session.as_ref().map(|s| &s.profile.id) {
+                        app.sesion.cuenta.invalidar(); app.sesion.subiendo=None; app.sesion.textura=None;
+                    }
                     app.sesion.estado = if session.is_some() {
                         EstadoSesion::Activa
                     } else {
@@ -1247,20 +1260,23 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 }
                 Err(error) => {
                     app.servicios.auth_error = Some(error);
+                    app.sesion.cuenta.invalidar(); app.sesion.subiendo=None;
                     if app.servicios.session.is_some() {
                         app.servicios.session = None;
                         app.sesion.estado = EstadoSesion::Vencida;
                     }
                 }
             }
-            if restoring && app.servicios.session.is_none() {
+            if restoring && app.servicios.session.is_none()
+                && !(app.pantalla == Some(pantallas::Pantalla::Actualizacion) && app.actualizacion.resultado.is_some()) {
                 app.pantalla = Some(pantallas::Pantalla::Primera);
             }
             if interactive {
                 let window = iced::window::get_latest().and_then(|id| {
                     iced::window::minimize(id, false).chain(iced::window::gain_focus(id))
                 });
-                return Task::batch([window, crate::juego_real::reanudar_sesion(app)]);
+                let cuenta = if app.pantalla == Some(pantallas::Pantalla::Cuenta) && app.servicios.session.is_some() { crate::cuenta_real::actualizar(app,crate::cuenta_real::Accion::Abrir(false)) }else{Task::none()};
+                return Task::batch([window, cuenta, crate::juego_real::reanudar_sesion(app)]);
             }
             return crate::juego_real::reanudar_sesion(app);
         }
@@ -1284,6 +1300,11 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 }
                 Err(error) => app.servicios.error = Some(error),
             }
+        }
+        Accion::ProyectoVersiones(id) => {
+            let task = actualizar(app, Accion::Proyecto(id));
+            app.servicios.ficha.tab = ficha::Pestana::Versiones;
+            return task;
         }
         Accion::Proyecto(id) => {
             if let Some(detail) = app.servicios.detail.take() {
@@ -1347,8 +1368,10 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             match result {
                 Ok(detail) => {
                     app.servicios.document = catalogo::Documento::parse(&detail.0.body);
+                    let tab = app.servicios.ficha.tab;
                     app.servicios.ficha =
                         ficha::Estado::nuevo(app.servicios.filter.as_ref(), &detail.1);
+                    app.servicios.ficha.tab = tab;
                     app.servicios.detail = Some(detail);
                     crate::arrancar(app);
                     let images = cargar_imagenes(app, imagenes_visibles(app));
@@ -1556,64 +1579,7 @@ pub fn login_view(app: &App) -> Element<'_, Mensaje> {
     )
 }
 pub fn account_view(app: &App) -> Element<'_, Mensaje> {
-    let p = app.paleta();
-    let s = &app.servicios;
-    let mut content = column![text("CUENTA")
-        .font(fuentes::DISPLAY)
-        .size(texto::DISPLAY.0)
-        .color(p.text)]
-    .spacing(espacio::S4);
-    if let Some(session) = &s.session {
-        content = content
-            .push(
-                text(&session.profile.name)
-                    .font(fuentes::TITULO)
-                    .size(texto::HEADING.0)
-                    .color(p.text),
-            )
-            .push(text("Microsoft · Minecraft Java").color(p.text_muted))
-            .push(
-                text(if s.remembered {
-                    "Sesión recordada en este equipo."
-                } else {
-                    "Sesión activa durante esta apertura."
-                })
-                .color(p.text_muted),
-            )
-            .push(componentes::boton(
-                p,
-                "Cerrar sesión",
-                Variante::Peligro,
-                (!s.auth_busy).then(|| m(Accion::Logout)),
-            ));
-    } else {
-        content = content
-            .push(
-                text(if s.auth_busy {
-                    "Recuperando tu sesión…"
-                } else {
-                    "No has iniciado sesión."
-                })
-                .color(p.text),
-            )
-            .push(componentes::boton(
-                p,
-                "Iniciar sesión",
-                Variante::Primario,
-                (!s.auth_busy).then(|| m(Accion::Login)),
-            ));
-    }
-    if let Some(error) = &s.auth_error {
-        content = content
-            .push(text(error).color(p.warning))
-            .push(componentes::boton(
-                p,
-                "Cerrar sesión guardada",
-                Variante::Peligro,
-                (!s.auth_busy).then(|| m(Accion::Logout)),
-            ));
-    }
-    container(content).padding(espacio::S12).into()
+    crate::cuenta_real::vista(app)
 }
 
 pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
@@ -1695,7 +1661,7 @@ pub fn store_view(app: &App) -> Element<'_, Mensaje> {
             return ficha::vista(app, project, versions, kind);
         }
     }
-    if matches!(kind, Kind::Mod | Kind::Resourcepack | Kind::Shader) && matches!(app.editor, Some(2 | 3 | 8)) {
+    if (kind == Kind::Modpack && !s.hay_anterior()) || (matches!(kind, Kind::Mod | Kind::Resourcepack | Kind::Shader) && matches!(app.editor, Some(2 | 3 | 8))) {
         return crate::diseno_mods::tienda(app);
     }
     if s.hay_anterior() {
@@ -1973,6 +1939,18 @@ pub fn store_view(app: &App) -> Element<'_, Mensaje> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn el_resultado_de_actualizacion_sigue_visible_sin_cuenta_recuperada() {
+        let (mut app,_) = crate::iniciar_con_guardado(Seccion::Instancias,false,None,false,Estado::nuevo(false),None);
+        crate::actualizacion_real::preparar_diseno_estado(&mut app,"actualizacion-completada");
+        let id=app.servicios.auth_id;
+        let _=actualizar(&mut app,Accion::Autenticada(id,Ok(None),false));
+        assert_eq!(app.pantalla,Some(pantallas::Pantalla::Actualizacion));
+        assert!(app.actualizacion.resultado.as_ref().unwrap().correcto);
+        let _=crate::actualizacion_real::actualizar(&mut app,crate::actualizacion_real::Accion::MasTarde);
+        assert_eq!(app.pantalla,Some(pantallas::Pantalla::Primera));
+        assert!(app.servicios.session.is_none());
+    }
     #[test]
     fn startup_restoration_guest_and_demo_data_stay_separate() {
         let (mut app, _) = crate::iniciar_con_guardado(

@@ -121,6 +121,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             nombre: "Mineral_7",
             proveedor: "Microsoft",
             estado: icaro_ui::cuenta::EstadoSesion::Activa,
+            textura: None,
         },
         Some(DescargasActivas {
             cantidad: 2,

@@ -33,8 +33,8 @@ macro_rules! laminas {
             pub(crate) fn bytes(self, modo: Modo) -> &'static [u8] {
                 match (self, modo) {
                     $(
-                        (Lamina::$variante, Modo::Piedra) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-piedra.png")),
-                        (Lamina::$variante, Modo::Tinta) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-tinta.png")),
+                        (Lamina::$variante, Modo::Piedra) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-piedra.webp")),
+                        (Lamina::$variante, Modo::Tinta) => include_bytes!(concat!(env!("OUT_DIR"), "/imagenes/", $archivo, "-tinta.webp")),
                     )*
                 }
             }

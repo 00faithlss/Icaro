@@ -88,6 +88,7 @@ pub struct Estado {
     pub errores: BTreeMap<String, String>,
     pub ultimo: Option<String>,
     espera_sesion: Option<String>,
+    servidores: BTreeMap<String,String>,
     cerrando: bool,
     umbral_generacion: Option<(String, u64)>,
     retirada_umbral: Option<RetiradaUmbral>,
@@ -210,6 +211,7 @@ impl Estado {
         true
     }
     pub fn cancelar_todo(&mut self) {
+        self.servidores.clear();
         self.pendientes.clear();
         self.espera_sesion = None;
         for t in self.trabajos.values_mut() {
@@ -436,14 +438,25 @@ pub(crate) fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::p
             fullscreen: app.editor.is_some()
                 && app.editor_inst == index
                 && app.general.pantalla_completa,
+            servidor: None,
         },
         crate::java_real::efectiva(&c, &app.java_global).0,
     )
 }
 pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
-    if app.actualizacion.descargando {
+    iniciar_con_servidor(app,index,jugar,None)
+}
+pub fn iniciar_con_servidor(app:&mut App,index:usize,jugar:bool,servidor:Option<String>)->Task<Mensaje> {
+    if let Some(i)=app.servicios.instancias.registros.get(index) {
+        if servidor.is_some()&&app.servicios.juego.ocupada(&i.id) {
+            app.avisar("Espera a que termine la actividad de esta instancia antes de conectar al servidor.".into());
+            return Task::none();
+        }
+        match servidor {Some(d)=>{app.servicios.juego.servidores.insert(i.id.clone(),d);},None=>{app.servicios.juego.servidores.remove(&i.id);}}
+    }
+    if app.actualizacion.descargando || app.actualizacion.aplicando {
         app.avisar(
-            "Espera a que termine de descargarse la actualización de Icaro Launcher.".into(),
+            "Espera a que termine la actualización de Icaro Launcher.".into(),
         );
         return Task::none();
     }
@@ -462,7 +475,7 @@ pub fn iniciar(app: &mut App, index: usize, jugar: bool) -> Task<Mensaje> {
         app.avisar("La instalación de este loader será la siguiente etapa. Puedes seguir gestionando sus mods.".into());
         return Task::none();
     }
-    if app.servicios.juego.cerrando || app.servicios.instancias.operando {
+    if app.servicios.juego.cerrando || app.servicios.instancias.operando || app.servicios.mods.busy.as_ref() == Some(&i.id) {
         return Task::none();
     }
     if app.servicios.juego.procesos.contains_key(&i.id) {
@@ -555,10 +568,11 @@ pub fn reanudar_sesion(app: &mut App) -> Task<Mensaje> {
     else {
         return Task::none();
     };
-    iniciar(app, n, true)
+    let servidor=app.servicios.juego.servidores.get(&id).cloned();
+    iniciar_con_servidor(app, n, true,servidor)
 }
 pub fn cancelar_espera_sesion(app: &mut App) {
-    app.servicios.juego.espera_sesion = None;
+    if let Some(id)=app.servicios.juego.espera_sesion.take(){app.servicios.juego.servidores.remove(&id);}
 }
 fn siguiente(app: &mut App) -> Task<Mensaje> {
     if app.servicios.juego.activa.is_some() || app.servicios.juego.cerrando {
@@ -643,7 +657,8 @@ fn lanzar(app: &mut App, id: String, preparada: Preparacion) -> Task<Mensaje> {
         app.servicios.juego.espera_sesion = Some(id);
         return crate::servicios::actualizar(app, crate::servicios::Accion::Renovar);
     }
-    let (config, _) = config(app, &id);
+    let (mut config, _) = config(app, &id);
+    config.servidor=app.servicios.juego.servidores.remove(&id);
     let game = match app.servicios.instancias.almacen.juego(&id) {
         Ok(p) => p,
         Err(e) => {
