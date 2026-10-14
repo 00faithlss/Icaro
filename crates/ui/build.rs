@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::codecs::webp::WebPEncoder;
 use image::{ColorType, ImageEncoder};
 use std::fs::{self, File};
 use std::io::Write;
@@ -64,14 +64,14 @@ fn preparar(
         },
     };
     let tema = if tinta { "tinta" } else { "piedra" };
-    let png = salida.join(format!("{nombre}-{tema}.png"));
+    let webp = salida.join(format!("{nombre}-{tema}.webp"));
     let rgba = salida.join(format!("{nombre}-{tema}.rgba"));
     let cambiado = fs::metadata(&fuente)
         .unwrap()
         .modified()
         .unwrap()
         .max(codigo);
-    if [&png, &rgba].iter().all(|p| {
+    if [&webp, &rgba].iter().all(|p| {
         fs::metadata(p)
             .and_then(|m| m.modified())
             .is_ok_and(|t| t >= cambiado)
@@ -81,11 +81,9 @@ fn preparar(
     let fuente = fs::read(&fuente).expect("leer original del grabado");
     let imagen = preparar_imagenes::preparar(&fuente, recorte, invertir, lamina == Lamina::Faeton)
         .unwrap_or_else(|e| panic!("Preparar {nombre}: {e}"));
-    PngEncoder::new_with_quality(
-        File::create(png).unwrap(),
-        CompressionType::Fast,
-        FilterType::Sub,
-    )
+    // VP8L conserva cada canal RGBA y comprime los grabados sin reducir su
+    // resolución. La decodificación sigue en los trabajadores de imágenes.
+    WebPEncoder::new_lossless(File::create(webp).unwrap())
     .write_image(
         imagen.as_raw(),
         imagen.width(),
@@ -105,6 +103,10 @@ fn preparar(
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=ICARO_COMPILACION");
+    let compilacion = std::env::var("ICARO_COMPILACION").unwrap_or_else(|_| "0".into());
+    compilacion.parse::<u64>().expect("Número de compilación de Ícaro");
+    println!("cargo:rustc-env=ICARO_COMPILACION={compilacion}");
     let fuentes = [
         "build.rs",
         "preparar_imagenes.rs",
@@ -138,7 +140,29 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/icono/icaro.ico");
     println!("cargo:rerun-if-changed=assets/icono/icaro.rc");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let _ = embed_resource::compile_for_examples("assets/icono/icaro.rc", embed_resource::NONE)
-            .manifest_optional();
+        let version = std::env::var("CARGO_PKG_VERSION").unwrap();
+        let mut partes: Vec<_> = version
+            .split(['.', '-', '+'])
+            .take(3)
+            .map(|n| {
+                n.parse::<u16>()
+                    .expect("Versión numérica de Windows")
+                    .to_string()
+            })
+            .collect();
+        partes.push("0".into());
+        let icono =
+            Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("assets/icono/icaro.ico");
+        let codigo = fs::read_to_string("assets/icono/icaro.rc")
+            .unwrap()
+            .replace("@ICARO_VERSION@", &version)
+            .replace("@ICARO_NUMERIC@", &partes.join(","))
+            .replace("@ICARO_ICON@", &icono.to_string_lossy().replace('\\', "/"));
+        let recurso =
+            std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("icaro.rc");
+        fs::write(&recurso, codigo).unwrap();
+        embed_resource::compile_for_examples(&recurso, embed_resource::NONE)
+            .manifest_optional()
+            .expect("Compilar icono y versión de Windows");
     }
 }

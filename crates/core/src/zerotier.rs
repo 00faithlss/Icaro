@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Consulta acotada de ZeroTier mediante su CLI oficial, sin modificar redes.
+//! Consulta y pertenencia a redes ZeroTier mediante su CLI oficial.
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::io::AsyncReadExt;
+use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone)]
 pub struct Red {
     pub id: String,
@@ -122,6 +123,40 @@ fn analizar(info: &[u8], nets: &[u8]) -> Result<Estado, ()> {
 fn max_text(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).take(160).collect()
 }
+#[derive(Debug, Clone, Copy)]
+pub enum Accion {
+    Unirse,
+    Salir,
+}
+pub fn id_red(id: &str) -> Result<String, String> {
+    let id = id.trim();
+    if id.len() != 16 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("El ID de red debe tener 16 caracteres hexadecimales.".into());
+    }
+    Ok(id.to_ascii_lowercase())
+}
+pub async fn cambiar_red(id: &str, a: Accion, cancel: CancellationToken) -> Result<Estado, String> {
+    let id = id_red(id)?;
+    if cancel.is_cancelled() {
+        return Err("La solicitud fue cancelada antes de enviarse.".into());
+    }
+    let Some((p, one)) = candidatos().into_iter().find(|(p, _)| p.is_file()) else {
+        return Err("ZeroTier no está instalado.".into());
+    };
+    let command = match a {
+        Accion::Unirse => "join",
+        Accion::Salir => "leave",
+    };
+    let args = [command, id.as_str()];
+    tokio::select! {
+        _=cancel.cancelled()=>return Err("La solicitud se interrumpió. Actualiza el estado para comprobar la pertenencia a la red.".into()),
+        r=tokio::time::timeout(Duration::from_secs(8),comando(&p,one,&args))=>{
+            r.map_err(|_|"El servicio de ZeroTier no respondió. Actualiza el estado antes de reintentar.".to_string())?
+                .map_err(|_|"No se pudo modificar la red. Comprueba el servicio y los permisos de ZeroTier.".to_string())?;
+        }
+    }
+    Ok(detectar().await)
+}
 pub async fn detectar() -> Estado {
     let Some((p, one)) = candidatos().into_iter().find(|(p, _)| p.is_file()) else {
         return Estado::Ausente;
@@ -139,6 +174,28 @@ pub async fn detectar() -> Estado {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn id_de_red_no_admite_comandos_ni_valores_ambiguos() {
+        assert_eq!(id_red(" ABCDEF0123456789 ").unwrap(), "abcdef0123456789");
+        for value in [
+            "",
+            "123",
+            "abcdef012345678g",
+            "abcdef0123456789 --help",
+            "../../auth",
+        ] {
+            assert!(id_red(value).is_err());
+        }
+    }
+    #[tokio::test]
+    async fn cancelar_antes_de_unirse_no_invoca_el_servicio() {
+        let c = CancellationToken::new();
+        c.cancel();
+        assert!(cambiar_red("abcdef0123456789", Accion::Unirse, c)
+            .await
+            .unwrap_err()
+            .contains("antes"));
+    }
     #[test]
     fn datos_oficiales_no_inventan_estado_ni_autorizacion() {
         let s=analizar(br#"{"version":"1.16.0","online":true}"#,br#"[{"nwid":"1234567890abcdef","name":"Amigos","status":"ACCESS_DENIED","assignedAddresses":[]}]"#).unwrap();

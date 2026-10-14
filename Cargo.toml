@@ -10,7 +10,7 @@ repository = "https://github.com/00faithlss/Icaro-launcher"
 
 [workspace.dependencies]
 anyhow = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"

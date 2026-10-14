@@ -454,9 +454,9 @@ pub fn iniciar_con_servidor(app:&mut App,index:usize,jugar:bool,servidor:Option<
         }
         match servidor {Some(d)=>{app.servicios.juego.servidores.insert(i.id.clone(),d);},None=>{app.servicios.juego.servidores.remove(&i.id);}}
     }
-    if app.actualizacion.descargando {
+    if app.actualizacion.descargando || app.actualizacion.aplicando {
         app.avisar(
-            "Espera a que termine de descargarse la actualización de Icaro Launcher.".into(),
+            "Espera a que termine la actualización de Icaro Launcher.".into(),
         );
         return Task::none();
     }
@@ -475,7 +475,7 @@ pub fn iniciar_con_servidor(app:&mut App,index:usize,jugar:bool,servidor:Option<
         app.avisar("La instalación de este loader será la siguiente etapa. Puedes seguir gestionando sus mods.".into());
         return Task::none();
     }
-    if app.servicios.juego.cerrando || app.servicios.instancias.operando {
+    if app.servicios.juego.cerrando || app.servicios.instancias.operando || app.servicios.mods.busy.as_ref() == Some(&i.id) {
         return Task::none();
     }
     if app.servicios.juego.procesos.contains_key(&i.id) {

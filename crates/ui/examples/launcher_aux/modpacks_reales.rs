@@ -31,7 +31,8 @@ impl Drop for Estado {
 }
 #[derive(Debug, Clone)]
 pub enum Accion {
-    Preparar(String, Option<String>),
+    Elegir(String),
+    Preparar(String, String),
     Revisado(u64, Result<Plan, String>),
     Opcionales(bool),
     Crear,
@@ -45,15 +46,27 @@ pub fn accion<'a>(app: &App, id: &str, version: Option<&str>) -> Element<'a, Men
     componentes::boton_con_icono(
         app.paleta(),
         Icono::Descargas,
-        if version.is_some() { "" } else { "Instalar modpack" },
-        if version.is_some() {Variante::Fantasma} else {Variante::Primario},
+        if version.is_some() { "Instalar" } else { "Elegir versión" },
+        if version.is_some() {Variante::Secundario} else {Variante::Primario},
         (!app.servicios.modpacks.busy && !app.servicios.modpacks.creando)
-            .then(|| m(Accion::Preparar(id.into(), version.map(str::to_owned)))),
-        version.is_some(),
+            .then(|| m(match version {
+                Some(version) => Accion::Preparar(id.into(), version.into()),
+                None => Accion::Elegir(id.into()),
+            })),
+        false,
     )
 }
 pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     match a {
+        Accion::Elegir(project) => {
+            if app.servicios.demo || app.servicios.modpacks.creando {
+                return Task::none();
+            }
+            if app.servicios.detail.as_ref().is_some_and(|(p, _)| p.id == project) {
+                return crate::servicios::actualizar(app, crate::servicios::Accion::FichaPestana(crate::ficha::Pestana::Versiones));
+            }
+            return crate::servicios::actualizar(app, crate::servicios::Accion::ProyectoVersiones(project));
+        }
         Accion::Preparar(project, version) => {
             if app.servicios.demo || app.servicios.modpacks.creando {
                 return Task::none();
@@ -74,23 +87,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             return Task::perform(
                 async move {
                     let catalog = Catalog::new().map_err(|e| e.to_string())?;
-                    let selected = if let Some(id) = version {
-                        catalog.version(&id).await.map_err(|e| e.to_string())?
-                    } else {
-                        let mut versions = catalog
-                            .versions(&project, None, None)
-                            .await
-                            .map_err(|e| e.to_string())?;
-                        versions.retain(|v| {
-                            v.version_type == "release"
-                                && v.files.iter().any(|f| f.filename.ends_with(".mrpack"))
-                        });
-                        versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
-                        versions
-                            .into_iter()
-                            .next()
-                            .ok_or("No hay una versión estable MRPACK; elige una en Versiones.")?
-                    };
+                    let selected = catalog.version(&version).await.map_err(|e| e.to_string())?;
                     if selected.project_id != project {
                         return Err("La versión no pertenece al modpack seleccionado.".into());
                     }
@@ -247,6 +244,19 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn elegir_abre_versiones_y_conserva_filtros_sin_preparar_una_instalacion() {
+        let (mut app, _) = crate::iniciar_con_guardado(icaro_ui::shell::Seccion::Modpacks, false, None, false, crate::servicios::Estado::nuevo(true), None);
+        crate::pruebas_diseno::preparar_modpacks(&mut app, "modpacks-versiones");
+        app.servicios.ficha.tab = crate::ficha::Pestana::Descripcion;
+        app.servicios.ficha.minecraft = "1.20.1".into();
+        app.servicios.ficha.pruebas = true;
+        let _ = actualizar(&mut app, Accion::Elegir("optimized-pack".into()));
+        assert_eq!(app.servicios.ficha.tab, crate::ficha::Pestana::Versiones);
+        assert_eq!(app.servicios.ficha.minecraft, "1.20.1");
+        assert!(app.servicios.ficha.pruebas);
+        assert!(!app.servicios.modpacks.abierto && !app.servicios.modpacks.busy);
+    }
     #[test]
     fn cerrar_descarta_resultados_tardios_y_respeta_la_creacion_en_curso() {
         let (mut app,_)=crate::iniciar_con_guardado(icaro_ui::shell::Seccion::Modpacks,false,None,false,crate::servicios::Estado::nuevo(true),None);

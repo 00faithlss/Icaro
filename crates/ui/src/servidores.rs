@@ -43,7 +43,7 @@ pub struct Servidor {
 }
 
 /// Alto de una fila: relleno de 16, icono de 48 y regla fina arriba y abajo.
-pub const ALTO_FILA: f32 = 82.0;
+pub const ALTO_FILA: f32 = 100.0;
 /// Separación entre filas.
 pub const SEPARACION: f32 = 12.0;
 
@@ -200,7 +200,7 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
         }
         EstadoServidor::FueraDeLinea(estado) => format!("{} · {estado}", s.direccion),
     };
-    let datos = column![
+    let mut datos = column![
         titulo,
         text(linea)
             .font(fuentes::MONO)
@@ -209,6 +209,9 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
     ]
     .spacing(2)
     .width(Length::Fill);
+    if let Some(motd)=&s.motd{
+        datos=datos.push(text(motd.clone()).size(texto::BODY_SM.0).color(p.text_muted));
+    }
 
     let jugar = if en_linea || acciones.permitir_sin_estado {
         boton_con_icono(p, Icono::Jugar, "Jugar", Variante::Primario, Some((acciones.jugar)(i)), false)
@@ -228,7 +231,6 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
     .interaction(mouse::Interaction::Grab).into()}else{Space::with_width(0).into()};
 
     let mut controles=row![jugar].spacing(8).align_y(Alignment::Center);
-    if let Some(editar)=acciones.editar {controles=controles.push(boton_con_icono(p,Icono::Editar,"",Variante::Fantasma,Some(editar(i)),true));}
     if let Some(eliminar)=acciones.eliminar {controles=controles.push(boton_con_icono(p,Icono::Papelera,"",Variante::Fantasma,Some(eliminar(i)),true));}
     let fila = row![asa, avatar_servidor(p, &s.nombre), datos, controles]
         .spacing(espacio::S4)
@@ -268,10 +270,10 @@ pub fn tarjeta_servidor<'a, M: Clone + 'a>(
         }
         None => tarjeta.into(),
     };
-    mouse_area(tarjeta)
+    let tarjeta=mouse_area(tarjeta)
         .on_enter((acciones.sobre)(Some(i)))
-        .on_exit((acciones.sobre)(None))
-        .into()
+        .on_exit((acciones.sobre)(None));
+    if let Some(editar)=acciones.editar{tarjeta.on_press(editar(i)).into()}else{tarjeta.into()}
 }
 
 /// Hueco rayado del alto de una fila: el sitio donde caerá la fila que se
@@ -381,14 +383,14 @@ pub fn red_privada<'a, M: Clone + 'a>(
         "Red privada desconectada"
     };
     let detalle = row![
-        text(format!("{red} · tu IP "))
+        text(if ip.is_empty() {red.to_owned()} else {format!("{red} · tu IP ")})
             .size(texto::BODY_SM.0)
             .color(p.text_muted),
         text(ip.to_owned())
             .font(fuentes::MONO)
             .size(texto::MONO_SM.0)
             .color(p.text),
-        text(format!(" · {} de {} en línea", en_linea.0, en_linea.1))
+        text(if en_linea.1>0{format!(" · {} de {} en línea", en_linea.0, en_linea.1)}else{String::new()})
             .size(texto::BODY_SM.0)
             .color(p.text_muted),
     ]

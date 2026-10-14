@@ -28,6 +28,10 @@ mod archivos;
 mod estado;
 #[path = "launcher_aux/servidores_reales.rs"]
 mod servidores_reales;
+#[path = "launcher_aux/red_privada_real.rs"]
+mod red_privada_real;
+#[path = "launcher_aux/sincronizacion_real.rs"]
+mod sincronizacion_real;
 #[path = "launcher_aux/almacenamiento_real.rs"]
 mod almacenamiento_real;
 #[path = "launcher_aux/java_real.rs"]
@@ -42,6 +46,8 @@ mod modpacks;
 mod pantallas;
 #[path = "launcher_aux/sesion.rs"]
 mod sesion;
+#[path = "launcher_aux/cuenta_real.rs"]
+mod cuenta_real;
 #[path = "launcher_aux/red.rs"]
 mod red;
 #[path = "launcher_aux/busqueda.rs"]
@@ -103,6 +109,7 @@ struct App {
     modo: Modo,
     seccion: Seccion,
     colapsada: bool,
+    barra_angosta: bool,
     filtro: usize,
     seleccionada: Option<usize>,
     menu: Option<usize>,
@@ -225,6 +232,7 @@ struct EdicionGrupo {
 }
 
 impl App {
+    fn barra_colapsada(&self) -> bool { self.colapsada || self.barra_angosta }
     fn paleta(&self) -> icaro_ui::tema::Paleta { self.modo.paleta().con_metal(icaro_ui::tema::Metal::desde_indice(self.aj.metal)) }
     fn avisar_con(&mut self, texto:String, etiqueta:&str, accion:Mensaje) {
         let mut aviso=icaro_ui::avisos::Aviso::nuevo(texto,Some(accion),std::time::Instant::now());
@@ -263,6 +271,8 @@ enum Mensaje {
     DisenoMods(diseno_mods::Accion),
     Modpacks(modpacks_reales::Accion),
     Servidores(servidores_reales::Accion),
+    RedPrivada(red_privada_real::Accion),
+    Sincronizacion(sincronizacion_real::Accion),
     ModsReales(mods_reales::Accion),
     PacksReales(mods_reales::packs::Accion),
     Instancias(instancias_reales::Accion),
@@ -314,6 +324,7 @@ enum Mensaje {
     TiendaOrden(usize),
     Pant(pantallas::Accion),
     Ses(sesion::Accion),
+    CuentaReal(cuenta_real::Accion),
     FiltroModpacks(usize),
     AbrirModpack(usize),
     CerrarModpack,
@@ -461,6 +472,7 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     let deshacer_captura = matches!(&m, Mensaje::Capt(capt::Accion::Deshacer));
     let habia = hay_dialogo(app);
     let tarea = actualizar_estado(app, m);
+    app.servicios.servidores.avanzar();
     if let Some(aviso)=app.aviso.take(){app.avisos.agregar(aviso);}
     if deshacer_captura { app.aviso = None; }
     if let Some(aviso) = app.capt.aviso.take() {
@@ -480,6 +492,8 @@ fn actualizar(app: &mut App, m: Mensaje) -> Task<Mensaje> {
 }
 
 fn hay_dialogo(app: &App) -> bool {
+    if app.servicios.sincronizacion.modal(){return true;}
+    if app.ventana.width<1100. && app.servicios.servidores.panel_abierto(){return true;}
     if app.servicios.mods.confirmacion.is_some() || app.servicios.mods.confirmacion_recurso.is_some()
         || app.servicios.mods.packs.confirmacion.is_some() { return true; }
     app.exportar_lista.dialogo.is_some() || app.picar_objetivo.is_some() || app.iconos.dialogo.is_some() || app.dialogo || app.asistente.is_some() || app.importar.is_some() || app.exportar.as_ref().is_some_and(|s|!s.guardando) || app.cambiar.is_some()
@@ -516,6 +530,7 @@ fn guardar_si_cambio(app: &mut App) {
 }
 
 fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
+    if app.servicios.sincronizacion.modal() && matches!(m,Mensaje::Ir(_)){return Task::none();}
     if matches!(&m, Mensaje::Pant(pantallas::Accion::Abrir(pantallas::Pantalla::Actualizacion))) {
         return actualizacion_real::actualizar(app, actualizacion_real::Accion::Abrir);
     }
@@ -531,6 +546,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
     match m {
         Mensaje::Modpacks(a) => return modpacks_reales::actualizar(app,a),
         Mensaje::Servidores(a)=>return servidores_reales::actualizar(app,a),
+        Mensaje::RedPrivada(a)=>return red_privada_real::actualizar(app,a),
+        Mensaje::Sincronizacion(a)=>return sincronizacion_real::actualizar(app,a),
         Mensaje::Almacenamiento(a) => return almacenamiento_real::actualizar(app,a),
         Mensaje::Java(a) => return java_real::actualizar(app, a),
         Mensaje::Actualizacion(a) => return actualizacion_real::actualizar(app, a),
@@ -653,6 +670,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
                 }
             }
             app.editor = None;
+            app.tienda_cat.clear();
+            app.tienda_lado = 2;
             arrancar(app);
         }
         Mensaje::Pestana(i) => {
@@ -837,6 +856,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.sesion.menu = false;
             arrancar(app);
             app.editor = None;
+            app.tienda_cat.clear();
+            app.tienda_lado = 2;
             if s == Seccion::Modpacks && !app.servicios.demo { return servicios::buscar(app, 0, false); }
             if s == Seccion::Servidores && !app.servicios.demo { return servidores_reales::actualizar(app,servidores_reales::Accion::Abrir); }
             if s == Seccion::Capturas { return capt::refrescar(app); }
@@ -860,6 +881,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::AlternarMod(archivo) => mods::alternar(&instancias()[app.editor_inst].nombre, &archivo),
         Mensaje::Pant(a) => return pantallas::actualizar(app, a),
         Mensaje::Ses(a) => return sesion::actualizar(app, a),
+        Mensaje::CuentaReal(a) => return cuenta_real::actualizar(app, a),
         Mensaje::FiltroMods(i) => {
             app.mods_filtro = i;
             arrancar(app);
@@ -1112,6 +1134,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::Cursor(c) => {
             app.cursor = c;
             app.red.mover(c.y);
+            app.servicios.servidores.mover(c.y);
         }
         Mensaje::Red(m) => {
             if let Some(a) = app.red.actualizar(m, app.cursor.y, std::time::Instant::now()) {
@@ -1120,6 +1143,8 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.ahora = std::time::Instant::now();
         }
         Mensaje::Tamano(s) => {
+            // DisenoAngosto original: 64 px y 24 px de histéresis al redimensionar.
+            app.barra_angosta = if app.barra_angosta {s.width < 1112.} else {s.width < 1088.};
             app.ventana = s;
             return window::get_oldest().and_then(window::get_maximized).map(Mensaje::Maximizada);
         }
@@ -1143,6 +1168,10 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Eliminar => {app.dialogo=false;}
         Mensaje::Escape => {
+            if app.pantalla==Some(pantallas::Pantalla::Sincronizar)&&!app.servicios.demo{return sincronizacion_real::actualizar(app,sincronizacion_real::Accion::Cerrar);}
+            if app.servicios.servidores.arrastre.is_some(){return servidores_reales::actualizar(app,servidores_reales::Accion::CancelarOrden);}
+            if app.servicios.servidores.panel_abierto(){return servidores_reales::actualizar(app,servidores_reales::Accion::Cerrar);}
+            if app.pantalla==Some(pantallas::Pantalla::Red)&&!app.servicios.demo{return red_privada_real::actualizar(app,red_privada_real::Accion::Volver);}
             if app.servicios.modpacks.abierto{return modpacks_reales::actualizar(app,modpacks_reales::Accion::Cerrar);}
             if app.exportar_lista.dialogo.is_some(){return exportar_lista_mods::actualizar(app,exportar_lista_mods::Accion::Cerrar);}
             if app.iconos.dialogo.is_some(){return icono_instancia::actualizar(app,icono_instancia::Accion::Cerrar);}
@@ -3252,8 +3281,8 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
     } else { app_shell(
         p,
         if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { None } else { Some(app.seccion) },
-        app.colapsada,
-        Cuenta { nombre: app.servicios.nombre(app.sesion.estado.nombre()), proveedor: "Microsoft", estado: app.sesion.estado },
+        app.barra_colapsada(),
+        Cuenta { nombre: app.servicios.nombre(app.sesion.estado.nombre()), proveedor: "Microsoft", estado: app.sesion.estado, textura:app.sesion.cuenta.actual.as_ref().map(|t|t.rgba.as_ref()) },
         if app.servicios.demo {Some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 })}else{juego_real::indicador(app)},
         contenido,
         pie,
@@ -3334,6 +3363,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
             .height(Length::Fill).into())
     } else { None };
     ventana = icaro_ui::superficies::capa_flotante(ventana, capa_mod);
+    ventana=icaro_ui::superficies::capa_flotante(ventana,servidores_reales::panel(app));
     if let Some(s) = &app.asistente {
         ventana = con_velo_losa(p, ventana, pantallas::asistente(app, s), Mensaje::Pant(pantallas::Accion::AsistenteCancelar), desfase_losa(app));
     }
@@ -3559,6 +3589,14 @@ fn main() -> iced::Result {
             }
             subs.push(servicios::suscripcion(app));
             subs.push(mods_reales::suscripcion(app));
+            subs.push(servidores_reales::suscripcion(app));
+            subs.push(red_privada_real::suscripcion(app));
+            if app.servicios.servidores.arrastre.is_some(){
+                subs.push(iced::event::listen_with(|e,_,_|match e{
+                    iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left))=>Some(Mensaje::Servidores(servidores_reales::Accion::Soltar)),
+                    _=>None,
+                }));
+            }
             iced::Subscription::batch(subs)
         })
         .window(window::Settings {
@@ -3604,6 +3642,10 @@ fn iniciar_app(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo:
     let (mut app, inicio) = iniciar_con_guardado(seccion, piedra, menu, con_dialogo, servicios, guardado);
     if let Some(error)=app.config_error.clone(){app.avisar(error);}
     if !app.servicios.demo {
+        if let Some(resultado)=icaro_core::actualizacion::tomar_resultado(env!("CARGO_PKG_VERSION"),env!("ICARO_COMPILACION").parse().unwrap_or(0)) {
+            app.actualizacion.resultado=Some(resultado);
+            app.pantalla=Some(pantallas::Pantalla::Actualizacion);
+        }
         app.actualizacion.comprobando = true;
         {let iconos=icono_instancia::cargar(&app); let java=java_real::detectar(&mut app); (app, Task::batch([inicio, actualizacion_real::comprobar(),iconos,java]))}
     } else { (app, inicio) }
@@ -3669,6 +3711,7 @@ fn iniciar_con_guardado(seccion: Seccion, piedra: bool, menu: Option<usize>, con
                 busqueda: busqueda::Estado::default(),
                 seccion,
                 colapsada: false,
+                barra_angosta: false,
                 filtro: 0,
                 seleccionada: std::env::var("ICARO_EDITOR").ok().and_then(|_| (total > 0).then_some(0)),
                 menu: if demo { menu } else { None },

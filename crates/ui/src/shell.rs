@@ -70,6 +70,7 @@ pub struct Cuenta<'a> {
     pub nombre: &'a str,
     pub proveedor: &'a str,
     pub estado: crate::cuenta::EstadoSesion,
+    pub textura: Option<&'a [u8]>,
 }
 
 /// Resumen de las descargas activas; la barra lateral lo muestra solo si existe.
@@ -332,7 +333,7 @@ fn bloque_cuenta<'a, M: Clone + 'a>(p: Paleta, c: &Cuenta<'a>, al_pulsar: M) -> 
             background: Some(Background::Color(p.border)),
             ..Default::default()
         }),
-        crate::cuenta::bloque_cuenta(p, c.estado, c.nombre, c.proveedor, al_pulsar),
+        crate::cuenta::bloque_cuenta(p, c.estado, c.nombre, c.proveedor, c.textura, al_pulsar),
     ]
     .spacing(espacio::S3)
     .into()

@@ -301,6 +301,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     }
     if !app.servicios.demo {
         match &a {
+            Accion::Cerrar if app.pantalla == Some(Pantalla::Sincronizar) => return crate::sincronizacion_real::actualizar(app,crate::sincronizacion_real::Accion::Cerrar),
             Accion::Abrir(Pantalla::Codigo)
             | Accion::PedirOtroCodigo
             | Accion::SimularConfirmacion => {
@@ -949,6 +950,7 @@ pub fn vista_pantalla<'a>(app: &'a App, pantalla: Pantalla) -> Element<'a, Mensa
         Pantalla::Fallo => fallo(app, p),
         Pantalla::ErrorTienda => error_tienda(app, p),
         Pantalla::NoVerificados => crate::verificacion_real::vista(app),
+        Pantalla::Sincronizar if !app.servicios.demo || app.servicios.sincronizacion.visual => crate::sincronizacion_real::vista(app),
         Pantalla::Sincronizar => {
             con_lamina(p, Lamina::Hidra, crate::desplazable_pub(sincronizar(p)))
         }
@@ -960,6 +962,7 @@ pub fn vista_pantalla<'a>(app: &'a App, pantalla: Pantalla) -> Element<'a, Mensa
         Pantalla::Actualizacion => crate::actualizacion_real::vista(app),
         Pantalla::Cuenta => crate::desplazable_pub(crate::sesion::vista_cuenta(app)),
         Pantalla::Estudio => crate::sesion::vista_estudio(app),
+        Pantalla::Red if !app.servicios.demo || app.servicios.servidores.visual=>crate::red_privada_real::vista(app),
         Pantalla::Red => con_lamina(
             p,
             Lamina::HermesHilos,

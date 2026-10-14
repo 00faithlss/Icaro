@@ -1,0 +1,88 @@
+name: Empaquetar Windows
+on:
+  workflow_dispatch:
+  push:
+    branches: ['main', 'v*']
+    tags: ['v*']
+  create:
+permissions:
+  contents: write
+concurrency:
+  group: icaro-windows-publication
+  cancel-in-progress: false
+jobs:
+  windows:
+    if: github.event_name != 'create' || (github.event.ref_type == 'branch' && startsWith(github.event.ref, 'v'))
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      ICARO_COMPILACION: ${{ github.run_id }}
+      ICARO_REF: ${{ github.event_name == 'create' && github.event.ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.ICARO_REF }}
+      - name: Verificar núcleo e interfaz
+        shell: pwsh
+        run: |
+          cargo test --locked -j1 -p icaro-core --lib --test actualizacion_local
+          if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas del núcleo' }
+          cargo test --locked -j1 -p icaro-ui --lib --example launcher -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas de la interfaz' }
+      - name: Preparar Inno Setup firmado
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'inno-6.7.3.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $setup
+          $signature = Get-AuthenticodeSignature -LiteralPath $setup
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*O=Pyrsys B.V.*') { throw 'Firma del compilador inválida' }
+          $compiler = Join-Path $env:RUNNER_TEMP 'inno-6.7.3'
+          $process = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS',('/DIR="' + $compiler + '"')) -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'No se pudo preparar Inno Setup' }
+      - name: Comprobar rama o tag de versión
+        if: startsWith(env.ICARO_REF, 'v')
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object name -EQ 'icaro-ui').version
+          if ($env:ICARO_REF -ne "v$version") { throw 'La rama o tag no coincide con la versión de Cargo' }
+      - name: Compilar y empaquetar
+        shell: pwsh
+        run: ./scripts/empaquetar_windows.ps1 -Compilador (Join-Path $env:RUNNER_TEMP 'inno-6.7.3/ISCC.exe')
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: icaro-windows-x86_64
+          path: target/dist/windows/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publicar actualización verificada
+        if: github.event_name != 'workflow_dispatch'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $metadata = Get-Content target/dist/windows/icaro-*-artefactos.json -Raw | ConvertFrom-Json
+          $version = $metadata.version
+          $tag = "v$version-build.$env:ICARO_COMPILACION"
+          $portable = Get-ChildItem target/dist/windows -Filter '*.exe' | Where-Object Name -NotLike '*-setup.exe' | Select-Object -First 1
+          $setup = Get-ChildItem target/dist/windows -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $portable -or -not $setup) { throw 'Faltan artefactos de actualización' }
+          $manifest = @{
+            version = $version
+            compilacion = [long]$env:ICARO_COMPILACION
+            notas = @(@{tipo='mejora';texto="Actualización publicada desde $env:ICARO_REF."})
+            plataformas = @{
+              'windows-x86_64' = @{archivo=$portable.Name;sha256=(Get-FileHash -LiteralPath $portable.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
+              'windows-x86_64-setup' = @{archivo=$setup.Name;sha256=(Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content target/dist/windows/latest.json -Encoding utf8
+          $files = @(Get-ChildItem target/dist/windows -File | ForEach-Object FullName)
+          $revision = (git rev-parse HEAD).Trim()
+          $latest = 'true'
+          $previous = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>$null
+          if ($LASTEXITCODE -eq 0 -and $previous -match '^v(\d+\.\d+\.\d+)') {
+            if ([version]$Matches[1] -gt [version]$version) { $latest = 'false' }
+          }
+          gh release create $tag @files --target $revision --title "Icaro $version · $env:ICARO_REF" --notes "Paquete de Windows y actualización automática comprobados por CI." "--latest=$latest"
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudo publicar la actualización' }

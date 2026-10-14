@@ -139,4 +139,16 @@ Se inspeccionaron capturas de modpacks y eliminación en Tinta/Piedra, incluidos
 
 ## Servidores reales y detección de ZeroTier
 
-Las escenas servidores, servidores-vacio, servidores-formulario y sus variantes con sufijo -angosto capturan lista, vacío y formulario sin consultar cuentas, servidores ni ZeroTier del usuario. El diagnóstico detectar_zerotier consulta únicamente la CLI instalada y no modifica redes. La [guía de servidores](servidores.md) explica la persistencia, las consultas, el lanzamiento por perfil y los límites pendientes.
+Las escenas `servidores`, `servidores-vacio`, `servidores-formulario`, `red-privada-autorizada`, `red-privada-ausente`, `sincronizacion-revision`, `sincronizacion-confirmar` y sus variantes con sufijo `-angosto` usan fixtures aislados. `ICARO_TEMA_DISENO=piedra|tinta` fija el tema de la captura. No consultan cuentas ni redes del usuario. El diagnóstico `detectar_zerotier` es de lectura. La [guía de servidores](servidores.md) y la [guía del servicio de mods](sincronizacion-servidores.md) explican el uso y sus límites.
+
+El servicio del anfitrión se compila con `cargo build -j 1 -p icaro-core --example sync_host`; su ayuda muestra los argumentos de datos, instancia e IP privada de escucha. El [empaquetado Windows](instalador-windows.md) genera launcher, servicio, portable e instalador desde la misma versión y reúne los avisos de licencia de sus dependencias.
+
+Los grabados preparados se incluyen como WebP VP8L sin pérdida; se conservan las vistas previas RGBA y la decodificación en segundo plano. El 13-10-2026 se compararon los 144 resultados con los PNG anteriores: dimensiones y todos los canales RGBA idénticos; 558.684.090 bytes pasaron a 159.119.906 bytes. No se cambiaron las fuentes originales ni los recortes.
+
+Las escenas de prueba incluyen `modpacks-tienda`, `modpacks-versiones`, sus variantes `-angosto`, `cuenta-original` y `estudio-original`. `ICARO_COMPILACION` incorpora el número de compilación del workflow; en compilaciones locales toma 0.
+
+## Validación previa a v0.1.0
+
+El 13-10-2026 pasaron 146 pruebas del núcleo, 56 de componentes, 49 del launcher y la regresión del ayudante real con Windows PowerShell: 252 en total, sin fallos. Se mantienen 13 pruebas del núcleo y dos del launcher omitidas por defecto por sus requisitos externos. La interfaz se ejecuta con `--test-threads=1` para las fixtures que comparten estado.
+
+También pasaron `git diff --check`, la validación del workflow con actionlint y el cálculo del roadmap (61/83, 73 %). Se verificaron los hashes y tamaños de los paquetes locales, el contenido del ZIP portable, la actualización mediante setup silencioso en una ruta aislada y la conservación de los metadatos de usuario revisados. Los estados de actualización tienen 16 capturas nativas de fixtures en Tinta/Piedra y dos tamaños. La descarga/aplicación desde una release de GitHub en otro equipo requiere validación adicional.

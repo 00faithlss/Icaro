@@ -16,6 +16,7 @@ use std::{
 };
 
 const META: &str = ".icaro-mods.json";
+pub mod sincronizacion;
 const MAX_FILE: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -224,6 +225,9 @@ pub fn inventario(store: &Almacen, id: &str) -> Result<Vec<Instalado>, Error> {
     Ok(mods)
 }
 pub trait Fuente: Sync {
+    fn solo_cliente(&self, _project: &str) -> impl std::future::Future<Output = Result<bool, Error>> + Send {
+        async { Ok(false) }
+    }
     fn version(&self, id: &str)
         -> impl std::future::Future<Output = Result<Version, Error>> + Send;
     fn versiones(
@@ -242,6 +246,10 @@ pub trait Fuente: Sync {
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Error>> + Send;
 }
 impl Fuente for Catalog {
+    async fn solo_cliente(&self, project: &str) -> Result<bool, Error> {
+        let p = self.project(project).await?;
+        Ok(p.server_side == "unsupported" && p.client_side != "unsupported")
+    }
     async fn version(&self, id: &str) -> Result<Version, Error> {
         Ok(self.version(id).await?)
     }

@@ -309,6 +309,8 @@ pub fn cabeza_historial<'a, M: 'a>(p: Paleta, nombre: &str, lado: f32, en_uso: b
 struct ProgCuerpo {
     escala: f32,
     espalda: bool,
+    textura: Option<std::sync::Arc<[u8]>>,
+    delgado: bool,
 }
 
 impl<M> canvas::Program<M> for ProgCuerpo {
@@ -316,24 +318,56 @@ impl<M> canvas::Program<M> for ProgCuerpo {
 
     fn draw(&self, _: &(), renderer: &Renderer, _: &Theme, bounds: Rectangle, _: mouse::Cursor) -> Vec<Geometry> {
         let mut f = Frame::new(renderer, bounds.size());
-        dibujar_cuerpo(&mut f, 0.0, 0.0, self.escala, if self.espalda { 4 } else { 0 }, [true, true, false, true], false);
+        dibujar_cuerpo(&mut f, 0.0, 0.0, self.escala, if self.espalda { 4 } else { 0 }, if self.textura.is_some() {[true;4]} else {[true,true,false,true]}, self.delgado, self.textura.as_deref());
         vec![f.into_geometry()]
     }
 }
 
 /// Cuerpo completo de 16 × 32 píxeles, de frente o de espalda.
 pub fn cuerpo<'a, M: 'a>(espalda: bool, escala: f32) -> Element<'a, M> {
-    lienzo(ProgCuerpo { escala, espalda }, 16.0 * escala, 32.0 * escala)
+    cuerpo_textura(espalda, escala, None, false)
+}
+fn cuerpo_textura<'a, M: 'a>(espalda: bool, escala: f32, textura: Option<&[u8]>, delgado: bool) -> Element<'a, M> {
+    lienzo(ProgCuerpo { escala, espalda, textura: textura.map(Into::into), delgado }, 16.0 * escala, 32.0 * escala)
+}
+fn pixeles_skin(bytes: &[u8], espalda: bool, delgado: bool, capas: [bool;4]) -> Vec<Vec<Option<Color>>> {
+    let mut grid = vec![vec![None;16];32];
+    if bytes.len()!=64*64*4 {return grid;}
+    let arm = if delgado {3} else {4};
+    // Destino, tamaño, UV base (frente/espalda), UV exterior y capa visible.
+    for (dx,dy,w,h,fx,bx,ty,ox,oy,layer) in [
+        (4,0,8,8,8,24,8,32,0,0),
+        (4,8,8,12,20,32,20,0,16,1),
+        (4-arm,8,arm,12,44,48+arm,20,0,16,2),
+        (12,8,arm,12,36,40+arm,52,16,0,2),
+        (4,20,4,12,4,12,20,0,16,3),
+        (8,20,4,12,20,28,52,-16,0,3),
+    ] {
+        let tx=if espalda {bx} else {fx};
+        for y in 0..h {for x in 0..w {
+            let sample=|u:i32,v:i32| {let i=((v*64+u)*4) as usize;Color::from_rgba8(bytes[i],bytes[i+1],bytes[i+2],f32::from(bytes[i+3])/255.)};
+            let mut base=sample(tx+x,ty+y);base.a=1.;
+            if capas[layer] {let outer=sample(tx+x+ox,ty+y+oy);base=mezcla(base,outer,outer.a);base.a=1.;}
+            grid[(dy+y) as usize][(dx+x) as usize]=Some(base);
+        }}
+    }
+    grid
+}
+fn cabeza_textura<'a, M:'a>(p:Paleta, bytes:&[u8], lado:f32, marcada:bool)->Element<'a,M> {
+    let grid=pixeles_skin(bytes,false,false,[true;4]);
+    let cells=(0..8).flat_map(|y|(4..12).map(move|x|(y,x))).map(|(y,x)|grid[y][x].unwrap_or(Color::TRANSPARENT)).collect();
+    cabeza_con(p,Some(cells),None,lado,if lado==32. {0.} else {4.},marcada.then_some(p.text))
 }
 
 /// Dibuja el cuerpo con el giro `paso` (de 0 a 7, pasos de 45°): cada pieza se
 /// proyecta con su ancho y su fondo, y se muestrea de la vista de frente o de
 /// espalda según hacia dónde mire.
-fn dibujar_cuerpo(f: &mut Frame, x: f32, y: f32, e: f32, paso: u8, capas: [bool; 4], delgado: bool) {
+fn dibujar_cuerpo(f: &mut Frame, x: f32, y: f32, e: f32, paso: u8, capas: [bool; 4], delgado: bool, textura: Option<&[u8]>) {
     let ang = f32::from(paso % 8) * std::f32::consts::FRAC_PI_4;
     let (cos, sen) = (ang.cos(), ang.sin().abs());
     let delante = cos > -0.001;
     let rejilla = rejilla_cuerpo(!delante && cos < -0.001);
+    let real = textura.map(|t| pixeles_skin(t, !delante && cos < -0.001, delgado, capas));
     let ancho_brazo = if delgado { 3.0 } else { 4.0 };
     let lado_oscuro = 1.0 - cos.abs();
     // (centro, ancho, fondo, fila inicial, fila final, columnas de la rejilla)
@@ -362,8 +396,8 @@ fn dibujar_cuerpo(f: &mut Frame, x: f32, y: f32, e: f32, paso: u8, capas: [bool;
             for i in 0..n {
                 // De lado se ve la arista de la pieza, más oscura.
                 let col = if cos.abs() < 0.3 { c0 } else { c0 + i };
-                let Some(celda) = rejilla[fila][col] else { continue };
-                let Some(color) = color_celda(celda, capas) else { continue };
+                let color=if let Some(real)=&real {real[fila][col]} else {rejilla[fila][col].and_then(|c|color_celda(c,capas))};
+                let Some(color) = color else {continue};
                 let color = if lado_oscuro > 0.0 { mezcla(color, Color::BLACK, 0.35 * lado_oscuro) } else { color };
                 // Se redondea al píxel de pantalla para que no queden costuras.
                 let (a, b) = (izq + ancho_col * i as f32, izq + ancho_col * (i + 1) as f32);
@@ -385,6 +419,7 @@ pub struct Escena<'a, M> {
     pub capas: [bool; 4],
     pub delgado: bool,
     pub soltando: bool,
+    pub textura: Option<&'a [u8]>,
     pub al_girar: Box<dyn Fn(i32) -> M + 'a>,
 }
 
@@ -447,8 +482,8 @@ impl<'a, M> canvas::Program<M> for Escena<'a, M> {
         let y = ((bounds.height - h) / 2.0).round();
         let centro = bounds.width / 2.0;
         // Dos cuerpos de 128 px separados 56 px; el segundo mira al lado contrario.
-        dibujar_cuerpo(&mut f, (centro - 28.0 - w).round(), y, e, self.giro, self.capas, self.delgado);
-        dibujar_cuerpo(&mut f, (centro + 28.0).round(), y, e, self.giro + 4, self.capas, self.delgado);
+        dibujar_cuerpo(&mut f, (centro - 28.0 - w).round(), y, e, self.giro, self.capas, self.delgado, self.textura);
+        dibujar_cuerpo(&mut f, (centro + 28.0).round(), y, e, self.giro + 4, self.capas, self.delgado, self.textura);
         if self.soltando {
             // Zona de soltar: contorno sólido de 2 px dentro de la escena.
             let (a, b) = (bounds.width, bounds.height);
@@ -635,12 +670,13 @@ pub fn bloque_cuenta<'a, M: Clone + 'a>(
     estado: EstadoSesion,
     nombre: &str,
     proveedor: &str,
+    textura: Option<&[u8]>,
     al_pulsar: M,
 ) -> Element<'a, M> {
     let contenido = |fondo: Option<Color>| -> Element<'a, M> {
         container(
             row![
-                cabeza_de(p, estado, 32.0),
+                if let Some(rgba)=textura {cabeza_textura(p,rgba,32.,false)}else{cabeza_de(p, estado, 32.0)},
                 column![nombre_cuenta(p, nombre), detalle_sesion(p, estado, proveedor)].spacing(
                     if matches!(estado, EstadoSesion::Vencida | EstadoSesion::CodigoVencido) { 4.0 } else { 0.0 }
                 ),
@@ -827,10 +863,13 @@ pub struct DatosCuenta<'a> {
     /// Fecha en que se podrá cambiar de nuevo el nombre (DD-MM-AAAA).
     pub proximo_cambio: &'a str,
     /// Nombres de las últimas skins; cada uno genera su cabeza.
-    pub historial: &'a [&'a str],
+    pub historial: Vec<&'a str>,
     /// Skin en uso y skin elegida en el historial.
     pub en_uso: usize,
     pub elegida: usize,
+    pub textura: Option<&'a [u8]>,
+    pub historial_real: Vec<std::sync::Arc<[u8]>>,
+    pub delgado: bool,
 }
 
 /// Mensajes de la pantalla de cuenta.
@@ -843,6 +882,7 @@ pub struct MensajesCuenta<'a, M> {
     pub volver_a_entrar: M,
     pub comprar: M,
     pub jugar_invitado: M,
+    pub cambiar_nombre: Option<M>,
 }
 
 /// Encabezado de la pantalla: título monumental y, a la derecha, la lámina
@@ -961,7 +1001,7 @@ pub fn pantalla_cuenta<'a, M: Clone + 'a>(p: Paleta, d: DatosCuenta<'a>, m: Mens
     } else {
         container(
             column![
-                row![cuerpo(false, 6.0), cuerpo(true, 6.0)].spacing(espacio::S8),
+                row![cuerpo_textura(false, 6.0, d.textura, d.delgado), cuerpo_textura(true, 6.0, d.textura, d.delgado)].spacing(espacio::S8),
                 boton_icono(p, Some(Icono::Pincel), "Abrir estudio", Tipo::Normal, medida::CONTROL_SM, Some(m.abrir_estudio.clone())),
             ]
             .spacing(espacio::S4)
@@ -998,7 +1038,7 @@ pub fn pantalla_cuenta<'a, M: Clone + 'a>(p: Paleta, d: DatosCuenta<'a>, m: Mens
         _ => {
             let mut cabezas = row![].spacing(espacio::S3 - 10.0).align_y(Alignment::Center);
             for (i, n) in d.historial.iter().enumerate() {
-                let c = button(cabeza_historial(p, n, 48.0, i == d.elegida))
+                let c = button(if let Some(rgba)=d.historial_real.get(i) {cabeza_textura(p,rgba,48.,i==d.elegida)} else {cabeza_historial(p,n,48.,i==d.elegida)})
                     .padding(0)
                     .on_press((m.elegir_skin)(i))
                     .style(estilo::sin_estilo(p.text));
@@ -1022,7 +1062,7 @@ pub fn pantalla_cuenta<'a, M: Clone + 'a>(p: Paleta, d: DatosCuenta<'a>, m: Mens
                             etiqueta("Nombre de usuario", p.text_muted),
                             txt::<M>(d.nombre.to_owned(), fuentes::TITULO, (20.0, 28.0), p.text),
                             txt::<M>(
-                                format!("Puedes cambiarlo de nuevo el {}.", d.proximo_cambio),
+                                if d.proximo_cambio.is_empty() {"Gestiona tu nombre de usuario en Minecraft.net.".into()} else {format!("Puedes cambiarlo de nuevo el {}.", d.proximo_cambio)},
                                 fuentes::CUERPO,
                                 texto::BODY_SM,
                                 p.text_muted
@@ -1030,7 +1070,7 @@ pub fn pantalla_cuenta<'a, M: Clone + 'a>(p: Paleta, d: DatosCuenta<'a>, m: Mens
                         ]
                         .spacing(4)
                         .width(Length::Fill),
-                        boton_icono::<M>(p, None, "Cambiar", Tipo::Normal, medida::CONTROL_SM, None),
+                        boton_icono::<M>(p, None, "Cambiar", Tipo::Normal, medida::CONTROL_SM, m.cambiar_nombre.clone()),
                     ]
                     .spacing(espacio::S6),
                     Space::with_height(espacio::S5),
@@ -1072,6 +1112,8 @@ pub struct DatosEstudio<'a> {
     pub textura: Option<&'a str>,
     pub error: Option<&'a str>,
     pub soltando: bool,
+    pub rgba: Option<&'a [u8]>,
+    pub puede_aplicar: bool,
 }
 
 /// Mensajes del estudio de skin.
@@ -1093,6 +1135,7 @@ pub fn estudio_skin<'a, M: Clone + 'a>(p: Paleta, d: DatosEstudio<'a>, m: Mensaj
         capas: d.capas,
         delgado: d.modelo == 1,
         soltando: d.soltando,
+        textura: d.rgba,
         al_girar: Box::new(m.girar),
     })
     .width(Length::Fill)
@@ -1134,7 +1177,7 @@ pub fn estudio_skin<'a, M: Clone + 'a>(p: Paleta, d: DatosEstudio<'a>, m: Mensaj
         "Cargar .png",
         Tipo::Normal,
         medida::CONTROL,
-        Some(m.cargar.clone()),
+        d.subiendo.is_none().then_some(m.cargar.clone()),
     ));
     let aplicar: Element<M> = match d.subiendo {
         Some(ms) => container(
@@ -1158,7 +1201,7 @@ pub fn estudio_skin<'a, M: Clone + 'a>(p: Paleta, d: DatosEstudio<'a>, m: Mensaj
             "Aplicar a la cuenta",
             Tipo::Primario,
             medida::CONTROL,
-            Some(m.aplicar.clone()),
+            d.puede_aplicar.then_some(m.aplicar.clone()),
         ),
     };
     acciones = acciones.push(aplicar);
@@ -1264,6 +1307,24 @@ pub fn codigo<'a, M: 'a>(p: Paleta, codigo: &str, vencido: bool) -> Element<'a, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn textura_real_muestra_frente_espalda_modelo_y_capas_sin_reemplazar_el_diseno() {
+        let mut rgba=vec![0;64*64*4];
+        for pixel in rgba.chunks_exact_mut(4){pixel.copy_from_slice(&[20,30,40,255]);}
+        let paint=|bytes:&mut Vec<u8>,x:usize,y:usize,color:[u8;4]|bytes[(y*64+x)*4..(y*64+x)*4+4].copy_from_slice(&color);
+        paint(&mut rgba,8,8,[200,10,10,255]);
+        paint(&mut rgba,24,8,[10,200,10,255]);
+        paint(&mut rgba,40,8,[10,10,200,255]);
+        let front=pixeles_skin(&rgba,false,false,[false;4]);
+        let back=pixeles_skin(&rgba,true,false,[false;4]);
+        assert_eq!(front[0][4],Some(Color::from_rgb8(200,10,10)));
+        assert_eq!(back[0][4],Some(Color::from_rgb8(10,200,10)));
+        let overlay=pixeles_skin(&rgba,false,false,[true,false,false,false])[0][4].unwrap();
+        assert!((overlay.r-10./255.).abs()<1e-6 && (overlay.g-10./255.).abs()<1e-6 && (overlay.b-200./255.).abs()<1e-6);
+        assert!(pixeles_skin(&rgba,false,true,[false;4])[8][0].is_none());
+        assert!(front[8][0].is_some());
+        assert!(pixeles_skin(&[],false,false,[true;4]).iter().flatten().all(Option::is_none));
+    }
     use crate::tema::TINTA;
 
     #[test]

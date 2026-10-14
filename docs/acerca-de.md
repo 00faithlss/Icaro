@@ -12,4 +12,4 @@ Icaro Launcher es un launcher de Minecraft escrito en Rust, ligero y optimizado,
 
 ## Servidores y red privada
 
-La lista real permite guardar servidores, vincular una instancia, consultar su estado y preparar el lanzamiento directo. ZeroTier se detecta y sus redes se consultan desde el equipo. Unirse a nuevas redes y sincronizar mods con el anfitrión siguen pendientes. Consulta [Servidores y ZeroTier](servidores.md).
+La lista real permite guardar servidores, vincular una instancia, reordenar por arrastre, consultar estado/SRV y preparar el lanzamiento directo. RedPrivada detecta ZeroTier y permite solicitar pertenencia con su CLI. SincronizarMods consulta el servicio del anfitrión, muestra diferencias y aplica archivos exactos de Modrinth conservando archivos locales. Faltan automatización de instalación/permisos de ZeroTier y validación con dos equipos. Consulta [Servidores y ZeroTier](servidores.md) y [sincronización](sincronizacion-servidores.md).

@@ -298,11 +298,11 @@ fn versiones_tabla<'a>(
     let cabecera = |label: &str| text(label.to_uppercase()).font(fuentes::ETIQUETA)
         .size(texto::LABEL.0).color(p.text_muted).wrapping(iced::widget::text::Wrapping::None);
     let headings = row![
-        container(cabecera("Versión")).width(Length::FillPortion(11)),
-        container(cabecera("Minecraft")).width(Length::FillPortion(6)),
-        container(cabecera("Loader")).width(Length::FillPortion(4)),
+        container(cabecera("Versión")).width(Length::FillPortion(7)),
+        container(cabecera("Minecraft")).width(Length::FillPortion(7)),
+        container(cabecera("Loader")).width(Length::FillPortion(6)),
         container(cabecera("Fecha")).width(Length::FillPortion(7)),
-        container(cabecera("Descargas")).width(Length::FillPortion(6)),
+        container(cabecera("Descargas")).width(Length::FillPortion(7)),
         Space::with_width(128)
     ]
     .spacing(8)
@@ -378,7 +378,7 @@ fn versiones_tabla<'a>(
             )
         };
         let row = row![
-            container(version).width(Length::FillPortion(11)),
+            container(version).width(Length::FillPortion(7)),
             text(
                 v.game_versions
                     .iter()
@@ -391,7 +391,7 @@ fn versiones_tabla<'a>(
             .font(fuentes::MONO)
             .size(texto::MONO_SM.0)
             .color(p.text_muted)
-            .width(Length::FillPortion(6)),
+            .width(Length::FillPortion(7)),
             text(
                 v.loaders
                     .iter()
@@ -402,7 +402,7 @@ fn versiones_tabla<'a>(
             .font(fuentes::MONO)
             .size(texto::MONO_SM.0)
             .color(p.text_muted)
-            .width(Length::FillPortion(4)),
+            .width(Length::FillPortion(6)),
             text(fecha(&v.date_published))
                 .font(fuentes::MONO)
                 .size(texto::MONO_SM.0)
@@ -412,7 +412,7 @@ fn versiones_tabla<'a>(
                 .font(fuentes::MONO)
                 .size(texto::MONO_SM.0)
                 .color(p.text_muted)
-                .width(Length::FillPortion(6)),
+                .width(Length::FillPortion(7)),
             container(action)
                 .width(128)
                 .align_x(iced::alignment::Horizontal::Right)
@@ -761,7 +761,7 @@ pub fn vista<'a>(
         column![
             text(project.title.to_uppercase())
                 .font(fuentes::DISPLAY)
-                .size(40)
+                .size(if app.ventana.width < 1100. {32} else {40})
                 .color(p.text),
             metadata,
         ]
@@ -806,11 +806,11 @@ pub fn vista<'a>(
     .width(Length::Fill);
     // La navegación queda fuera del área desplazable. Al cambiar de pestaña,
     // una clave nueva reinicia también el desplazamiento suave de su contenido.
-    let ancho = app.ventana.width - if app.colapsada {64.} else {232.} - 96. - 320. - 48.;
-    let contenido_principal = if s.tab==Pestana::Versiones && ancho<680. {
+    let ancho = app.ventana.width - if app.barra_colapsada() {64.} else {232.} - 96. - 320. - 48.;
+    let contenido_principal = if s.tab==Pestana::Versiones && ancho<560. {
         // Una sola área de desplazamiento conserva la medida mínima de las
         // columnas sin partir encabezados, fechas o acciones en dos líneas.
-        iced::widget::scrollable::Scrollable::with_direction(container(main).padding(Padding {top:28.,..Padding::ZERO}).width(680).height(Length::Shrink),
+        iced::widget::scrollable::Scrollable::with_direction(container(main).padding(Padding {top:28.,..Padding::ZERO}).width(560).height(Length::Shrink),
             iced::widget::scrollable::Direction::Both {
                 vertical:iced::widget::scrollable::Scrollbar::new().width(0).scroller_width(0),
                 horizontal:iced::widget::scrollable::Scrollbar::new().width(8).scroller_width(8),

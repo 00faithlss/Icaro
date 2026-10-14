@@ -19,6 +19,8 @@ pub struct Servidor {
     pub nombre: String,
     pub direccion: String,
     pub instancia: Option<String>,
+    #[serde(default)]
+    pub sincronizar: bool,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Direccion {
@@ -94,6 +96,7 @@ pub fn nuevo(nombre: String, dir: String, instancia: Option<String>) -> Result<S
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| "No se pudo crear el identificador.")?;
     let s = Servidor {
+        sincronizar: false,
         id: bytes.iter().map(|b| format!("{b:02x}")).collect(),
         nombre: nombre.trim().into(),
         direccion: dir.trim().into(),
@@ -253,7 +256,8 @@ fn descripcion(v: &serde_json::Value, out: &mut String, depth: usize) {
     }
 }
 async fn consultar_inner(d: Direccion) -> Result<Estado, String> {
-    let mut s = TcpStream::connect((d.host.as_str(), d.puerto))
+    let (host, puerto) = resolver_destino(&d).await;
+    let mut s = TcpStream::connect((host.as_str(), puerto))
         .await
         .map_err(|_| "No se pudo conectar; revisa la dirección, la red o ZeroTier.")?;
     // -1 solicita estado sin afirmar una versión de protocolo compatible.
@@ -335,6 +339,58 @@ async fn consultar_inner(d: Direccion) -> Result<Estado, String> {
         ms: now.elapsed().as_millis() as u64,
     })
 }
+async fn resolver_destino(d: &Direccion) -> (String, u16) {
+    let original = (d.host.clone(), d.puerto);
+    if d.puerto != 25565 || d.host.parse::<IpAddr>().is_ok() {
+        return original;
+    }
+    let Ok(resolver) = hickory_resolver::TokioAsyncResolver::tokio_from_system_conf() else {
+        return original;
+    };
+    let lookup = tokio::time::timeout(
+        Duration::from_millis(1200),
+        resolver.srv_lookup(format!("_minecraft._tcp.{}", d.host)),
+    )
+    .await;
+    if let Ok(Ok(records)) = lookup {
+        let records: Vec<_> = records
+            .iter()
+            .take(64)
+            .filter(|r| r.port() > 0 && !r.target().is_root())
+            .map(|r| {
+                (
+                    r.priority(),
+                    r.weight(),
+                    r.target().to_utf8().trim_end_matches('.').to_owned(),
+                    r.port(),
+                )
+            })
+            .collect();
+        let mut bytes = [0; 8];
+        let _ = getrandom::fill(&mut bytes);
+        if let Some(destino) = elegir_srv(&records, u64::from_le_bytes(bytes)) {
+            return destino;
+        }
+    }
+    original
+}
+fn elegir_srv(records: &[(u16, u16, String, u16)], random: u64) -> Option<(String, u16)> {
+    let priority = records.iter().map(|r| r.0).min()?;
+    let group: Vec<_> = records.iter().filter(|r| r.0 == priority).collect();
+    let total: u64 = group.iter().map(|r| r.1 as u64).sum();
+    if total == 0 {
+        let r = group[(random % group.len() as u64) as usize];
+        return Some((r.2.clone(), r.3));
+    }
+    let mut pick = random % total;
+    for r in group {
+        if pick < r.1 as u64 {
+            return Some((r.2.clone(), r.3));
+        }
+        pick -= r.1 as u64;
+    }
+    None
+}
 pub async fn consultar(dir: &str, cancel: CancellationToken) -> Result<Estado, String> {
     let d = direccion(dir)?;
     tokio::select! {_ =cancel.cancelled()=>Err("Consulta cancelada.".into()),r=tokio::time::timeout(Duration::from_secs(5),consultar_inner(d))=>r.map_err(|_|"El servidor no respondió en cinco segundos.".to_string())?}
@@ -343,6 +399,27 @@ pub async fn consultar(dir: &str, cancel: CancellationToken) -> Result<Estado, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn srv_respeta_prioridad_peso_y_puerto() {
+        let records = vec![
+            (20, 100, "alto.example".into(), 25566),
+            (10, 1, "primero.example".into(), 25567),
+            (10, 3, "segundo.example".into(), 25568),
+        ];
+        assert_eq!(
+            elegir_srv(&records, 0),
+            Some(("primero.example".into(), 25567))
+        );
+        assert_eq!(
+            elegir_srv(&records, 1),
+            Some(("segundo.example".into(), 25568))
+        );
+        assert_eq!(
+            elegir_srv(&records, 3),
+            Some(("segundo.example".into(), 25568))
+        );
+        assert!(elegir_srv(&[], 0).is_none());
+    }
     #[test]
     fn direcciones_no_admiten_argumentos_y_conservan_ipv6() {
         assert_eq!(direccion("[::1]:25566").unwrap().texto(), "[::1]:25566");
@@ -416,9 +493,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let worker = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            for _ in 0..2{
-                let n=leer_varint(&mut stream).await.unwrap();
-                let mut request=vec![0;n as usize];
+            for _ in 0..2 {
+                let n = leer_varint(&mut stream).await.unwrap();
+                let mut request = vec![0; n as usize];
                 stream.read_exact(&mut request).await.unwrap();
             }
             stream.write_all(&varint(256 * 1024 + 1)).await.unwrap();

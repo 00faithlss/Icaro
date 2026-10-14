@@ -3,6 +3,7 @@
 //! Capturas de widgets reales con fixtures; sin login/red/guardado de usuario.
 use crate::*;
 pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
+    let piedra=std::env::var("ICARO_TEMA_DISENO").map_or(piedra,|v|v=="piedra");
     let (mut a, _) = iniciar_con_guardado(
         Seccion::Instancias,
         piedra,
@@ -12,10 +13,16 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
         None,
     );
     a.reducir = true;
+    a.modo=if piedra {Modo::Piedra}else{Modo::Tinta};a.tema=usize::from(piedra);
     a.pantalla = None;
     a.umbral = None;
     let scene = std::env::var("ICARO_VISTA_DISENO").unwrap_or_else(|_| "asistente".into());
     match scene.as_str() {
+        "cuenta-original" => {a.pantalla=Some(pantallas::Pantalla::Cuenta);a.sesion.estado=icaro_ui::cuenta::EstadoSesion::Activa;},
+        s if s.starts_with("estudio-original") => {a.pantalla=Some(pantallas::Pantalla::Estudio);a.sesion.estado=icaro_ui::cuenta::EstadoSesion::Activa;},
+        s if s.starts_with("modpacks-") => preparar_modpacks(&mut a, s),
+        s if s.starts_with("sincronizacion-")=>crate::sincronizacion_real::preparar_diseno(&mut a,s),
+        s if s.starts_with("red-privada")=>{crate::servidores_reales::preparar_diseno(&mut a,"servidores");crate::red_privada_real::preparar_diseno(&mut a,s);},
         s if s.starts_with("servidores")=>crate::servidores_reales::preparar_diseno(&mut a,s),
         "java-instancia" => { a.editor = Some(1); a.editor_inst = 0; },
         "almacenamiento" => { a.seccion=Seccion::Ajustes;a.ajuste=3;a.almacenamiento.informe=Some(icaro_core::almacenamiento::Informe{categorias:vec![("Assets".into(),484486173),("Bibliotecas".into(),80695893),("Java".into(),250000000),("Instancias".into(),2000000),("Caché".into(),1000000)],total:818182066,papeleras:vec![std::path::PathBuf::from("fixture/.papelera")]}); },
@@ -26,6 +33,7 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
         "noverif" => crate::verificacion_real::preparar_diseno(&mut a),
         "actualizacion" => crate::actualizacion_real::preparar_diseno(&mut a),
         "actualizacion-al-cerrar" => crate::actualizacion_real::preparar_diseno_al_cerrar(&mut a),
+        s if s.starts_with("actualizacion-") => crate::actualizacion_real::preparar_diseno_estado(&mut a,s),
         s if s.starts_with("recursos-") || s.starts_with("shaders-") => {
             crate::mods_reales::preparar_diseno(&mut a, &scene)
         }
@@ -267,6 +275,37 @@ pub(crate) fn preparar_cambio(a: &mut App, scene: &str) {
         a.ventana = Size::new(940., 720.);
     }
 }
+pub(crate) fn preparar_modpacks(a: &mut App, scene: &str) {
+    preparar_mods(a, if scene.contains("versiones") { "pagina-modpack" } else { "tienda" });
+    a.editor = None;
+    a.mods_vista = 0;
+    a.seccion = Seccion::Modpacks;
+    a.tienda_cat.clear();
+    a.tienda_lado = 2;
+    if let Some(results) = &mut a.servicios.results {
+        for (hit, title) in results.hits.iter_mut().zip(["Fabulously Optimized", "Simply Optimized", "Adrenaline", "Cobblemon Official Modpack"]) {
+            hit.title = title.into();
+            hit.description = "Un modpack preparado con sus mods y configuración. Elige qué versión instalar.".into();
+        }
+    }
+    a.servicios.tags = Some(icaro_core::modrinth::Tags {
+        versions: ["26.3", "1.21.4", "1.20.1"].into_iter().map(|version| icaro_core::modrinth::GameVersion { version: version.into(), version_type: "release".into() }).collect(),
+        loaders: ["fabric", "quilt", "neoforge", "forge"].into_iter().map(|name| icaro_core::modrinth::Loader { name: name.into(), supported_project_types: vec!["modpack".into()] }).collect(),
+    });
+    if let Some((project, versions)) = &mut a.servicios.detail {
+        project.id = "optimized-pack".into();
+        for (n, version) in versions.iter_mut().enumerate() {
+            version.project_id = project.id.clone();
+            version.name = format!("Fabulously Optimized 6.{}", 10 - n);
+            version.version_number = format!("6.{}", 10 - n);
+            version.game_versions = vec![if n < 4 { "1.21.4" } else { "1.20.1" }.into()];
+            version.files = serde_json::from_value(serde_json::json!([{"filename":"optimized.mrpack", "url":"https://cdn.modrinth.com/data/fixture/versions/sample/optimized.mrpack", "primary":true, "size":24000, "hashes":{"sha512":"aa".repeat(64)}}])).unwrap();
+        }
+        a.servicios.ficha.minecraft = "Todas las versiones".into();
+        a.servicios.ficha.loader = "Todos los loaders".into();
+    }
+}
+
 pub(crate) fn preparar_mods(a: &mut App, scene: &str) {
     use icaro_core::{
         instancias::Instancia,
