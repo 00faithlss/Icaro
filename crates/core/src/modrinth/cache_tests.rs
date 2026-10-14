@@ -64,6 +64,57 @@ fn version(n: usize) -> Value {
     json!({"id":format!("v{n}"),"project_id":format!("p{n}"),"name":"Mod","version_number":"1","version_type":"release","game_versions":["1.21.1"],"loaders":["fabric"],"dependencies":[],"files":[{"filename":format!("p{n}.jar"),"url":"https://cdn.modrinth.com/data/mod.jar","size":123,"primary":true,"hashes":{"sha512":format!("{n:0128x}")}}]})
 }
 #[tokio::test]
+async fn versiones_en_lotes_reinicio_y_cambio_solo_consultan_ids_ausentes() {
+    let ids: Vec<_> = (1..=163).map(|n| format!("v{n}")).collect();
+    let sorted: Vec<_> = ids.iter().cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let mut replies: Vec<_> = sorted.chunks(50).map(|batch| (200,"",Value::Array(batch.iter()
+        .map(|id| version(id[1..].parse().unwrap())).collect()))).collect();
+    replies.push((200,"",json!([version(164)])));
+    let mut api = Api::new(replies).await;
+    let path = std::env::temp_dir().join(format!("icaro-cache-versiones-{}.json", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    api.catalog.metadata_path = Some(path.clone());
+    assert_eq!(api.catalog.versions_by_ids(&ids).await.unwrap().len(),163);
+    assert_eq!(api.count(),4);
+    api.catalog.guardar_metadata_cache().await.unwrap();
+    let mut reiniciado = api.catalog.clone();
+    reiniciado.metadata = Some(Arc::new(tokio::sync::Mutex::new(cache::Cache::cargar(&path))));
+    assert_eq!(reiniciado.versions_by_ids(&ids).await.unwrap().len(),163);
+    reiniciado.version("v1").await.unwrap();
+    assert_eq!(api.count(),4,"Un reinicio no debe volver a consultar metadatos vigentes");
+    let mut changed = ids; changed[0] = "v164".into();
+    assert_eq!(reiniciado.versions_by_ids(&changed).await.unwrap().len(),163);
+    assert_eq!(api.count(),5);
+    let request = api.requests.lock().unwrap()[4].0.clone();
+    let url = Url::parse(&format!("http://localhost{}",request.split_whitespace().nth(1).unwrap())).unwrap();
+    let query = url.query_pairs().find(|(key,_)|key=="ids").unwrap().1;
+    assert_eq!(serde_json::from_str::<Vec<String>>(&query).unwrap(),vec!["v164"]);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn lotes_respetan_429_y_conservan_los_lotes_ya_resueltos() {
+    let ids: Vec<_> = (1..=80).map(|n|format!("v{n}")).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let body = |slice: &[String]| Value::Array(slice.iter().map(|id|version(id[1..].parse().unwrap())).collect());
+    let api = Api::new(vec![(200,"",body(&ids[..50])),(429,"Retry-After: 90\r\n",json!({})),(200,"",body(&ids[50..]))]).await;
+    assert!(matches!(api.catalog.versions_by_ids(&ids).await,Err(Error::RateLimited(_))));
+    assert_eq!(api.count(),2);
+    assert_eq!(api.catalog.versions_by_ids(&ids[..50]).await.unwrap().len(),50);
+    assert!(matches!(api.catalog.versions_by_ids(&ids).await,Err(Error::RateLimited(_))));
+    assert_eq!(api.count(),2);
+    api.expire_cooldown();
+    assert_eq!(api.catalog.versions_by_ids(&ids).await.unwrap().len(),80);
+    assert_eq!(api.count(),3);
+}
+
+#[tokio::test]
+async fn lote_incompleto_o_duplicado_no_se_guarda_como_valido() {
+    let api = Api::new(vec![(200,"",json!([version(1),version(1)])),(200,"",json!([version(1),version(2)]))]).await;
+    let ids = vec!["v1".into(),"v2".into()];
+    assert!(api.catalog.versions_by_ids(&ids).await.is_err());
+    assert_eq!(api.catalog.versions_by_ids(&ids).await.unwrap().len(),2);
+    assert_eq!(api.count(),2);
+}
+#[tokio::test]
 async fn ciento_sesenta_y_tres_hashes_reintentos_429_y_cambio_consultan_solo_lo_pendiente() {
     let hashes: Vec<_> = (1..=163).map(|n| format!("{n:0128x}")).collect();
     let initial: serde_json::Map<_,_> = (1..163).map(|n| (format!("{n:0128x}"),version(n))).collect();

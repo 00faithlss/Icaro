@@ -160,12 +160,15 @@ pub fn recargar(app: &mut App) -> Result<(), String> {
     let mut tarjetas = vec![];
     for i in &report.instancias {
         icaro_core::minecraft::migrar_directorio(&store, i).map_err(|e| e.to_string())?;
-        let actual = Estado::datos(&store, i);
-        let mut tarjeta = anteriores.get(&i.id).cloned().flatten().unwrap_or_else(|| actual.clone());
-        if tarjeta.version != actual.version { tarjeta.estado = actual.estado; tarjeta.detalle = actual.detalle; }
-        tarjeta.nombre = actual.nombre;
-        tarjeta.version = actual.version;
-        tarjeta.portada = actual.portada;
+        let version = format!("{} · {}", i.minecraft, crate::ficha::loader(&i.loader));
+        // Navegar no requiere revisar miles de assets en el hilo de la interfaz.
+        // La instalación vuelve a verificar los archivos antes de iniciar Java.
+        let mut tarjeta = anteriores.get(&i.id).cloned().flatten()
+            .filter(|t| t.version == version)
+            .unwrap_or_else(|| Estado::datos(&store, i));
+        tarjeta.nombre = i.nombre.clone();
+        tarjeta.version = version;
+        tarjeta.portada = pantallas::PORTADAS[i.portada as usize].1;
         tarjetas.push(tarjeta);
     }
     app.seleccionada = elegida.and_then(|id| report.instancias.iter().position(|i| i.id == id));

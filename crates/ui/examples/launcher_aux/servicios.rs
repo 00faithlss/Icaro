@@ -86,7 +86,11 @@ impl Estado {
             demo,
             session: None,
             vault: Arc::new(Vault::default()),
-            catalog: Catalog::new(),
+            catalog: Catalog::new().map(|catalog| {
+                if demo { catalog.with_metadata_cache() } else {
+                    catalog.with_persistent_metadata_cache(crate::estado::directorio(false).join("cache/modrinth-metadatos.json"))
+                }
+            }),
             auth_id: 0,
             auth_cancel: None,
             auth_busy: false,

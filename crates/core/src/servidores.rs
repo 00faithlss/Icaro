@@ -176,6 +176,17 @@ pub fn guardar(root: &Path, v: &[Servidor]) -> Result<(), String> {
         .map_err(|_| "No se pudo preparar la lista.")?,
     )
 }
+
+/// Desactiva la próxima sincronización únicamente para el vínculo completado.
+pub fn finalizar_sincronizacion(root: &Path, origen: &Servidor) -> Result<Vec<Servidor>, String> {
+    let mut lista = cargar(root)?;
+    let servidor = lista.iter_mut().find(|s| s.id == origen.id
+        && s.direccion == origen.direccion && s.instancia == origen.instancia)
+        .ok_or("Los mods se sincronizaron, pero el servidor o su instancia vinculada cambiaron. No se modificó la preferencia.")?;
+    servidor.sincronizar = false;
+    guardar(root, &lista).map_err(|e| format!("Los mods se sincronizaron, pero no se pudo desactivar la sincronización automática: {e}"))?;
+    Ok(lista)
+}
 #[derive(Debug, Clone)]
 pub struct Estado {
     pub version: String,
@@ -468,6 +479,27 @@ mod tests {
         c.cancel();
         assert!(consultar(&addr.to_string(), c).await.is_err());
     }
+    #[test]
+    fn sincronizacion_completada_desactiva_solo_su_vinculo_y_lo_persiste() {
+        let mut origen = nuevo("Amigos".into(), "localhost".into(), Some("1".repeat(32))).unwrap();
+        origen.sincronizar = true;
+        let root = std::env::temp_dir().join(format!("icaro-sync-preferencia-{}", origen.id));
+        let mut otro = nuevo("Otro".into(), "localhost:25567".into(), None).unwrap();
+        otro.sincronizar = true;
+        let mut renombrado = origen.clone(); renombrado.nombre = "Nombre nuevo".into();
+        guardar(&root, &[renombrado, otro.clone()]).unwrap();
+        let lista = finalizar_sincronizacion(&root, &origen).unwrap();
+        assert!(!lista[0].sincronizar); assert_eq!(lista[0].nombre, "Nombre nuevo");
+        assert_eq!(lista[1], otro); assert_eq!(cargar(&root).unwrap(), lista);
+        let mut cambiado = origen.clone(); cambiado.instancia = Some("2".repeat(32));
+        guardar(&root, &[cambiado.clone(), otro]).unwrap();
+        assert!(finalizar_sincronizacion(&root, &origen).is_err());
+        assert_eq!(cargar(&root).unwrap()[0], cambiado);
+        let root = root.canonicalize().unwrap();
+        assert_eq!(root.parent(), Some(std::env::temp_dir().canonicalize().unwrap().as_path()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn persistencia_no_confunde_identidad_ni_sobrescribe_datos_danados() {
         let root = std::env::temp_dir().join(format!(

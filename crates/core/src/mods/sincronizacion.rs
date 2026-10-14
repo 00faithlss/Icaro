@@ -31,7 +31,7 @@ pub struct Indice {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub avisos: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchivoPropio {
     pub id: String,
@@ -146,6 +146,112 @@ pub struct Plan {
     quitar: BTreeSet<String>,
     locales: Vec<ArchivoPropio>,
     quitar_locales: Vec<ArchivoPropio>,
+    revision_origen: String,
+    recuperadas: BTreeSet<String>,
+}
+impl Plan {
+    pub fn revision_origen(&self) -> &str { &self.revision_origen }
+}
+
+// Corrección acotada a la versión cuyos metadatos omiten un requisito del cliente.
+// Fuente: https://modrinth.com/mod/litemoretica (Litematica solo es obligatoria en cliente).
+fn requiere_litematica(v: &Version) -> bool {
+    v.project_id == "OYR5DMCo" && v.id == "nhi2RkZ9"
+}
+
+fn dependencias_cliente(v: &Version) -> Vec<Dependency> {
+    let mut deps: Vec<_> = v.dependencies.iter()
+        .filter(|d| d.dependency_type == "required").cloned().collect();
+    if requiere_litematica(v) && !deps.iter().any(|d| d.project_id.as_deref() == Some("bEpr0Arc")) {
+        deps.push(Dependency { project_id: Some("bEpr0Arc".into()), version_id: None,
+            dependency_type: "required".into(), file_name: None });
+    }
+    deps
+}
+
+// Los índices antiguos pueden transportar un mod como JAR propio y omitir sus
+// bibliotecas. Recuperarlas por hash conserva la identidad exacta del mod raíz.
+async fn completar_dependencias_propias(source: &impl Fuente, index: &mut Indice) -> Result<BTreeSet<String>, String> {
+    let hashes = index.archivos.iter().map(|a| a.sha512.to_lowercase()).collect::<Vec<_>>();
+    let conocidas = if hashes.is_empty() { BTreeMap::new() } else {
+        source.versiones_por_hash(&hashes).await.map_err(err)?
+    };
+    let mut cubiertos = index.mods.iter().map(|m| m.proyecto.clone()).collect::<BTreeSet<_>>();
+    let mut pendientes = vec![];
+    for archivo in &index.archivos {
+        if let Some(version) = conocidas.get(&archivo.sha512.to_lowercase()) {
+            if !version.files.iter().any(|f| f.hashes.sha512.eq_ignore_ascii_case(&archivo.sha512)) {
+                return Err("Modrinth no confirma el hash del JAR del anfitrión.".into());
+            }
+            cubiertos.insert(version.project_id.clone());
+            pendientes.push(version.clone());
+        }
+    }
+    // También reparar índices nuevos que transportan esta versión por catálogo.
+    // Los demás proyectos conservan la validación estricta de su índice exacto.
+    for entry in index.mods.iter().filter(|m| m.proyecto == "OYR5DMCo" && m.version == "nhi2RkZ9") {
+        let v = source.version(&entry.version).await.map_err(err)?;
+        if v.id != entry.version || v.project_id != entry.proyecto
+            || !v.files.iter().any(|f| f.hashes.sha512.eq_ignore_ascii_case(&entry.sha512)) {
+            return Err("Modrinth no confirma el mod que requiere dependencias de cliente.".into());
+        }
+        pendientes.push(v);
+    }
+    let mut recuperadas = BTreeSet::new();
+    while let Some(version) = pendientes.pop() {
+        for dep in &dependencias_cliente(&version) {
+            // Los pins de un mod transportado como propio no sustituyen el
+            // conjunto que el anfitrión ya proporciona (por ejemplo Fabric API).
+            if let Some(project) = dep.project_id.as_ref().filter(|p| cubiertos.contains(*p)) {
+                if recuperadas.contains(project) && dep.version_id.as_ref().is_some_and(|pin| {
+                    index.mods.iter().any(|m| &m.proyecto == project && &m.version != pin)
+                }) {
+                    return Err(format!("Dos mods del anfitrión requieren versiones distintas de la biblioteca {project}."));
+                }
+                continue;
+            }
+            let pinned = if let Some(id) = &dep.version_id {
+                let v = source.version(id).await.map_err(err)?;
+                if v.id != *id || dep.project_id.as_ref().is_some_and(|p| p != &v.project_id) {
+                    return Err("Modrinth devolvió otra dependencia del archivo del anfitrión.".into());
+                }
+                Some(v)
+            } else { None };
+            let project = dep.project_id.as_ref().or_else(|| pinned.as_ref().map(|v| &v.project_id))
+                .ok_or("Una dependencia del anfitrión no tiene identidad de Modrinth.")?.clone();
+            if cubiertos.contains(&project) {
+                if recuperadas.contains(&project) && pinned.as_ref().is_some_and(|v| {
+                    index.mods.iter().any(|m| m.proyecto == project && m.version != v.id)
+                }) {
+                    return Err(format!("Dos mods del anfitrión requieren versiones distintas de la biblioteca {project}."));
+                }
+                continue;
+            }
+            let candidate = if let Some(v) = pinned { v } else {
+                let mut versiones = source.versiones(&project, &index.minecraft, &index.loader).await.map_err(err)?;
+                versiones.sort_by(|a,b| b.date_published.cmp(&a.date_published).then(a.id.cmp(&b.id)));
+                versiones.into_iter().find(|v| v.project_id == project && v.version_type == "release"
+                    && compatible(v, &index.minecraft, &index.loader))
+                    .ok_or_else(|| format!("Falta una dependencia compatible del anfitrión: {project}."))?
+            };
+            if !compatible(&candidate, &index.minecraft, &index.loader) {
+                return Err("La dependencia del archivo del anfitrión no coincide con Minecraft o loader.".into());
+            }
+            let file = candidate.files.iter().find(|f| f.primary && f.filename.ends_with(".jar"))
+                .or_else(|| candidate.files.iter().find(|f| f.filename.ends_with(".jar")))
+                .ok_or("La dependencia del anfitrión no ofrece un JAR.")?;
+            index.mods.push(Entrada { proyecto: candidate.project_id.clone(), version: candidate.id.clone(), sha512: file.hashes.sha512.clone() });
+            index.validar()?;
+            cubiertos.insert(candidate.project_id.clone());
+            recuperadas.insert(candidate.project_id.clone());
+            pendientes.push(candidate);
+        }
+    }
+    if !recuperadas.is_empty() {
+        index.avisos.push("Se completaron dependencias obligatorias omitidas por el índice del anfitrión.".into());
+    }
+    index.validar()?;
+    Ok(recuperadas)
 }
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -302,16 +408,18 @@ pub async fn preparar(
     source: &impl Fuente,
     store: &Almacen,
     instance: &Instancia,
-    index: Indice,
+    mut index: Indice,
     origen: String,
 ) -> Result<Plan, String> {
     index.validar()?;
+    let revision_origen = index.revision()?;
     if index.minecraft != instance.minecraft
         || index.loader != instance.loader
         || index.loader_version != crate::versiones_instancia::leer_loader(store, instance)
     {
         return Err("La instancia debe usar el mismo Minecraft, loader y versión del loader que el anfitrión. Cámbialos antes de sincronizar.".into());
     }
+    let recuperadas = completar_dependencias_propias(source, &mut index).await?;
     let fingerprint = huella(store, &instance.id)?;
     let mut installed = inventario(store, &instance.id).map_err(err)?;
     for m in &mut installed {
@@ -386,8 +494,10 @@ pub async fn preparar(
                     .any(|a| a.sha512.eq_ignore_ascii_case(&m.sha512))
         })
     });
+    let ids = index.mods.iter().map(|m| m.version.clone()).collect::<Vec<_>>();
+    let verificadas = source.versiones_exactas(&ids).await.map_err(err)?;
     for entry in &index.mods {
-        let mut v = source.version(&entry.version).await.map_err(err)?;
+        let mut v = verificadas.get(&entry.version).cloned().ok_or("Modrinth no confirmó una versión del anfitrión.")?;
         if v.id != entry.version
             || v.project_id != entry.proyecto
             || !compatible(&v, &index.minecraft, &index.loader)
@@ -497,6 +607,8 @@ pub async fn preparar(
         quitar,
         locales,
         quitar_locales,
+        revision_origen,
+        recuperadas,
     })
 }
 fn preparar_locales(
@@ -699,6 +811,23 @@ pub async fn aplicar(
     {
         return Err("El perfil de la instancia cambió. Comprueba de nuevo.".into());
     }
+    // Si este origen ya gestiona exactamente el conjunto verificado, no hay que
+    // copiar ni publicar de nuevo toda la carpeta antes de cada partida.
+    if plan.cambios.is_empty() && dir.join(SYNC).exists() {
+        let saved: Gestionados = serde_json::from_slice(&fs::read(dir.join(SYNC)).map_err(err)?)
+            .map_err(|_| "El registro de sincronización no es válido.")?;
+        let wanted = plan.indice.mods.iter()
+            .map(|m| m.proyecto.clone()).collect::<BTreeSet<_>>();
+        if saved.origen == plan.origen
+            && saved.proyectos == wanted
+            && saved.archivos == plan.locales
+        {
+            if cancel.is_cancelled() {
+                return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
+            }
+            return Ok(());
+        }
+    }
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(err)?;
     let stage = game.join(format!(
@@ -731,6 +860,13 @@ pub async fn aplicar(
                 if bytes.len() as u64 != file.size || hash(&bytes) != file.hashes.sha512.to_lowercase() { return Err("El mod descargado no coincide con su tamaño o SHA-512.".into()); }
                 if let Some(old)=old { fs::remove_file(ruta_mod(&stage,old)).map_err(err)?; }
                 guardar_archivo(&target,&bytes).map_err(err)?;
+            }
+            if plan.recuperadas.contains(&v.project_id)
+                    && matches!(instance.loader.as_str(), "fabric" | "quilt")
+                    && dedicado::descriptor_fabric(&target, &mut vec![])?
+                        .is_some_and(|d| d.get("environment").and_then(|v| v.as_str()) == Some("server"))
+                {
+                    return Err(format!("La dependencia {} declara que solo admite servidor. El conjunto anterior se conserva.", v.project_id));
             }
             records.retain(|m|m.archivo != filename && m.project_id != v.project_id);
             let nombre=plan.cambios.iter().find(|c|c.proyecto==v.project_id).map(|c|c.nombre.clone()).or_else(||old.map(|m|m.nombre.clone())).unwrap_or_else(||v.name.clone());
@@ -953,15 +1089,19 @@ mod tests {
     use super::*;
     struct Fake {
         versions: BTreeMap<String, Version>,
+        hashes: BTreeMap<String, Version>,
         bytes: BTreeMap<String, Vec<u8>>,
         bad: bool,
     }
     impl Fuente for Fake {
+        async fn versiones_por_hash(&self, hashes: &[String]) -> Result<BTreeMap<String, Version>, Error> {
+            Ok(self.hashes.iter().filter(|(h, _)| hashes.contains(h)).map(|(h,v)| (h.clone(),v.clone())).collect())
+        }
         async fn version(&self, id: &str) -> Result<Version, Error> {
             self.versions.get(id).cloned().ok_or(Error::Datos)
         }
-        async fn versiones(&self, _: &str, _: &str, _: &str) -> Result<Vec<Version>, Error> {
-            Ok(vec![])
+        async fn versiones(&self, project: &str, mc: &str, loader: &str) -> Result<Vec<Version>, Error> {
+            Ok(self.versions.values().filter(|v| v.project_id == project && compatible(v,mc,loader)).cloned().collect())
         }
         async fn nombre(&self, id: &str) -> Result<String, Error> {
             Ok(id.into())
@@ -977,6 +1117,7 @@ mod tests {
     fn fake() -> Fake {
         let mut f = Fake {
             versions: BTreeMap::new(),
+            hashes: BTreeMap::new(),
             bytes: BTreeMap::new(),
             bad: false,
         };
@@ -1086,6 +1227,233 @@ mod tests {
         assert!(!dir.join("example-2.jar").exists());
         assert_eq!(fs::read(dir.join("local.jar")).unwrap(), b"personal");
     }
+    #[tokio::test]
+    async fn sincroniza_litemoretica_sin_dependencias_declaradas_desde_cero() {
+        for propio in [false, true] {
+            let (_temp, store, i) = store();
+            let mut f = fake();
+            for (project, id, name) in [
+                ("OYR5DMCo", "nhi2RkZ9", "litemoretica"),
+                ("bEpr0Arc", "litematica1", "litematica"),
+                ("GcWjdA9I", "malilib1", "malilib"),
+            ] {
+                let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+                writer.start_file("fabric.mod.json", zip::write::SimpleFileOptions::default()).unwrap();
+                write!(writer, "{{\"id\":\"{name}\",\"version\":\"1\",\"environment\":\"*\"}}").unwrap();
+                let bytes = writer.finish().unwrap().into_inner();
+                let mut v = f.versions["v1"].clone();
+                v.project_id = project.into(); v.id = id.into();
+                v.files[0].filename = format!("{name}.jar");
+                v.files[0].size = bytes.len() as u64; v.files[0].hashes.sha512 = hash(&bytes);
+                if name == "litematica" {
+                    v.dependencies = serde_json::from_value(serde_json::json!([
+                        {"project_id":"GcWjdA9I","dependency_type":"required"}
+                    ])).unwrap();
+                }
+                f.hashes.insert(hash(&bytes), v.clone());
+                f.bytes.insert(v.files[0].filename.clone(), bytes);
+                f.versions.insert(id.into(), v);
+            }
+            let mut indice = index(&f, "nhi2RkZ9");
+            let host = store.datos().unwrap().join("host");
+            fs::create_dir_all(&host).unwrap();
+            if propio {
+                let v = &f.versions["nhi2RkZ9"];
+                fs::write(host.join("litemoretica.jar"), &f.bytes["litemoretica.jar"]).unwrap();
+                indice.esquema = 2; indice.mods.clear();
+                indice.archivos.push(ArchivoPropio { id:"icaro-host-litemoretica".into(),
+                    nombre:"Litemoretica".into(), version:"1.2.5".into(), archivo:"litemoretica.jar".into(),
+                    bytes:v.files[0].size, sha512:v.files[0].hashes.sha512.clone() });
+            }
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let cancel = CancellationToken::new();
+            let servicio = tokio::spawn(servir_archivos(listener, Arc::new(RwLock::new(Some(indice.clone()))), cancel.clone(), Some(host)));
+            let dir = store.juego(&i.id).unwrap().join("mods");
+            assert!(!dir.exists());
+            let plan = preparar(&f, &store, &i, indice.clone(), addr.clone()).await.unwrap();
+            for project in ["bEpr0Arc", "GcWjdA9I"] {
+                assert!(plan.cambios.iter().any(|c| c.proyecto == project && c.tipo == Tipo::Agregar));
+            }
+            aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_,_| {}).await.unwrap();
+            for name in ["litemoretica.jar", "litematica.jar", "malilib.jar"] {
+                assert!(dir.join(name).is_file());
+            }
+            let plan = preparar(&f, &store, &i, indice, addr).await.unwrap();
+            assert!(plan.cambios.is_empty());
+            cancel.cancel(); servicio.await.unwrap().unwrap();
+        }
+        // No extender la excepción a otros proyectos o versiones desconocidas.
+        let mut v = fake().versions["v1"].clone();
+        assert!(dependencias_cliente(&v).is_empty());
+        v.project_id = "OYR5DMCo".into();
+        assert!(dependencias_cliente(&v).is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "Descarga Litemoretica y dependencias reales en una instancia temporal; no inicia Minecraft"]
+    async fn litemoretica_real_sincroniza_dependencias_cliente() {
+        let (_temp, store, _) = store();
+        let i = store.crear_con_loader("Cliente real", "1.21.1", "fabric", 0).unwrap();
+        crate::versiones_instancia::guardar_loader(&store, &i, "0.19.5").unwrap();
+        let source = Catalog::new().unwrap();
+        let v = source.version("nhi2RkZ9").await.unwrap();
+        assert_eq!(v.project_id, "OYR5DMCo");
+        let f = v.files.iter().find(|f| f.primary).unwrap();
+        let indice = Indice { esquema:1, minecraft:i.minecraft.clone(), loader:i.loader.clone(),
+            loader_version:Some("0.19.5".into()), mods:vec![Entrada {
+                proyecto:v.project_id.clone(), version:v.id.clone(), sha512:f.hashes.sha512.clone()
+            }], archivos:vec![], avisos:vec![] };
+        let plan = preparar(&source, &store, &i, indice.clone(), "127.0.0.1:25566".into()).await.unwrap();
+        assert_eq!(plan.cambios.len(), 3);
+        aplicar(&source, &store, &i, &plan, CancellationToken::new(), |_,_| {}).await.unwrap();
+        let installed = inventario(&store, &i.id).unwrap();
+        for project in ["OYR5DMCo", "bEpr0Arc", "GcWjdA9I"] {
+            let m = installed.iter().find(|m| m.project_id == project).unwrap();
+            let path = store.juego(&i.id).unwrap().join("mods").join(&m.archivo);
+            assert_eq!(hash(&fs::read(&path).unwrap()), m.sha512);
+            if project == "GcWjdA9I" {
+                let mut jar = zip::ZipArchive::new(fs::File::open(path).unwrap()).unwrap();
+                assert!(jar.by_name("fi/dy/masa/malilib/event/InitializationHandler.class").is_ok());
+            }
+        }
+        assert!(preparar(&source, &store, &i, indice, "127.0.0.1:25566".into()).await.unwrap().cambios.is_empty());
+    }
+
+    #[tokio::test]
+    async fn indice_antiguo_recupera_bibliotecas_desde_cero_sin_cambiar_pins_del_anfitrion() {
+        fn jar(id: &str, entorno: &str) -> Vec<u8> {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            writer.start_file("fabric.mod.json", zip::write::SimpleFileOptions::default()).unwrap();
+            write!(writer, "{{\"id\":\"{id}\",\"version\":\"1\",\"environment\":\"{entorno}\"}}").unwrap();
+            writer.finish().unwrap().into_inner()
+        }
+        let (_temp, store, i) = store();
+        let mut f = fake();
+        let body = jar("raiz", "*");
+        let mut root = f.versions["v1"].clone();
+        root.id = "raiz1".into(); root.project_id = "raiz".into();
+        root.files[0].filename = "raiz.jar".into();
+        root.files[0].hashes.sha512 = hash(&body); root.files[0].size = body.len() as u64;
+        root.dependencies = serde_json::from_value(serde_json::json!([
+            {"project_id":"biblioteca","dependency_type":"required"},
+            {"version_id":"otra1","dependency_type":"required"},
+            {"project_id":"example","version_id":"v2","dependency_type":"required"}
+        ])).unwrap();
+        f.hashes.insert(hash(&body), root);
+        for project in ["biblioteca", "otra"] {
+            let bytes = jar(project, "*");
+            let mut v = f.versions["v1"].clone();
+            v.id = format!("{project}1"); v.project_id = project.into();
+            v.files[0].filename = format!("{project}.jar");
+            v.files[0].size = bytes.len() as u64; v.files[0].hashes.sha512 = hash(&bytes);
+            f.bytes.insert(v.files[0].filename.clone(), bytes);
+            f.versions.insert(v.id.clone(), v);
+        }
+        let host = store.datos().unwrap().join("host-mods");
+        fs::create_dir_all(&host).unwrap(); fs::write(host.join("raiz.jar"), &body).unwrap();
+        let mut indice = index(&f, "v1"); indice.esquema = 2;
+        indice.archivos.push(ArchivoPropio { id:"icaro-host-raiz".into(), nombre:"Raíz".into(), version:"1".into(), archivo:"raiz.jar".into(), bytes:body.len() as u64, sha512:hash(&body) });
+        let revision = indice.revision().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let servicio = tokio::spawn(servir_archivos(listener, Arc::new(RwLock::new(Some(indice.clone()))), cancel.clone(), Some(host)));
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        assert!(!dir.exists());
+        let plan = preparar(&f, &store, &i, indice.clone(), addr.to_string()).await.unwrap();
+        assert_eq!(plan.revision_origen(), revision);
+        assert_eq!(plan.indice.mods.len(), 3);
+        assert!(plan.indice.mods.iter().any(|m| m.proyecto == "example" && m.version == "v1"));
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_,_| {}).await.unwrap();
+        for name in ["raiz.jar", "biblioteca.jar", "otra.jar", "example-1.jar"] { assert!(dir.join(name).is_file()); }
+        assert!(!dir.join("example-2.jar").exists());
+        let plan = preparar(&f, &store, &i, indice.clone(), addr.to_string()).await.unwrap();
+        assert!(plan.cambios.is_empty());
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_,_| panic!("No copiar un conjunto ya completo")).await.unwrap();
+        let anterior = huella(&store, &i.id).unwrap();
+        let server = jar("biblioteca", "server");
+        let v = f.versions.get_mut("biblioteca1").unwrap();
+        v.files[0].hashes.sha512 = hash(&server); v.files[0].size = server.len() as u64;
+        f.bytes.insert("biblioteca.jar".into(), server);
+        let plan = preparar(&f, &store, &i, indice, addr.to_string()).await.unwrap();
+        assert!(aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_,_| {}).await.unwrap_err().contains("solo admite servidor"));
+        assert_eq!(anterior, huella(&store, &i.id).unwrap());
+        cancel.cancel(); servicio.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn sincronizar_conserva_mods_personales_de_catalogo_manuales_y_desactivados() {
+        let (_temp, store, i) = store();
+        let mut f = fake();
+        let mut cliente = f.versions["v1"].clone();
+        cliente.id = "cliente1".into();
+        cliente.project_id = "cliente".into();
+        cliente.files[0].filename = "cliente.jar".into();
+        cliente.files[0].size = 7;
+        cliente.files[0].hashes.sha512 = hash(b"cliente");
+        f.bytes.insert("cliente.jar".into(), b"cliente".to_vec());
+        f.versions.insert(cliente.id.clone(), cliente.clone());
+        super::super::instalar(
+            &f, &store, &i.id, vec![f.versions["v1"].clone(), cliente],
+            &i.minecraft, &i.loader, |_| {},
+        ).await.unwrap();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        fs::write(dir.join("manual.jar"), b"manual").unwrap();
+        fs::write(dir.join("desactivado.jar.disabled"), b"desactivado").unwrap();
+        // Primero registra el conjunto, después lo actualiza y finalmente retira
+        // todos los mods del anfitrión. Los personales no pasan a ser gestionados.
+        for version in [Some("v1"), Some("v2"), None] {
+            let mut indice = index(&f, version.unwrap_or("v2"));
+            if version.is_none() { indice.mods.clear(); }
+            let plan = preparar(&f, &store, &i, indice, "127.0.0.1:25566".into()).await.unwrap();
+            assert!(!plan.cambios.iter().any(|c| c.proyecto == "cliente"));
+            aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+            assert_eq!(fs::read(dir.join("cliente.jar")).unwrap(), b"cliente");
+            assert_eq!(fs::read(dir.join("manual.jar")).unwrap(), b"manual");
+            assert_eq!(fs::read(dir.join("desactivado.jar.disabled")).unwrap(), b"desactivado");
+            assert!(!dir.join("desactivado.jar").exists());
+            assert!(inventario(&store, &i.id).unwrap().iter().any(|m| m.project_id == "cliente"));
+            let gestionados: Gestionados = serde_json::from_slice(&fs::read(dir.join(SYNC)).unwrap()).unwrap();
+            assert!(!gestionados.proyectos.contains("cliente"));
+        }
+        assert!(!dir.join("example-1.jar").exists());
+        assert!(!dir.join("example-2.jar").exists());
+    }
+
+    #[tokio::test]
+    async fn conjunto_al_dia_registra_el_origen_una_vez_y_no_vuelve_a_publicar() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        super::super::instalar(
+            &f, &store, &i.id, vec![f.versions["v1"].clone()],
+            &i.minecraft, &i.loader, |_| {},
+        ).await.unwrap();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        fs::write(dir.join("personal.jar"), b"personal").unwrap();
+        let mut indice = index(&f, "v1");
+        indice.esquema = 2;
+        indice.archivos.push(ArchivoPropio {
+            id: "icaro-host-personal".into(), nombre: "Personal".into(), version: "1".into(),
+            archivo: "personal.jar".into(), bytes: 8, sha512: hash(b"personal"),
+        });
+        let origen = "127.0.0.1:25566";
+        let plan = preparar(&f, &store, &i, indice.clone(), origen.into()).await.unwrap();
+        assert!(plan.cambios.is_empty());
+        assert!(!dir.join(SYNC).exists());
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        assert!(dir.join(SYNC).exists());
+        let plan = preparar(&f, &store, &i, indice, origen.into()).await.unwrap();
+        assert!(plan.cambios.is_empty());
+        let registro = fs::metadata(dir.join(SYNC)).unwrap().modified().unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {
+            panic!("Un conjunto al día no debe volver a preparar archivos");
+        }).await.unwrap();
+        assert_eq!(registro, fs::metadata(dir.join(SYNC)).unwrap().modified().unwrap());
+        fs::write(dir.join("personal.jar"), b"modificado").unwrap();
+        assert!(aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.is_err());
+    }
+
     #[tokio::test]
     async fn fallo_cancelacion_y_plan_obsoleto_no_sustituyen_el_conjunto() {
         let (_temp, store, i) = store();

@@ -567,6 +567,9 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.busqueda.abierta = false;
             app.menu = None;
             app.menu_grupos = false;
+            if app.pantalla == Some(pantallas::Pantalla::Sincronizar) {
+                sincronizacion_real::salir(app);
+            }
             app.pantalla = None;
             return actualizar_estado(app, Mensaje::Ir(seccion));
         }
@@ -842,6 +845,9 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Capt(a) => return capt::actualizar(app, a),
         Mensaje::Ir(s) => {
+            if app.pantalla == Some(pantallas::Pantalla::Sincronizar) {
+                sincronizacion_real::salir(app);
+            }
             if !app.servicios.demo && app.editor.is_some() {
                 let nombre = app.general.nombre.clone();
                 if let Err(error) = instancias_reales::renombrar(app, &nombre) {

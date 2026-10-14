@@ -8,6 +8,7 @@ pub use crate::http::Error;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod cache;
@@ -346,6 +347,7 @@ pub struct Catalog {
     cooldown: Arc<Mutex<Cooldown>>,
     metadata: Option<Arc<tokio::sync::Mutex<cache::Cache>>>,
     api: String,
+    metadata_path: Option<PathBuf>,
 }
 #[derive(Default)]
 struct Cooldown {
@@ -357,6 +359,55 @@ impl Catalog {
     pub fn with_metadata_cache(mut self) -> Self {
         self.metadata = Some(Arc::new(tokio::sync::Mutex::new(cache::Cache::default())));
         self
+    }
+    /// Reutiliza respuestas vigentes entre aperturas; la caducidad no se reinicia.
+    pub fn with_persistent_metadata_cache(mut self, path: PathBuf) -> Self {
+        self.metadata = Some(Arc::new(tokio::sync::Mutex::new(cache::Cache::cargar(&path))));
+        self.metadata_path = Some(path);
+        self
+    }
+    pub async fn guardar_metadata_cache(&self) -> Result<(), Error> {
+        let (Some(path), Some(cache)) = (&self.metadata_path, &self.metadata) else { return Ok(()); };
+        let snapshot = cache.lock().await.snapshot();
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || crate::almacenamiento::escribir_json(&path, &snapshot))
+            .await.map_err(|_| Error::Response("la caché de Modrinth"))?
+            .map_err(|_| Error::Response("la caché de Modrinth"))
+    }
+    fn version_url(&self, id: &str) -> Result<Url, Error> {
+        let mut url = self.project_url(id)?;
+        url.set_path(&format!("/v2/version/{id}"));
+        Ok(url)
+    }
+    /// Consulta solo IDs ausentes de caché, en lotes acotados de 50 versiones.
+    pub async fn versions_by_ids(&self, ids: &[String]) -> Result<std::collections::BTreeMap<String, Version>, Error> {
+        if ids.len() > 512 { return Err(Error::Response("las versiones de Modrinth")); }
+        let mut result = std::collections::BTreeMap::new();
+        let mut missing = std::collections::BTreeSet::new();
+        let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
+        for id in ids {
+            let key = format!("GET {}", self.version_url(id)?);
+            if let Some(v) = cache.as_mut().and_then(|c| c.get::<Version>(&key)).filter(|v| &v.id == id) {
+                result.insert(id.clone(), v);
+            } else { missing.insert(id.clone()); }
+        }
+        let missing: Vec<_> = missing.into_iter().collect();
+        for batch in missing.chunks(50) {
+            let mut url = Url::parse(&format!("{}versions", self.api)).map_err(|_| Error::Response("Modrinth"))?;
+            url.query_pairs_mut().append_pair("ids", &serde_json::to_string(batch).map_err(|_| Error::Response("Modrinth"))?);
+            let versions: Vec<Version> = self.json(self.client.get(url)).await?;
+            let fetched: std::collections::BTreeMap<_, _> = versions.iter().map(|v| (v.id.clone(), v.clone())).collect();
+            if versions.len() != batch.len() || fetched.len() != batch.len() || batch.iter().any(|id| !fetched.contains_key(id)) {
+                return Err(Error::Response("las versiones de Modrinth"));
+            }
+            for (id, version) in fetched {
+                if let Some(cache) = &mut cache {
+                    cache.insert(format!("GET {}", self.version_url(&id)?), &version, cache::TTL)?;
+                }
+                result.insert(id, version);
+            }
+        }
+        Ok(result)
     }
     /// Espera restante del proveedor; los aciertos de caché siguen disponibles.
     pub fn retry_after(&self) -> Duration {
@@ -464,6 +515,7 @@ impl Catalog {
             cooldown: Arc::new(Mutex::new(Cooldown::default())),
             metadata: None,
             api: API.into(),
+            metadata_path: None,
         })
     }
     async fn json<T: serde::de::DeserializeOwned>(
@@ -563,9 +615,7 @@ impl Catalog {
         Ok(members)
     }
     pub async fn version(&self, id: &str) -> Result<Version, Error> {
-        let mut url = self.project_url(id)?;
-        url.set_path(&format!("/v2/version/{id}"));
-        self.metadata_json(url).await
+        self.metadata_json(self.version_url(id)?).await
     }
     pub async fn organization(&self, id: &str) -> Result<Organization, Error> {
         let mut url = self.project_url(id)?;

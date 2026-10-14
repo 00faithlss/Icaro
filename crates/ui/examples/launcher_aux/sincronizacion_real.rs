@@ -48,7 +48,7 @@ pub enum Accion {
     Revisada(u64, Result<Plan, String>),
     Aplicar(bool),
     Progreso(u64, String, bool),
-    Terminada(u64, bool, Result<(), String>),
+    Terminada(u64, bool, Result<Vec<Servidor>, String>),
     Reintentar,
     SinCambios,
     ConfirmarSinCambios,
@@ -60,7 +60,16 @@ fn m(a: Accion) -> Mensaje {
 }
 impl Estado {
     pub fn modal(&self) -> bool {
-        self.ocupado || self.confirmar
+        self.confirmar
+    }
+}
+
+/// Al salir, cancela la consulta o deja terminar la publicación en segundo plano.
+pub fn salir(app: &mut App) {
+    if app.servicios.sincronizacion.aplicando {
+        app.pantalla = None;
+    } else {
+        let _ = actualizar(app, Accion::Cerrar);
     }
 }
 fn tamano(bytes: u64) -> String {
@@ -165,7 +174,15 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     let addr = endpoint?;
                     let catalog = source.map_err(|e| e.to_string())?;
                     let index = sync::consultar(addr, cancel.clone()).await?;
-                    tokio::select! {_=cancel.cancelled()=>Err("Consulta cancelada.".into()),r=tokio::time::timeout(std::time::Duration::from_secs(90),sync::preparar(&catalog,&store,&instance,index,addr.to_string()))=>r.map_err(|_|"Modrinth no respondió a tiempo. Inténtalo de nuevo.")?}
+                    let result = tokio::select! {
+                        _ = cancel.cancelled() => Err("Consulta cancelada.".to_owned()),
+                        r = tokio::time::timeout(std::time::Duration::from_secs(90), sync::preparar(&catalog, &store, &instance, index, addr.to_string())) => {
+                            r.map_err(|_| "Modrinth no respondió a tiempo. Inténtalo de nuevo.".to_owned()).and_then(|r| r)
+                        }
+                    };
+                    // Una pausa del proveedor no invalida las respuestas correctas ya obtenidas.
+                    let _ = catalog.guardar_metadata_cache().await;
+                    result
                 },
                 move |r| m(Accion::Revisada(g, r)),
             );
@@ -207,6 +224,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             let endpoint = sync::endpoint(&server.direccion);
             let store = app.servicios.instancias.almacen.clone();
             let source = app.servicios.catalog.clone();
+            let root = crate::estado::directorio(false);
             let s = &mut app.servicios.sincronizacion;
             s.ocupado = true;
             s.aplicando = true;
@@ -227,7 +245,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                         let addr = endpoint?;
                         let catalog = source.map_err(|e| e.to_string())?;
                         let latest = sync::consultar(addr, cancel.clone()).await?;
-                        if latest.revision()? != plan.indice.revision()? {
+                        if latest.revision()? != plan.revision_origen() {
                             return Err("Los mods del anfitrión cambiaron. Comprueba de nuevo antes de sincronizar.".into());
                         }
                         sync::aplicar(
@@ -240,7 +258,10 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                                 let _ = tx.send((id.to_owned(), done));
                             },
                         )
-                        .await
+                        .await?;
+                        tokio::task::spawn_blocking(move || {
+                            icaro_core::servidores::finalizar_sincronizacion(&root, &server)
+                        }).await.map_err(|_| "Los mods se sincronizaron, pero no se pudo guardar la preferencia del servidor.".to_owned())?
                     };
                     tokio::pin!(work);
                     loop {
@@ -272,22 +293,33 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             app.servicios.mods.busy = None;
             app.servicios.instancias.operando = false;
             if s.cancelar {
-                app.pantalla = None;
+                if let Ok(registros) = r {
+                    app.servicios.servidores.registros = registros;
+                }
+                if app.pantalla == Some(Pantalla::Sincronizar) {
+                    app.pantalla = None;
+                }
                 s.plan = None;
                 return Task::none();
             }
             match r {
-                Ok(()) => {
+                Ok(registros) => {
                     s.plan = None;
-                    app.avisar("Mods sincronizados con el anfitrión.".into());
+                    app.servicios.servidores.registros = registros;
+                    app.avisar("Mods sincronizados. La sincronización al iniciar quedó desactivada.".into());
                     if play && app.pantalla == Some(Pantalla::Sincronizar) {
                         return jugar(app);
                     }
-                    app.pantalla = None;
+                    if app.pantalla == Some(Pantalla::Sincronizar) {
+                        app.pantalla = None;
+                    }
                 }
                 Err(e) => {
-                    s.error = Some(e);
+                    s.error = Some(e.clone());
                     s.plan = None;
+                    if app.pantalla != Some(Pantalla::Sincronizar) {
+                        app.avisar(e);
+                    }
                 }
             }
         }
@@ -360,6 +392,12 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
     let count = |t: Tipo| changes.iter().filter(|c| c.tipo == t).count();
     let bytes = changes.iter().map(|c| c.bytes).sum::<u64>();
     let mut body = column![
+        componentes::boton(
+            p,
+            if s.ocupado { "Cancelar" } else { "Volver" },
+            Variante::Fantasma,
+            (!s.cancelar).then(|| m(Accion::Cerrar)),
+        ),
         text(format!("Sincronizar\ncon {name}"))
             .font(fuentes::DISPLAY)
             .size(32)
@@ -392,7 +430,7 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
                 p,
                 s.progreso as f32
                     / s.plan.as_ref().map_or(1, |p| {
-                        (p.indice.mods.len()
+                        (p.indice.mods.len() + p.indice.archivos.len()
                             + p.cambios.iter().filter(|c| c.tipo == Tipo::Quitar).count())
                         .max(1)
                     }) as f32,
@@ -619,6 +657,58 @@ mod tests {
         assert!(a.servicios.juego.procesos.is_empty());
     }
     #[test]
+    fn navegar_cancela_consulta_y_deja_terminar_aplicacion_sin_abrir_el_juego() {
+        let mut a = app();
+        a.servicios.sincronizacion.ocupado = true;
+        let consulta = CancellationToken::new();
+        a.servicios.sincronizacion.cancel = Some(consulta.clone());
+        assert!(!a.servicios.sincronizacion.modal());
+        let _ = crate::actualizar_estado(&mut a, Mensaje::Ir(icaro_ui::shell::Seccion::Instancias));
+        assert!(consulta.is_cancelled());
+        assert!(a.pantalla.is_none());
+        assert!(!a.servicios.sincronizacion.ocupado);
+
+        a.pantalla = Some(Pantalla::Sincronizar);
+        let s = &mut a.servicios.sincronizacion;
+        s.ocupado = true;
+        s.aplicando = true;
+        s.request = 8;
+        let aplicacion = CancellationToken::new();
+        s.cancel = Some(aplicacion.clone());
+        a.servicios.instancias.operando = true;
+        a.servicios.mods.busy = Some("instancia".into());
+        let _ = crate::actualizar_estado(&mut a, Mensaje::Ir(icaro_ui::shell::Seccion::Instancias));
+        assert!(a.pantalla.is_none());
+        assert!(!aplicacion.is_cancelled());
+        assert!(a.servicios.instancias.operando);
+        a.pantalla = Some(Pantalla::Cuenta);
+        let _ = actualizar(&mut a, Accion::Terminada(8, true, Ok(vec![])));
+        assert_eq!(a.pantalla, Some(Pantalla::Cuenta));
+        assert!(!a.servicios.instancias.operando);
+        assert!(a.servicios.mods.busy.is_none());
+        assert!(a.servicios.juego.procesos.is_empty());
+    }
+
+    #[test]
+    fn solo_el_exito_desactiva_la_sincronizacion_y_un_error_la_conserva() {
+        let mut a = app();
+        a.servicios.servidores.registros[0].sincronizar = true;
+        a.servicios.sincronizacion.request = 9;
+        a.servicios.sincronizacion.aplicando = true;
+        a.servicios.sincronizacion.ocupado = true;
+        let _ = actualizar(&mut a, Accion::Terminada(9, false, Err("Descarga fallida".into())));
+        assert!(a.servicios.servidores.registros[0].sincronizar);
+        let mut guardados = a.servicios.servidores.registros.clone();
+        guardados[0].sincronizar = false;
+        a.servicios.sincronizacion.aplicando = true;
+        a.servicios.sincronizacion.ocupado = true;
+        let _ = actualizar(&mut a, Accion::Terminada(9, false, Ok(guardados)));
+        assert!(!a.servicios.servidores.registros[0].sincronizar);
+        assert!(!a.servicios.sincronizacion.ocupado);
+        assert!(a.pantalla.is_none());
+    }
+
+    #[test]
     fn cancelar_aplicacion_espera_acuse_y_libera_la_instancia() {
         let mut a = app();
         let s = &mut a.servicios.sincronizacion;
@@ -631,7 +721,7 @@ mod tests {
         let _ = actualizar(&mut a, Accion::Cerrar);
         assert!(a.servicios.sincronizacion.ocupado);
         assert!(a.servicios.instancias.operando);
-        let _ = actualizar(&mut a, Accion::Terminada(3, true, Ok(())));
+        let _ = actualizar(&mut a, Accion::Terminada(3, true, Ok(vec![])));
         assert!(a.servicios.instancias.operando);
         let _ = actualizar(&mut a, Accion::Terminada(4, true, Err("cancelada".into())));
         assert!(!a.servicios.instancias.operando);

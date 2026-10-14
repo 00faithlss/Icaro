@@ -97,7 +97,7 @@ impl Catalogo for Catalog {
 
 // Un Fabric exclusivo de servidor puede ser privado y no estar en Modrinth.
 // Solo se excluye si su propio descriptor lo declara explícitamente.
-fn descriptor_fabric(
+pub(super) fn descriptor_fabric(
     path: &Path,
     avisos: &mut Vec<String>,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -222,10 +222,12 @@ async fn publicar_con(
         if encontrados.insert(v.project_id.clone(), v.clone()).is_some() {
             return Err(format!("Hay dos archivos del proyecto {} en mods.", v.project_id));
         }
+        // Conservar la ruta incluso si la clasificación del catálogo descarta
+        // el proyecto: otro mod puede exigir esta biblioteca en el cliente.
+        jars.insert(v.project_id.clone(), (name.clone(), sha.clone()));
         if !catalog.cliente(v).await? {
             continue;
         }
-        jars.insert(v.project_id.clone(), (name.clone(), sha.clone()));
         if !compatible(v, &servidor.minecraft, &servidor.loader) {
             propios.insert(v.project_id.clone());
             avisos.push(format!("{name}: Modrinth reconoce el hash, pero no declara Minecraft {} y loader {}. Se publicará el JAR instalado como archivo propio; revisa su compatibilidad en el cliente.",servidor.minecraft,servidor.loader));
@@ -242,7 +244,7 @@ async fn publicar_con(
         let Some(v) = elegidos.values().map(|(v, _)| v)
             .find(|v| !revisados.contains(&v.id)).cloned() else { break; };
         revisados.insert(v.id.clone());
-        for dep in v.dependencies.iter().filter(|d| d.dependency_type == "required") {
+        for dep in &super::dependencias_cliente(&v) {
             // Un pin sin proyecto debe resolverse incluso si la versión instalada es otra.
             let pinned = if dep.project_id.is_none() {
                 let id = dep.version_id.as_ref().ok_or_else(||
@@ -276,11 +278,25 @@ async fn publicar_con(
                 return Err(format!("Conflicto en una dependencia de {}: el catálogo devolvió otro proyecto.", v.project_id));
             }
             if !catalog.cliente(&candidate).await? {
-                let (name, _) = jars.get(&v.project_id).ok_or_else(|| format!(
-                    "{} requiere una dependencia exclusiva de servidor y no tiene un JAR instalado para publicarse como propio.",v.project_id))?;
-                propios.insert(v.project_id.clone());
-                avisos.push(format!("{name}: Modrinth exige {} como dependencia, pero la clasifica como exclusiva de servidor. Se conserva el JAR instalado como archivo propio y se excluye esa dependencia del cliente.",candidate.project_id));
-                continue;
+                let descriptor = if matches!(servidor.loader.as_str(), "fabric" | "quilt") {
+                    if let Some((name, _)) = jars.get(&candidate.project_id) {
+                        descriptor_fabric(&servidor.carpeta.join("mods").join(name), &mut avisos)?
+                    } else { None }
+                } else { None };
+                let admite_cliente = descriptor.as_ref().is_some_and(|d| {
+                    // Fabric usa ambos entornos cuando no se declara environment.
+                    d.get("environment").is_none()
+                        || matches!(d.get("environment").and_then(|v| v.as_str()), Some("*" | "client"))
+                });
+                if admite_cliente {
+                    avisos.push(format!("{}: se incluye la dependencia {} porque el JAR instalado admite cliente, aunque Modrinth la clasifica como exclusiva de servidor.", v.project_id, candidate.project_id));
+                } else {
+                    let (name, _) = jars.get(&v.project_id).ok_or_else(|| format!(
+                        "{} requiere una dependencia exclusiva de servidor y no tiene un JAR instalado para publicarse como propio.",v.project_id))?;
+                    propios.insert(v.project_id.clone());
+                    avisos.push(format!("{name}: Modrinth exige {} como dependencia, pero la clasifica como exclusiva de servidor. Se conserva el JAR instalado como archivo propio y se excluye esa dependencia del cliente.",candidate.project_id));
+                    continue;
+                }
             }
             if dep.version_id.as_ref().is_some_and(|id| id != &candidate.id) {
                 if dep.project_id.is_some() {
@@ -1087,6 +1103,34 @@ mod tests {
         catalog.versions.get_mut("old").unwrap().project_id = "otro".into();
         assert!(publicar_con(&catalog,&s).await.unwrap_err().contains("pin no pertenece"));
     }
+    #[tokio::test]
+    async fn dependencia_fabric_comun_se_incluye_aunque_el_catalogo_diga_solo_servidor() {
+        for entorno in [Some("*"), None] {
+            let (_temp, s) = servidor();
+            let mut catalog = Fake::default();
+            let root = jar_id("*", "comun");
+            let mut descriptor = serde_json::json!({"schemaVersion":1,"id":"biblioteca","version":"1"});
+            if let Some(entorno) = entorno { descriptor["environment"] = entorno.into(); }
+            let library = jar_descriptor(descriptor.to_string().as_bytes());
+            fs::write(s.carpeta.join("mods/comun.jar"), &root).unwrap();
+            fs::write(s.carpeta.join("mods/biblioteca.jar"), &library).unwrap();
+            catalog.hashes.insert(hash(&root), version("comun", "comun1", &root,
+                serde_json::json!([{"project_id":"biblioteca","version_id":"biblioteca1","dependency_type":"required"}])));
+            catalog.hashes.insert(hash(&library), version("biblioteca", "biblioteca1", &library, serde_json::json!([])));
+            catalog.server_only.insert("biblioteca".into());
+            let index = publicar_con(&catalog, &s).await.unwrap();
+            assert_eq!(index.mods.len(), 2);
+            assert!(index.mods.iter().any(|m| m.proyecto == "biblioteca"));
+            assert!(index.archivos.is_empty());
+            assert!(index.avisos.iter().any(|a| a.contains("JAR instalado admite cliente")));
+            let store = Almacen::nuevo(s.carpeta.join("cliente/instances"));
+            let instance = store.crear_con_loader("Cliente", "1.21.1", "fabric", 0).unwrap();
+            crate::versiones_instancia::guardar_loader(&store, &instance, &s.loader_version).unwrap();
+            let plan = super::super::preparar(&catalog, &store, &instance, index, "127.0.0.1:25566".into()).await.unwrap();
+            assert_eq!(plan.cambios.len(), 2);
+        }
+    }
+
     #[tokio::test]
     async fn dependencia_de_servidor_no_reaparece_en_la_resolucion_del_cliente() {
         let (_temp,s) = servidor();

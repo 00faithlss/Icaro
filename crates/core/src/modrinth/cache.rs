@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Caché acotada de metadatos para el servicio del anfitrión; nunca guarda errores.
+//! Caché acotada de metadatos del cliente y anfitrión; nunca guarda errores.
 use super::Error;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::BTreeMap, time::{Duration, Instant}};
+use std::{collections::BTreeMap, path::Path, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 
 pub(super) const TTL: Duration = Duration::from_secs(3600);
 pub(super) const NEGATIVE_TTL: Duration = Duration::from_secs(600);
@@ -19,6 +19,35 @@ pub(super) struct Cache {
     bytes: usize,
 }
 impl Cache {
+    pub fn cargar(path: &Path) -> Self {
+        let cargar = || -> Option<Self> {
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 64 * 1024 * 1024 { return None; }
+            let data: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+            if data["schema"].as_u64()? != 1 { return None; }
+            let ahora = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+            let mut cache = Self::default();
+            let entries = data["entries"].as_array()?;
+            if entries.len() > MAX_ENTRIES { return None; }
+            for item in entries {
+                let restante = item["expires"].as_u64()?.saturating_sub(ahora);
+                if restante == 0 || restante > TTL.as_secs() { continue; }
+                cache.insert(item["key"].as_str()?.to_owned(), &item["value"], Duration::from_secs(restante)).ok()?;
+            }
+            Some(cache)
+        };
+        cargar().unwrap_or_default()
+    }
+    pub fn snapshot(&self) -> serde_json::Value {
+        let ahora = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let entries: Vec<_> = self.entries.iter().filter_map(|(key, entry)| {
+            let restante = entry.expires.checked_duration_since(Instant::now())?.as_secs();
+            if restante == 0 { return None; }
+            let value: serde_json::Value = serde_json::from_slice(&entry.body).ok()?;
+            Some(serde_json::json!({"key":key,"expires":ahora+restante,"value":value}))
+        }).collect();
+        serde_json::json!({"schema":1,"entries":entries})
+    }
     pub fn get<T: DeserializeOwned>(&mut self, key: &str) -> Option<T> {
         if self.entries.get(key)?.expires <= Instant::now() {
             self.remove(key);
