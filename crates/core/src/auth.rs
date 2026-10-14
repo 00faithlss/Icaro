@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
-//! Autorización de cuenta personal con PKCE y receptor temporal en loopback.
+//! Autorización con PKCE y retorno nativo en Windows; loopback interno entre procesos.
 
 use crate::http;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -21,8 +21,22 @@ mod app_return;
 pub use device::{begin_device, complete_device, open_device_page, DeviceGrant, DeviceInfo};
 pub use app_return::{forward_app_return, register_app_return, APP_REDIRECT};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnMethod { Loopback, App }
+
+impl Default for ReturnMethod {
+    fn default() -> Self {
+        if cfg!(windows) { Self::App } else { Self::Loopback }
+    }
+}
+impl ReturnMethod {
+    fn redirect_uri(self, port: u16) -> String {
+        match self {
+            Self::Loopback => format!("http://localhost:{port}"),
+            Self::App => APP_REDIRECT.to_owned(),
+        }
+    }
+}
 
 /// Etapas públicas del acceso; nunca contienen códigos ni credenciales.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +222,7 @@ async fn receive(
     listener: &TcpListener,
     proof: &Proof,
     port: u16,
+    method: ReturnMethod,
 ) -> Result<Zeroizing<String>, Error> {
     loop {
         let (mut stream, peer) = listener.accept().await.map_err(|_| Error::Setup)?;
@@ -236,7 +251,11 @@ async fn receive(
         .await;
         let result = parsed.unwrap_or(Err(Error::Callback));
         let reply = if matches!(result, Ok(_) | Err(Error::Denied)) {
-            return_reply(matches!(result, Err(Error::Denied)))
+            match method {
+                // El proceso del enlace nativo solo necesita un acuse, nunca una página web.
+                ReturnMethod::App => "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+                ReturnMethod::Loopback => return_reply(matches!(result, Err(Error::Denied))),
+            }
         } else {
             REJECT.to_owned()
         };
@@ -400,7 +419,7 @@ async fn minecraft_session_with_progress(
 }
 
 pub async fn login(cancel: CancellationToken) -> Result<Session, Error> {
-    login_with_return(cancel, ReturnMethod::Loopback).await
+    login_with_return(cancel, ReturnMethod::default()).await
 }
 
 pub async fn login_with_return(cancel: CancellationToken, method: ReturnMethod) -> Result<Session, Error> {
@@ -416,12 +435,10 @@ pub async fn login_with_progress(
         biased;
         _ = cancel.cancelled() => Err(Error::Cancelled),
         result = tokio::time::timeout(LOGIN_TIMEOUT, async {
+            if method == ReturnMethod::App { register_app_return()?; }
             let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.map_err(|_| Error::Setup)?;
             let port = listener.local_addr().map_err(|_| Error::Setup)?.port();
-            let redirect = match method {
-                ReturnMethod::Loopback => format!("http://localhost:{port}"),
-                ReturnMethod::App => APP_REDIRECT.to_owned(),
-            };
+            let redirect = method.redirect_uri(port);
             let random_state = random_string()?;
             let state = match method {
                 ReturnMethod::Loopback => random_state,
@@ -431,7 +448,7 @@ pub async fn login_with_progress(
             let url = authorize_url(&proof, &redirect);
             progress(Stage::WaitingForBrowser);
             tokio::task::spawn_blocking(move || webbrowser::open(url.as_str()).map_err(|_| Error::Browser)).await.map_err(|_| Error::Browser)??;
-            let code = receive(&listener, &proof, port).await?;
+            let code = receive(&listener, &proof, port, method).await?;
             drop(listener);
             progress(Stage::Microsoft);
             let client = http::client()?;
@@ -480,6 +497,20 @@ pub async fn renew_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn el_acceso_normal_de_windows_pide_el_retorno_nativo_con_pkce() {
+        let method=ReturnMethod::default();
+        let proof=Proof {verifier:Zeroizing::new("PRIVATE_VERIFIER".into()),state:Zeroizing::new("canary-state".into())};
+        let url=authorize_url(&proof,&method.redirect_uri(4321));
+        let params:std::collections::HashMap<_,_>=url.query_pairs().collect();
+        if cfg!(windows) {
+            assert_eq!(method,ReturnMethod::App);
+            assert_eq!(params["redirect_uri"],APP_REDIRECT);
+            assert!(!url.as_str().contains("localhost"));
+        } else { assert_eq!(method,ReturnMethod::Loopback); }
+        assert_eq!(params["code_challenge_method"],"S256");
+        assert_eq!(params["state"],"canary-state");
+    }
     #[test]
     fn return_page_is_private_and_scrubs_the_callback_address() {
         for denied in [false, true] {
@@ -733,7 +764,7 @@ mod tests {
                 );
             }
         };
-        let (code, _) = tokio::join!(receive(&listener, &proof, port), send);
+        let (code, _) = tokio::join!(receive(&listener, &proof, port, ReturnMethod::Loopback), send);
         assert_eq!(&*code.unwrap(), "correct");
         drop(listener);
         assert!(

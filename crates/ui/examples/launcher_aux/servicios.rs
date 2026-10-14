@@ -360,7 +360,6 @@ fn begin_browser(app: &mut App) -> Task<Mensaje> {
     app.servicios.auth_error = None;
     app.sesion.menu = false;
     let vault = app.servicios.vault.clone();
-    let app_return = std::env::var("ICARO_APP_RETURN").as_deref() == Ok("1");
     Task::run(
         iced::stream::channel(16, move |mut output| async move {
             let report = output.clone();
@@ -369,16 +368,7 @@ fn begin_browser(app: &mut App) -> Task<Mensaje> {
                     .clone()
                     .try_send(Accion::Progreso(id, FaseAcceso::Autenticacion(stage)));
             };
-            let result = async {
-                let method = if app_return {
-                    auth::register_app_return()?;
-                    auth::ReturnMethod::App
-                } else {
-                    auth::ReturnMethod::Loopback
-                };
-                auth::login_with_progress(cancel, method, progress).await
-            }
-            .await;
+            let result = auth::login_with_progress(cancel, auth::ReturnMethod::default(), progress).await;
             let (result, stored) = match result {
                 Ok(session) => {
                     let _ = output

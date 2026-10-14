@@ -10,32 +10,27 @@ cargo run -p icaro-ui --example launcher
 
 1. Al abrir Ícaro sin cuenta activa aparece la bienvenida. Pulsa **Iniciar sesión**; también puedes acceder desde el menú de cuenta.
 2. Pulsa **Continuar con Microsoft** en la página de vinculación. Se abre el navegador para elegir una cuenta y autorizar a Ícaro.
-3. Autoriza la vinculación con Ícaro desde Microsoft.
+3. Autoriza la vinculación con Ícaro desde Microsoft. En Windows, acepta **Abrir Icaro Launcher** si el navegador muestra esa confirmación.
 4. Cuando Microsoft devuelve la autorización, Ícaro vuelve al frente y muestra el progreso: validar la sesión, comprobar Minecraft Java, obtener el perfil y guardar la cuenta. La cuenta aparece activa al terminar; no requiere pulsar una confirmación en el launcher.
 
 El Client ID público de Ícaro está incluido en el núcleo. El registro de Azure debe admitir cuentas personales de Microsoft. No se usa un secreto de cliente.
 
-El acceso utiliza PKCE S256 y comprobación de `state`. Por defecto vuelve a `http://localhost`, registrado en Azure como URI de aplicaciones móviles y de escritorio. El receptor escucha solo en loopback, utiliza un puerto temporal y el intento vence a los diez minutos. La página de retorno indica que la autorización se recibió, elimina los parámetros de la dirección visible y no carga recursos externos. La comprobación de la cuenta continúa en Ícaro.
+El acceso utiliza PKCE S256 y comprobación de `state`. En Windows vuelve por defecto a `icaro://oauth/microsoft`; no abre una página de `localhost` en el navegador ni necesita una variable de entorno. El intento vence a los diez minutos. La comprobación de la cuenta continúa en Ícaro.
 
 El código y el QR se retiraron del acceso real: en el navegador probado, el enlace del proveedor enviaba al panel de cuenta de Microsoft en lugar de completar la vinculación. El núcleo conserva la API de [código de dispositivo](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code), cuya emisión real se comprobó, para una integración posterior.
 
 ### Volver directamente a Ícaro en Windows
 
-Este retorno usa `icaro://oauth/microsoft`, equivalente al enlace propio que usa Prism. Al abrirlo, el navegador puede pedir permiso para iniciar Ícaro; puede recordar una autorización anterior. Las pantallas de consentimiento y confirmación de identidad pertenecen a Microsoft y pueden variar según la cuenta y los permisos previos.
+Este retorno usa `icaro://oauth/microsoft`, con el mismo mecanismo de enlace propio del [retorno nativo de Prism](https://github.com/PrismLauncher/PrismLauncher/blob/develop/launcher/minecraft/auth/steps/MSAStep.cpp). Al abrirlo, el navegador puede pedir permiso para iniciar Ícaro; puede recordar una autorización anterior. Las pantallas de consentimiento y confirmación de identidad pertenecen a Microsoft y pueden variar según la cuenta y los permisos previos. Ícaro no controla su texto ni fuerza su aparición en cada acceso.
 
 > [!IMPORTANT]
-> Antes de activar este retorno, añade exactamente `icaro://oauth/microsoft` en Azure, en **Autenticación → Aplicaciones móviles y de escritorio**. Conserva `http://localhost` para el acceso local. [Configuración de las URI de redirección](https://learn.microsoft.com/en-us/entra/identity-platform/how-to-add-redirect-uri).
+> El registro público de Ícaro en Azure debe incluir exactamente `icaro://oauth/microsoft` en **Autenticación → Aplicaciones móviles y de escritorio**. Una instalación del launcher no puede modificar ese registro remoto. `http://localhost` se conserva para el acceso en Linux. [Configuración de las URI de redirección](https://learn.microsoft.com/en-us/entra/identity-platform/how-to-add-redirect-uri).
 
-En PowerShell:
+El instalador registra el protocolo para el usuario actual de Windows, sin permisos de administrador. Al pulsar **Continuar con Microsoft**, el launcher también comprueba y registra el ejecutable actual, lo que permite el retorno en compilaciones portables y de desarrollo. No cambia automáticamente a una página local si no puede registrar el protocolo: muestra el error en Ícaro.
 
-```powershell
-$env:ICARO_APP_RETURN = '1'
-cargo run -p icaro-ui --example launcher
-```
+La respuesta abre un proceso breve que entrega el código al intento original y se cierra sin crear otra ventana. Solo ese intento conserva el verificador PKCE y acepta su `state`; los tokens de sesión no se transmiten mediante el enlace. El receptor loopback queda como comunicación interna entre los dos procesos y responde sin HTML; el navegador vuelve al protocolo de Ícaro.
 
-Al pulsar **Continuar con Microsoft**, Ícaro registra el protocolo para el usuario actual de Windows, sin permisos de administrador. El registro apunta al ejecutable que estás probando. La respuesta abre un proceso breve que entrega el código al intento original y se cierra sin crear otra ventana. Solo ese intento conserva el verificador PKCE y acepta su `state`; los tokens de sesión no se transmiten mediante el enlace.
-
-Para volver al acceso local, elimina la variable con `Remove-Item Env:ICARO_APP_RETURN` antes de iniciar el launcher. El retorno directo se comprobó con una cuenta real en Windows; en Linux continúa disponible el retorno local.
+`ICARO_APP_RETURN` ya no selecciona el acceso: no es necesaria y se ignora si quedó definida de una prueba anterior. El retorno directo se comprobó anteriormente con una cuenta real en Windows; este cambio lo hace predeterminado. En Linux continúa el retorno local mientras se completa el registro del protocolo nativo para esa plataforma.
 
 **Cancelar** interrumpe el intento. Si el navegador permanece abierto, su autorización posterior no activa la cuenta en Ícaro. Ante un error se muestra la etapa o un mensaje específico, sin copiar la descripción del proveedor ni sus credenciales.
 

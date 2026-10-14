@@ -1,0 +1,12 @@
+{
+  "version": "0.1.0",
+  "notas": [
+    {"tipo": "nuevo", "texto": "Crea, instala y juega instancias Vanilla y Fabric con Java compatible por perfil."},
+    {"tipo": "nuevo", "texto": "Busca mods, recursos, shaders y modpacks en Modrinth y escoge su versión."},
+    {"tipo": "nuevo", "texto": "Gestiona tu cuenta y tu skin con las pantallas originales de Ícaro."},
+    {"tipo": "nuevo", "texto": "Revisa y sincroniza mods con el servicio del anfitrión antes de entrar a su servidor."},
+    {"tipo": "mejora", "texto": "Las actualizaciones se aplican en segundo plano y vuelven a esta pantalla al terminar."},
+    {"tipo": "mejora", "texto": "El paquete ocupa menos espacio y conserva los píxeles de todos sus grabados."},
+    {"tipo": "correccion", "texto": "Microsoft vuelve directamente a Ícaro en Windows, sin abrir una página de localhost."}
+  ]
+}
