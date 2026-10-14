@@ -70,6 +70,7 @@ impl Catalogo for Catalog {
     }
     async fn cliente(&self, version: &Version) -> Result<bool, String> {
         let project = self.project(&version.project_id).await.map_err(err)?;
+        if project.id != version.project_id { return Err("Modrinth devolvió otro proyecto.".into()); }
         match project.client_side.as_str() {
             "unsupported" => Ok(false),
             "required" | "optional" => Ok(true),
@@ -204,203 +205,150 @@ async fn publicar_con(
     };
     let mut encontrados = BTreeMap::new();
     let mut jars = BTreeMap::new();
-    let mut propios_modrinth = BTreeSet::new();
+    let mut propios = BTreeSet::new();
     let mut archivos = vec![];
     let mut elegidos: BTreeMap<String, (Version, Entrada)> = BTreeMap::new();
     for (name, sha) in active {
         let Some(v) = by_hash.get(sha) else {
             archivos.push(archivo_propio(
-                &servidor.carpeta.join("mods").join(name),
-                name,
-                sha,
-                &mut avisos,
+                &servidor.carpeta.join("mods").join(name), name, sha, &mut avisos,
             )?);
             avisos.push(format!("{name}: no está en Modrinth; se descargará directamente del anfitrión. Revisa que sea necesario en el cliente."));
             continue;
         };
-        if !v
-            .files
-            .iter()
-            .any(|f| f.hashes.sha512.eq_ignore_ascii_case(sha))
-        {
-            return Err(format!(
-                "Modrinth no confirma el archivo por SHA-512 de {name}."
-            ));
+        if !v.files.iter().any(|f| f.hashes.sha512.eq_ignore_ascii_case(sha)) {
+            return Err(format!("Modrinth no confirma el archivo por SHA-512 de {name}."));
         }
-        if encontrados
-            .insert(v.project_id.clone(), v.clone())
-            .is_some()
-        {
-            return Err(format!(
-                "Hay dos archivos del proyecto {} en mods.",
-                v.project_id
-            ));
+        if encontrados.insert(v.project_id.clone(), v.clone()).is_some() {
+            return Err(format!("Hay dos archivos del proyecto {} en mods.", v.project_id));
         }
-        if catalog.cliente(v).await? {
-            jars.insert(v.project_id.clone(), (name.clone(), sha.clone()));
-            if !compatible(v, &servidor.minecraft, &servidor.loader) {
-                archivos.push(archivo_propio(
-                    &servidor.carpeta.join("mods").join(name),
-                    name,
-                    sha,
-                    &mut avisos,
-                )?);
-                avisos.push(format!("{name}: Modrinth reconoce el hash, pero no declara Minecraft {} y loader {}. Se publicará el JAR instalado como archivo propio; revisa su compatibilidad en el cliente.",servidor.minecraft,servidor.loader));
-                propios_modrinth.insert(v.project_id.clone());
-                continue;
-            }
-            elegidos.insert(
-                v.project_id.clone(),
-                (
-                    v.clone(),
-                    Entrada {
-                        proyecto: v.project_id.clone(),
-                        version: v.id.clone(),
-                        sha512: sha.clone(),
-                    },
-                ),
-            );
+        if !catalog.cliente(v).await? {
+            continue;
         }
+        jars.insert(v.project_id.clone(), (name.clone(), sha.clone()));
+        if !compatible(v, &servidor.minecraft, &servidor.loader) {
+            propios.insert(v.project_id.clone());
+            avisos.push(format!("{name}: Modrinth reconoce el hash, pero no declara Minecraft {} y loader {}. Se publicará el JAR instalado como archivo propio; revisa su compatibilidad en el cliente.",servidor.minecraft,servidor.loader));
+        }
+        elegidos.insert(v.project_id.clone(), (v.clone(), Entrada {
+            proyecto: v.project_id.clone(), version: v.id.clone(), sha512: sha.clone(),
+        }));
     }
-    // Un proyecto que depende de una entrada propia tampoco puede resolverse estrictamente
-    // en Modrinth. Conservar su JAR instalado y propagar esa elección evita otro bloqueo.
-    loop {
-        let afectados: Vec<_> = elegidos
-            .iter()
-            .filter(|(_, (v, _))| {
-                v.dependencies
-                    .iter()
-                    .filter(|d| d.dependency_type == "required")
-                    .any(|d| {
-                        d.project_id
-                            .as_ref()
-                            .is_some_and(|id| propios_modrinth.contains(id))
-                            || d.version_id.as_ref().is_some_and(|id| {
-                                encontrados.values().any(|v| {
-                                    &v.id == id && propios_modrinth.contains(&v.project_id)
-                                })
-                            })
-                    })
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        if afectados.is_empty() {
-            break;
-        }
-        for id in afectados {
-            let (name, sha) = &jars[&id];
-            archivos.push(archivo_propio(
-                &servidor.carpeta.join("mods").join(name),
-                name,
-                sha,
-                &mut avisos,
-            )?);
-            avisos.push(format!("{name}: depende de un JAR con metadatos incompletos; se publicará el archivo instalado del anfitrión."));
-            elegidos.remove(&id);
-            propios_modrinth.insert(id);
-        }
-    }
+    // Resolver todo el grafo antes de decidir su transporte. También los JAR propios
+    // identificados pueden necesitar dependencias de cliente ausentes en el servidor.
+    let mut aristas: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut revisados = BTreeSet::new();
     loop {
-        let Some(v) = elegidos
-            .values()
-            .map(|(v, _)| v)
-            .find(|v| !revisados.contains(&v.id))
-            .cloned()
-        else {
-            break;
-        };
+        let Some(v) = elegidos.values().map(|(v, _)| v)
+            .find(|v| !revisados.contains(&v.id)).cloned() else { break; };
         revisados.insert(v.id.clone());
-        for dep in v
-            .dependencies
-            .iter()
-            .filter(|d| d.dependency_type == "required")
-        {
-            let existente = dep
-                .project_id
-                .as_ref()
-                .and_then(|p| encontrados.get(p))
-                .or_else(|| {
-                    dep.version_id
-                        .as_ref()
-                        .and_then(|id| encontrados.values().find(|v| &v.id == id))
-                });
-            let candidate = if let Some(v) = existente {
-                v.clone()
+        for dep in v.dependencies.iter().filter(|d| d.dependency_type == "required") {
+            // Un pin sin proyecto debe resolverse incluso si la versión instalada es otra.
+            let pinned = if dep.project_id.is_none() {
+                let id = dep.version_id.as_ref().ok_or_else(||
+                    format!("{}: una dependencia obligatoria no tiene proyecto ni versión de Modrinth.", v.project_id))?;
+                let value = catalog.version(id).await?;
+                if value.id != *id { return Err("Modrinth devolvió otra versión de dependencia.".into()); }
+                Some(value)
+            } else { None };
+            let project = dep.project_id.as_ref()
+                .or_else(|| pinned.as_ref().map(|p| &p.project_id)).unwrap().clone();
+            let existente = encontrados.get(&project);
+            let candidate = if let Some(value) = existente {
+                value.clone()
+            } else if let Some(value) = pinned {
+                value
             } else if let Some(id) = &dep.version_id {
-                catalog.version(id).await?
-            } else if let Some(id) = &dep.project_id {
-                let mut versions = catalog
-                    .versiones(id, &servidor.minecraft, &servidor.loader)
-                    .await?;
-                versions.sort_by(|a, b| {
-                    b.date_published
-                        .cmp(&a.date_published)
-                        .then(a.id.cmp(&b.id))
-                });
-                versions
-                    .into_iter()
-                    .find(|v| {
-                        v.project_id == *id
-                            && v.version_type == "release"
-                            && compatible(v, &servidor.minecraft, &servidor.loader)
-                    })
-                    .ok_or_else(|| {
-                        format!("No hay una dependencia estable compatible para {id}.")
-                    })?
+                let value = catalog.version(id).await?;
+                if value.id != *id { return Err("Modrinth devolvió otra versión de dependencia.".into()); }
+                value
+            } else if let Some((value, _)) = elegidos.get(&project) {
+                value.clone()
             } else {
-                return Err(
-                    "Una dependencia obligatoria no tiene proyecto ni versión de Modrinth.".into(),
-                );
+                let mut versions = catalog.versiones(&project, &servidor.minecraft, &servidor.loader).await?;
+                versions.sort_by(|a, b| b.date_published.cmp(&a.date_published).then(a.id.cmp(&b.id)));
+                versions.into_iter().find(|value| value.project_id == project
+                    && value.version_type == "release"
+                    && compatible(value, &servidor.minecraft, &servidor.loader))
+                    .ok_or_else(|| format!("No hay una dependencia estable compatible para {project}."))?
             };
-            if dep
-                .version_id
-                .as_ref()
-                .is_some_and(|id| id != &candidate.id)
-                || dep
-                    .project_id
-                    .as_ref()
-                    .is_some_and(|id| id != &candidate.project_id)
-            {
-                return Err(format!("Conflicto en una dependencia de {}.", v.project_id));
+            if candidate.project_id != project {
+                return Err(format!("Conflicto en una dependencia de {}: el catálogo devolvió otro proyecto.", v.project_id));
             }
             if !catalog.cliente(&candidate).await? {
+                let (name, _) = jars.get(&v.project_id).ok_or_else(|| format!(
+                    "{} requiere una dependencia exclusiva de servidor y no tiene un JAR instalado para publicarse como propio.",v.project_id))?;
+                propios.insert(v.project_id.clone());
+                avisos.push(format!("{name}: Modrinth exige {} como dependencia, pero la clasifica como exclusiva de servidor. Se conserva el JAR instalado como archivo propio y se excluye esa dependencia del cliente.",candidate.project_id));
+                continue;
+            }
+            if dep.version_id.as_ref().is_some_and(|id| id != &candidate.id) {
+                if dep.project_id.is_some() {
+                    let id = dep.version_id.as_deref().unwrap();
+                    let declared = catalog.version(id).await?;
+                    if declared.id != id || declared.project_id != candidate.project_id {
+                        return Err(format!("Conflicto en una dependencia de {}: el pin no pertenece al proyecto declarado.",v.project_id));
+                    }
+                }
+                // El servidor aporta ambos archivos exactos. El pin del catálogo no es
+                // un rango de Fabric: conservar el conjunto y advertir, sin certificarlo.
+                if let (Some((name, _)), Some((dependency, _))) =
+                    (jars.get(&v.project_id), jars.get(&candidate.project_id)) {
+                    propios.insert(v.project_id.clone());
+                    avisos.push(format!("{name}: Modrinth fija {} para {}, pero el servidor tiene {} ({dependency}). Se conserva el conjunto instalado y se publica {name} como archivo propio; revisa su compatibilidad en el cliente.",dep.version_id.as_deref().unwrap(),candidate.project_id,candidate.id));
+                } else {
+                    return Err(format!("Conflicto en una dependencia de {}: {} requiere {}, disponible {}. No hay ambos JAR instalados para conservar el conjunto del servidor.",v.project_id,candidate.project_id,dep.version_id.as_deref().unwrap(),candidate.id));
+                }
+            }
+            aristas.entry(v.project_id.clone()).or_default().insert(candidate.project_id.clone());
+            if let Some((prev, _)) = elegidos.get(&candidate.project_id) {
+                if prev.id != candidate.id {
+                    return Err(format!("Dependencias incompatibles para {}: {} y {}.",candidate.project_id,prev.id,candidate.id));
+                }
                 continue;
             }
             if !compatible(&candidate, &servidor.minecraft, &servidor.loader) {
                 return Err(format!("Una dependencia de {} no confirma Minecraft o loader y no hay un JAR instalado que pueda publicarse como propio.",v.project_id));
             }
-            if let Some((prev, _)) = elegidos.get(&candidate.project_id) {
-                if prev.id != candidate.id {
-                    return Err(format!(
-                        "Dependencias incompatibles para {}.",
-                        candidate.project_id
-                    ));
-                }
-                continue;
-            }
-            let file = candidate
-                .files
-                .iter()
-                .find(|f| f.primary && f.filename.ends_with(".jar"))
-                .or_else(|| {
-                    candidate
-                        .files
-                        .iter()
-                        .find(|f| f.filename.ends_with(".jar"))
-                })
+            let file = candidate.files.iter().find(|f| f.primary && f.filename.ends_with(".jar"))
+                .or_else(|| candidate.files.iter().find(|f| f.filename.ends_with(".jar")))
                 .ok_or("La dependencia no tiene un JAR de cliente.")?;
             if !nombre_valido(&file.filename) || file.size > MAX_FILE {
                 return Err("Archivo de dependencia inválido.".into());
             }
-            let entry = Entrada {
-                proyecto: candidate.project_id.clone(),
-                version: candidate.id.clone(),
-                sha512: file.hashes.sha512.clone(),
-            };
+            let entry = Entrada { proyecto: candidate.project_id.clone(), version: candidate.id.clone(), sha512: file.hashes.sha512.clone() };
             elegidos.insert(candidate.project_id.clone(), (candidate, entry));
-            if elegidos.len() > 512 {
+            if elegidos.len() + archivos.len() > 512 {
                 return Err("Las dependencias superan 512 mods.".into());
+            }
+        }
+    }
+    // El cliente valida los pins de cada entrada de Modrinth. Propagar hasta un punto
+    // fijo evita publicar un índice que el anfitrión acepta pero el cliente rechaza.
+    loop {
+        let afectados: Vec<_> = aristas.iter().filter(|(id, deps)|
+            !propios.contains(*id) && deps.iter().any(|d| propios.contains(d)))
+            .map(|(id, _)| id.clone()).collect();
+        if afectados.is_empty() { break; }
+        for id in afectados {
+            let (name, _) = jars.get(&id).ok_or_else(|| format!(
+                "La dependencia de cliente {id} necesita un archivo propio, pero su JAR no está instalado en el servidor."))?;
+            avisos.push(format!("{name}: depende de un JAR con metadatos incompletos o pins distintos; se publicará el archivo instalado del anfitrión."));
+            propios.insert(id);
+        }
+    }
+    for id in propios {
+        let (name, sha) = &jars[&id];
+        archivos.push(archivo_propio(&servidor.carpeta.join("mods").join(name),name,sha,&mut avisos)?);
+        elegidos.remove(&id);
+    }
+    // No entregar al launcher un conflicto explícito entre las entradas de catálogo.
+    for (v, _) in elegidos.values() {
+        for dep in v.dependencies.iter().filter(|d| d.dependency_type == "incompatible") {
+            if (dep.project_id.is_some() || dep.version_id.is_some()) && elegidos.values().any(|(other, _)|
+                dep.project_id.as_ref().is_none_or(|id| id == &other.project_id)
+                && dep.version_id.as_ref().is_none_or(|id| id == &other.id)) {
+                return Err(format!("{} declara una incompatibilidad con otro mod del índice.",v.project_id));
             }
         }
     }
@@ -634,6 +582,46 @@ mod tests {
         })).unwrap()
     }
     #[tokio::test]
+    #[ignore = "Descarga Surveyor 1.2.4, Fabric API 0.116.17 y sus dependencias reales; no inicia Minecraft"]
+    async fn surveyor_real_con_fabric_instalada_publica_y_sincroniza_sin_reemplazarla() {
+        let (_temp,mut s) = servidor();
+        s.loader_version = "0.19.5".into();
+        let catalog = Catalog::new().unwrap().with_metadata_cache();
+        let surveyor = catalog.version("egJBsDTn").await.unwrap();
+        assert_eq!(surveyor.project_id,"4KjqhPc9");
+        assert_eq!(surveyor.version_number,"1.2.4+1.21");
+        let api = catalog.versions("fabric-api",Some("1.21.1"),Some("fabric")).await.unwrap()
+            .into_iter().find(|v| v.version_number == "0.116.17+1.21.1").expect("Fabric API de la reproducción");
+        let mut files = vec![];
+        for v in [&surveyor,&api] {
+            let file = v.files.iter().find(|f| f.primary).unwrap().clone();
+            let bytes = catalog.download_mod(&file).await.unwrap();
+            assert_eq!(hash(&bytes),file.hashes.sha512);
+            fs::write(s.carpeta.join("mods").join(&file.filename),bytes).unwrap();
+            files.push(file);
+        }
+        let before = s.huella().unwrap();
+        let index = publicar(&catalog,&s).await.unwrap();
+        assert!(index.mods.iter().any(|v| v.version == api.id));
+        assert!(index.archivos.iter().any(|a| a.sha512 == files[0].hashes.sha512));
+        assert!(index.avisos.iter().any(|a| a.contains("Modrinth fija")));
+        let store = Almacen::nuevo(s.carpeta.join("cliente/instances"));
+        let instance = store.crear_con_loader("Cliente","1.21.1","fabric",0).unwrap();
+        crate::versiones_instancia::guardar_loader(&store,&instance,&s.loader_version).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let service = tokio::spawn(super::super::servir_archivos(listener,Arc::new(RwLock::new(Some(index))),cancel.clone(),Some(s.carpeta.join("mods"))));
+        let index = super::super::consultar(addr,CancellationToken::new()).await.unwrap();
+        let plan = super::super::preparar(&catalog,&store,&instance,index,addr.to_string()).await.unwrap();
+        super::super::aplicar(&catalog,&store,&instance,&plan,CancellationToken::new(),|_,_|{}).await.unwrap();
+        for file in files {
+            assert_eq!(hash_archivo(&store.juego(&instance.id).unwrap().join("mods").join(&file.filename)).unwrap(),file.hashes.sha512);
+        }
+        assert_eq!(before,s.huella().unwrap());
+        cancel.cancel();service.await.unwrap().unwrap();
+    }
+    #[tokio::test]
     #[ignore = "Descarga Ksyxis 1.4.4 real de Modrinth en una carpeta temporal"]
     async fn ksyxis_real_no_bloquea_el_indice_con_minecraft_1211() {
         let (_temp, mut s) = servidor();
@@ -739,6 +727,7 @@ mod tests {
         versions: BTreeMap<String, Version>,
         server_only: BTreeSet<String>,
         modificar: Option<PathBuf>,
+        files: BTreeMap<String, Vec<u8>>,
     }
     impl Catalogo for Fake {
         async fn hashes(&self, _: &[String]) -> Result<BTreeMap<String, Version>, String> {
@@ -751,10 +740,8 @@ mod tests {
             Ok(!self.server_only.contains(&version.project_id))
         }
         async fn version(&self, id: &str) -> Result<Version, String> {
-            self.versions
-                .get(id)
-                .cloned()
-                .ok_or("Versión ausente".into())
+            self.versions.get(id).or_else(|| self.hashes.values().find(|v| v.id == id))
+                .cloned().ok_or("Versión ausente".into())
         }
         async fn versiones(&self, id: &str, _: &str, _: &str) -> Result<Vec<Version>, String> {
             Ok(self
@@ -763,6 +750,18 @@ mod tests {
                 .filter(|v| v.project_id == id)
                 .cloned()
                 .collect())
+        }
+    }
+    impl Fuente for Fake {
+        async fn version(&self, id: &str) -> Result<Version, Error> {
+            Catalogo::version(self,id).await.map_err(|_| Error::Datos)
+        }
+        async fn versiones(&self, id: &str, mc: &str, loader: &str) -> Result<Vec<Version>, Error> {
+            Catalogo::versiones(self,id,mc,loader).await.map_err(|_| Error::Datos)
+        }
+        async fn nombre(&self, id: &str) -> Result<String, Error> { Ok(id.into()) }
+        async fn archivo(&self, file: &ModFile) -> Result<Vec<u8>, Error> {
+            self.files.get(&file.hashes.sha512).cloned().ok_or(Error::Datos)
         }
     }
     #[tokio::test]
@@ -1003,32 +1002,133 @@ mod tests {
         service.await.unwrap().unwrap();
     }
     #[tokio::test]
-    async fn dependencia_fijada_en_conflicto_no_se_sustituye_por_la_ultima() {
+    async fn dependencias_ausentes_con_pins_incompatibles_siguen_bloqueando() {
         let (_temp, s) = servidor();
         let mut catalog = Fake::default();
-        for (project, id, bytes, deps) in [
-            (
-                "common",
-                "v1",
-                b"comun".as_slice(),
-                serde_json::json!([{"version_id":"dep2","project_id":"dep","dependency_type":"required"}]),
-            ),
-            (
-                "dep",
-                "dep1",
-                b"dep instalada".as_slice(),
-                serde_json::json!([]),
-            ),
-        ] {
-            fs::write(s.carpeta.join("mods").join(format!("{project}.jar")), bytes).unwrap();
-            catalog
-                .hashes
-                .insert(hash(bytes), version(project, id, bytes, deps));
+        for (project,pin) in [("primero","dep1"),("segundo","dep2")] {
+            let bytes = jar_id("*",project);
+            fs::write(s.carpeta.join("mods").join(format!("{project}.jar")),&bytes).unwrap();
+            catalog.hashes.insert(hash(&bytes),version(project,project,&bytes,
+                serde_json::json!([{"version_id":pin,"project_id":"ausente","dependency_type":"required"}])));
+            catalog.versions.insert(pin.into(),version("ausente",pin,b"dependencia",serde_json::json!([])));
         }
-        assert!(publicar_con(&catalog, &s)
-            .await
-            .unwrap_err()
-            .contains("Conflicto"));
+        let before = s.huella().unwrap();
+        assert!(publicar_con(&catalog,&s).await.unwrap_err().contains("Dependencias incompatibles"));
+        assert_eq!(before,s.huella().unwrap());
+    }
+    #[tokio::test]
+    async fn pin_distinto_conserva_instalados_propaga_y_sincroniza_el_cliente_por_http() {
+        // Cubrir tanto project_id como los pins que solo identifican una versión antigua.
+        for version_only in [false,true] {
+            let (_temp,s) = servidor();
+            let mut catalog = Fake::default();
+            let dep = serde_json::json!({"version_id":"api-antigua","project_id":if version_only {None} else {Some("fabric-api")},"dependency_type":"required"});
+            let mut originales = BTreeMap::new();
+            for (project,id,depends) in [
+                ("fabric-api","api-instalada",serde_json::json!([])),
+                ("surveyor","surveyor124",serde_json::json!([dep,{"project_id":"solo-cliente","version_id":"cliente1","dependency_type":"required"}])),
+                ("mapa","mapa1",serde_json::json!([{"project_id":"surveyor","version_id":"surveyor124","dependency_type":"required"}])),
+                ("otro-mapa","mapa2",serde_json::json!([{"version_id":"mapa1","dependency_type":"required"}])),
+            ] {
+                let bytes = jar_descriptor(serde_json::json!({"id":project,"version":if project == "fabric-api" {"0.116.17+1.21.1"} else {"1.2.4"},"depends":if project == "surveyor" {serde_json::json!({"fabric-api":">=0.104.0+1.21.1"})} else {serde_json::json!({})}}).to_string().as_bytes());
+                fs::write(s.carpeta.join("mods").join(format!("{project}.jar")),&bytes).unwrap();
+                catalog.files.insert(hash(&bytes),bytes.clone());
+                catalog.hashes.insert(hash(&bytes),version(project,id,&bytes,depends));
+                originales.insert(format!("{project}.jar"),bytes);
+            }
+            catalog.versions.insert("api-antigua".into(),version("fabric-api","api-antigua",b"antigua",serde_json::json!([])));
+            let extra = jar_id("client","solo-cliente");
+            catalog.versions.insert("cliente1".into(),version("solo-cliente","cliente1",&extra,serde_json::json!([])));
+            catalog.files.insert(hash(&extra),extra.clone());
+            originales.insert("solo-cliente.jar".into(),extra);
+            let before = s.huella().unwrap();
+            let index = publicar_con(&catalog,&s).await.unwrap();
+            assert_eq!(index.mods.len(),2);
+            assert_eq!(index.archivos.len(),3);
+            assert!(index.mods.iter().any(|v| v.version == "api-instalada"));
+            assert!(!index.mods.iter().any(|v| v.version == "api-antigua"));
+            assert!(index.avisos.iter().any(|a| a.contains("api-antigua") && a.contains("api-instalada")));
+            let store = Almacen::nuevo(s.carpeta.join("cliente/instances"));
+            let instance = store.crear_con_loader("Cliente","1.21.1","fabric",0).unwrap();
+            crate::versiones_instancia::guardar_loader(&store,&instance,&s.loader_version).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let cancel = CancellationToken::new();
+            let service = tokio::spawn(super::super::servir_archivos(listener,Arc::new(RwLock::new(Some(index))),cancel.clone(),Some(s.carpeta.join("mods"))));
+            let index = super::super::consultar(addr,CancellationToken::new()).await.unwrap();
+            let plan = super::super::preparar(&catalog,&store,&instance,index,addr.to_string()).await.unwrap();
+            assert_eq!(plan.cambios.len(),5);
+            super::super::aplicar(&catalog,&store,&instance,&plan,CancellationToken::new(),|_,_|{}).await.unwrap();
+            for (name,bytes) in originales {
+                assert_eq!(fs::read(store.juego(&instance.id).unwrap().join("mods").join(name)).unwrap(),bytes);
+            }
+            assert_eq!(before,s.huella().unwrap());
+            cancel.cancel();service.await.unwrap().unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn ciclos_se_publican_una_vez_y_un_pin_de_otro_proyecto_se_rechaza() {
+        let (_temp,s) = servidor();
+        let mut catalog = Fake::default();
+        for (project,deps) in [
+            ("api",serde_json::json!([])),
+            ("a",serde_json::json!([{"project_id":"api","version_id":"old","dependency_type":"required"},{"project_id":"b","dependency_type":"required"}])),
+            ("b",serde_json::json!([{"project_id":"a","dependency_type":"required"}])),
+        ] {
+            let bytes = jar_id("*",project);
+            fs::write(s.carpeta.join("mods").join(format!("{project}.jar")),&bytes).unwrap();
+            catalog.hashes.insert(hash(&bytes),version(project,project,&bytes,deps));
+        }
+        catalog.versions.insert("old".into(),version("api","old",b"old",serde_json::json!([])));
+        let index = publicar_con(&catalog,&s).await.unwrap();
+        assert_eq!(index.mods.len(),1);
+        assert_eq!(index.archivos.len(),2);
+        assert_eq!(index.avisos.len(),2);
+        catalog.versions.get_mut("old").unwrap().project_id = "otro".into();
+        assert!(publicar_con(&catalog,&s).await.unwrap_err().contains("pin no pertenece"));
+    }
+    #[tokio::test]
+    async fn dependencia_de_servidor_no_reaparece_en_la_resolucion_del_cliente() {
+        let (_temp,s) = servidor();
+        let mut catalog = Fake::default();
+        let root = jar_id("*","comun");
+        fs::write(s.carpeta.join("mods/comun.jar"),&root).unwrap();
+        catalog.hashes.insert(hash(&root),version("comun","comun1",&root,serde_json::json!([{"project_id":"backend","version_id":"backend1","dependency_type":"required"}])));
+        catalog.versions.insert("backend1".into(),version("backend","backend1",b"servidor",serde_json::json!([])));
+        catalog.server_only.insert("backend".into());
+        let index = publicar_con(&catalog,&s).await.unwrap();
+        assert!(index.mods.is_empty());
+        assert_eq!(index.archivos.len(),1);
+        assert!(index.avisos[0].contains("exclusiva de servidor"));
+        let store = Almacen::nuevo(s.carpeta.join("cliente/instances"));
+        let instance = store.crear_con_loader("Cliente","1.21.1","fabric",0).unwrap();
+        crate::versiones_instancia::guardar_loader(&store,&instance,&s.loader_version).unwrap();
+        let plan = super::super::preparar(&catalog,&store,&instance,index,"127.0.0.1:25566".into()).await.unwrap();
+        assert_eq!(plan.cambios.len(),1);
+    }
+    #[tokio::test]
+    async fn cliente_acepta_163_mods_y_rechaza_un_indice_incompleto() {
+        let (_temp,s) = servidor();
+        let mut catalog = Fake::default();
+        for n in 0..163 {
+            let project = format!("mod{n}");
+            let body = jar_id("*",&project);
+            fs::write(s.carpeta.join("mods").join(format!("{project}.jar")),&body).unwrap();
+            catalog.hashes.insert(hash(&body),version(&project,&project,&body,serde_json::json!([])));
+        }
+        let index = publicar_con(&catalog,&s).await.unwrap();
+        let store = Almacen::nuevo(s.carpeta.join("cliente/instances"));
+        let instance = store.crear_con_loader("Cliente","1.21.1","fabric",0).unwrap();
+        crate::versiones_instancia::guardar_loader(&store,&instance,&s.loader_version).unwrap();
+        let plan = super::super::preparar(&catalog,&store,&instance,index.clone(),"127.0.0.1:25566".into()).await.unwrap();
+        assert_eq!(plan.cambios.len(),163);
+        let root = catalog.hashes.values_mut().find(|v| v.project_id == "mod0").unwrap();
+        root.dependencies = serde_json::from_value(serde_json::json!([{"project_id":"mod162","dependency_type":"required"}])).unwrap();
+        let mut incomplete = index;
+        incomplete.mods.retain(|e| e.proyecto != "mod162");
+        let required = catalog.hashes.values().find(|v| v.project_id == "mod162").unwrap().clone();
+        catalog.versions.insert(required.id.clone(),required);
+        assert!(super::super::preparar(&catalog,&store,&instance,incomplete,"127.0.0.1:25566".into()).await.unwrap_err().contains("falta una dependencia"));
     }
     #[test]
     fn origen_invalido_o_jars_anidados_no_generan_un_indice_vacio() {

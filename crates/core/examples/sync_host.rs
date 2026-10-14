@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Servicio del anfitrión: servidor dedicado o instancia cliente de referencia.
 use icaro_core::{instancias::Almacen, modrinth::Catalog, mods::sincronizacion as sync};
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 #[tokio::main]
@@ -84,7 +84,7 @@ async fn ejecutar() -> Result<(), String> {
     {
         return Err("Dirección de escucha inválida.".into());
     }
-    let catalog = Catalog::new().map_err(|e| e.to_string())?;
+    let catalog = Catalog::new().map_err(|e| e.to_string())?.with_metadata_cache();
     let published = Arc::new(RwLock::new(None));
     let cancel = CancellationToken::new();
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|_| {
@@ -102,12 +102,27 @@ async fn ejecutar() -> Result<(), String> {
         mods,
     ));
     let mut last = None;
+    let mut attempted = None;
+    let mut retry = Reintentos::default();
     loop {
         let refresh = async {
-            let signature = origen.huella()?;
+            let signature = match origen.huella() {
+                Ok(signature) => signature,
+                Err(error) => {
+                    *published.write().await = None;
+                    return if retry.puede(Instant::now()) { Err(error) } else { Ok(()) };
+                }
+            };
             if last.as_ref() != Some(&signature) {
                 // Un cambio invalida el índice anterior antes de consultar Modrinth.
                 *published.write().await = None;
+                if attempted.as_ref() != Some(&signature) {
+                    retry = Reintentos::default();
+                    attempted = Some(signature.clone());
+                }
+                if !retry.puede(Instant::now()) || !catalog.retry_after().is_zero() {
+                    return Ok(());
+                }
                 let index = origen.publicar(&catalog).await?;
                 let count = index.mods.len() + index.archivos.len();
                 for aviso in &index.avisos {
@@ -115,6 +130,7 @@ async fn ejecutar() -> Result<(), String> {
                 }
                 *published.write().await = Some(index);
                 last = Some(signature);
+                retry = Reintentos::default();
                 println!("Índice actualizado: {count} mods de cliente, incluyendo archivos propios del anfitrión.");
             }
             Ok::<_, String>(())
@@ -122,7 +138,12 @@ async fn ejecutar() -> Result<(), String> {
         tokio::select! {
             _=tokio::signal::ctrl_c()=>break,
             result=tokio::time::timeout(Duration::from_secs(120),refresh)=>{
-                if let Err(error)=result.unwrap_or_else(|_|Err("La preparación del índice agotó el tiempo de espera.".into())) { *published.write().await=None; last=None; eprintln!("{error}"); }
+                if let Err(error)=result.unwrap_or_else(|_|Err("La preparación del índice agotó el tiempo de espera.".into())) {
+                    *published.write().await=None;
+                    last=None;
+                    let wait = retry.fallo(Instant::now(), catalog.retry_after());
+                    eprintln!("{error} Próximo intento en al menos {} segundos; se conservan los metadatos ya consultados.",wait.as_secs());
+                }
             }
         }
         tokio::select! {_=tokio::signal::ctrl_c()=>break, _=tokio::time::sleep(Duration::from_secs(10))=>{}}
@@ -174,5 +195,41 @@ impl Origen {
                 sync::publicar(catalog, store, &Self::instancia(store, id)?).await
             }
         }
+    }
+}
+
+/// Los fallos no convierten el sondeo local de diez segundos en otro barrido de la API.
+#[derive(Default)]
+struct Reintentos {
+    fallos: u32,
+    siguiente: Option<Instant>,
+}
+impl Reintentos {
+    fn puede(&self, now: Instant) -> bool { self.siguiente.is_none_or(|next| now >= next) }
+    fn fallo(&mut self, now: Instant, proveedor: Duration) -> Duration {
+        let seconds = 30u64.saturating_mul(1u64 << self.fallos.min(5)).min(600);
+        let wait = Duration::from_secs(seconds).max(proveedor);
+        self.fallos = self.fallos.saturating_add(1);
+        self.siguiente = Some(now + wait);
+        wait
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn reintentos_crecen_respetan_proveedor_y_se_reinician_tras_recuperacion() {
+        let mut retry = Reintentos::default();
+        let mut now = Instant::now();
+        for seconds in [30,60,120,240,480,600,600] {
+            assert!(retry.puede(now));
+            assert_eq!(retry.fallo(now, Duration::ZERO),Duration::from_secs(seconds));
+            assert!(!retry.puede(now + Duration::from_secs(10)));
+            now += Duration::from_secs(seconds);
+        }
+        assert_eq!(retry.fallo(now,Duration::from_secs(1800)),Duration::from_secs(1800));
+        assert!(!retry.puede(now + Duration::from_secs(1799)));
+        retry = Reintentos::default();
+        assert_eq!(retry.fallo(now,Duration::ZERO),Duration::from_secs(30));
     }
 }

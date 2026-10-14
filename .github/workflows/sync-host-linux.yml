@@ -23,6 +23,9 @@ jobs:
       - name: Pruebas del protocolo y compilación x86_64
         run: |
           cargo test --locked -p icaro-core --lib mods::sincronizacion -- --test-threads=1
+          cargo test --locked -p icaro-core --lib modrinth:: -- --test-threads=1
+          cargo test --locked -p icaro-core --lib http:: -- --test-threads=1
+          cargo test --locked -p icaro-core --example sync_host
           cargo build --locked --release -p icaro-core --example sync_host
       - name: Paquete del servicio
         run: |

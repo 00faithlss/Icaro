@@ -984,7 +984,7 @@ pub async fn resolver(
         if !visited.insert(v.id.clone()) {
             continue;
         }
-        if visited.len() > 128 {
+        if visited.len() > 512 {
             return Err(Error::Datos);
         }
         for dep in v

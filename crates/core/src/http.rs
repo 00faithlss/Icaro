@@ -42,13 +42,7 @@ pub(crate) async fn json<T: DeserializeOwned>(
 ) -> Result<T, Error> {
     let response = request.send().await.map_err(|_| Error::Network(service))?;
     if response.status().as_u16() == 429 {
-        let delay = response
-            .headers()
-            .get("retry-after")
-            .or_else(|| response.headers().get("x-ratelimit-reset"))
-            .and_then(|s| s.to_str().ok())
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(60);
+        let delay = retry_after(response.headers(), std::time::SystemTime::now());
         return Err(Error::RateLimited(delay));
     }
     if !response.status().is_success() {
@@ -58,6 +52,18 @@ pub(crate) async fn json<T: DeserializeOwned>(
         });
     }
     body_json(response, service, limit).await
+}
+
+// Retry-After admite segundos o fecha HTTP; Modrinth también envía segundos en reset.
+fn retry_after(headers: &reqwest::header::HeaderMap, now: std::time::SystemTime) -> u64 {
+    let retry = headers.get("retry-after").and_then(|s| s.to_str().ok()).and_then(|s| {
+        s.parse::<u64>().ok().or_else(|| chrono::DateTime::parse_from_rfc2822(s).ok().map(|date| {
+            let date: std::time::SystemTime = date.into();
+            date.duration_since(now).unwrap_or_default().as_secs().saturating_add(1)
+        }))
+    });
+    let reset = headers.get("x-ratelimit-reset").and_then(|s| s.to_str().ok()).and_then(|s| s.parse::<u64>().ok());
+    retry.into_iter().chain(reset).max().unwrap_or(60).clamp(1,86400)
 }
 
 /// Decodifica cuerpos acotados; el llamador valida el estado antes de utilizarlos.
@@ -144,6 +150,19 @@ mod tests {
             .await,
             Err(Error::Response(_))
         ));
+    }
+    #[test]
+    fn espera_fecha_http_y_reset_sin_acortar_el_limite() {
+        use reqwest::header::HeaderMap;
+        let now = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after",chrono::DateTime::<chrono::Utc>::from(now+Duration::from_secs(120)).format("%a, %d %b %Y %H:%M:%S GMT").to_string().parse().unwrap());
+        headers.insert("x-ratelimit-reset","180".parse().unwrap());
+        assert_eq!(retry_after(&headers,now),180);
+        headers.insert("retry-after","invalid".parse().unwrap());
+        assert_eq!(retry_after(&headers,now),180);
+        headers.insert("retry-after","999999999999".parse().unwrap());
+        assert_eq!(retry_after(&headers,now),86400);
     }
     #[tokio::test]
     async fn observes_retry_after_without_exposing_error_body() {

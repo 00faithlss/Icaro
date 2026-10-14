@@ -1,0 +1,17 @@
+{
+  "version": "0.2.1",
+  "notas": [
+    {
+      "tipo": "correccion",
+      "texto": "Conserva las dependencias instaladas cuando el pin de Modrinth difiere, con avisos y sin sustituir los JAR del anfitrión."
+    },
+    {
+      "tipo": "mejora",
+      "texto": "Reutiliza metadatos de Modrinth por hash, proyecto y versión, y aplica esperas crecientes ante fallos y límites de solicitudes."
+    },
+    {
+      "tipo": "correccion",
+      "texto": "Permite resolver hasta 512 mods en el cliente y conserva las dependencias transitivas necesarias para sincronizar."
+    }
+  ]
+}
