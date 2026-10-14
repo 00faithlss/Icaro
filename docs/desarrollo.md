@@ -152,3 +152,13 @@ Las escenas de prueba incluyen `modpacks-tienda`, `modpacks-versiones`, sus vari
 El 13-10-2026 pasaron 146 pruebas del núcleo, 56 de componentes, 49 del launcher y la regresión del ayudante real con Windows PowerShell: 252 en total, sin fallos. Se mantienen 13 pruebas del núcleo y dos del launcher omitidas por defecto por sus requisitos externos. La interfaz se ejecuta con `--test-threads=1` para las fixtures que comparten estado.
 
 También pasaron `git diff --check`, la validación del workflow con actionlint y el cálculo del roadmap (61/83, 73 %). Se verificaron los hashes y tamaños de los paquetes locales, el contenido del ZIP portable, la actualización mediante setup silencioso en una ruta aislada y la conservación de los metadatos de usuario revisados. Los estados de actualización tienen 16 capturas nativas de fixtures en Tinta/Piedra y dos tamaños. La descarga/aplicación desde una release de GitHub en otro equipo requiere validación adicional.
+
+## Retorno nativo del inicio de sesión
+
+Windows utiliza `icaro://oauth/microsoft` sin `ICARO_APP_RETURN`. La asociación se prepara desde el instalador y al iniciar el acceso desde el launcher. El receptor loopback solo comunica el proceso del enlace con el intento original; en este modo devuelve un acuse vacío, sin servir la página local de autorización.
+
+La corrección pasó 21 pruebas de autenticación y tres de integración de sesión en la interfaz. Una consulta sin cookies ni cuenta a los endpoints oficiales de Microsoft confirmó que aceptan el retorno nativo, conservan el `state` y devuelven `login_required` cuando no hay sesión. No equivale a completar el acceso con una cuenta real.
+
+El registro del instalador se probó con su definición real adaptada únicamente a un AppId, asociación y grupo de Inicio aislados: ruta con espacios/acento, comando con el enlace como un argumento, retirada de la asociación propia y conservación de una registrada por otra copia. La asociación real `icaro` del usuario permaneció intacta.
+
+El ejecutable release recibió un enlace de prueba mediante `--oauth-return`, entregó el código y el `state` intactos al receptor aislado y terminó sin abrir otra ventana. La prueba no canjeó un código de Microsoft ni modificó la sesión del usuario; la confirmación del navegador y el acceso completo deben comprobarse con el paquete corregido.

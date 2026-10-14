@@ -17,16 +17,27 @@ pub fn register_app_return() -> Result<(), Error> {
     {
         use winreg::{enums::HKEY_CURRENT_USER, RegKey};
         let executable = std::env::current_exe().map_err(|_| Error::Setup)?;
+        let user = RegKey::predef(HKEY_CURRENT_USER);
+        let (classes, _) = user.create_subkey("Software\\Classes").map_err(|_| Error::Setup)?;
+        register_at(&classes,&executable)
+    }
+    #[cfg(not(windows))]
+    {
+        Err(Error::Setup)
+    }
+}
+
+#[cfg(windows)]
+fn register_at(classes:&winreg::RegKey, executable:&std::path::Path) -> Result<(),Error> {
         let path = executable.to_str().ok_or(Error::Setup)?;
         if path.contains('"') || path.contains(['\r', '\n']) {
             return Err(Error::Setup);
         }
-        let user = RegKey::predef(HKEY_CURRENT_USER);
-        let (protocol, _) = user
-            .create_subkey("Software\\Classes\\icaro")
+        let (protocol, _) = classes
+            .create_subkey("icaro")
             .map_err(|_| Error::Setup)?;
         protocol
-            .set_value("", &"URL:Ícaro")
+            .set_value("", &"URL:Icaro Launcher")
             .map_err(|_| Error::Setup)?;
         protocol
             .set_value("URL Protocol", &"")
@@ -43,11 +54,6 @@ pub fn register_app_return() -> Result<(), Error> {
             .set_value("", &format!("\"{path}\" --oauth-return \"%1\""))
             .map_err(|_| Error::Setup)?;
         Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        Err(Error::Setup)
-    }
 }
 
 fn request(value: &str) -> Result<(u16, Zeroizing<String>), Error> {
@@ -136,6 +142,30 @@ mod tests {
     use super::*;
     const STATE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq";
 
+    #[cfg(windows)]
+    #[test]
+    fn registra_el_ejecutable_con_espacios_y_conserva_el_enlace_como_un_argumento() {
+        use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+        let mut bytes=[0u8;16];getrandom::fill(&mut bytes).unwrap();
+        let id:String=bytes.iter().map(|b|format!("{b:02x}")).collect();
+        let ruta=format!("Software\\IcaroQaOAuth-{id}");
+        let user=RegKey::predef(HKEY_CURRENT_USER);
+        let (classes,_)=user.create_subkey(&ruta).unwrap();
+        // La prueba usa una clave aislada, no modifica la asociación real de Windows.
+        let resultado=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let exe=std::path::Path::new("C:\\Prueba Ícaro con espacios\\IcaroLauncher.exe");
+            register_at(&classes,exe).unwrap();
+            let protocol=classes.open_subkey("icaro").unwrap();
+            assert_eq!(protocol.get_value::<String,_>("URL Protocol").unwrap(),"");
+            let command=protocol.open_subkey("shell\\open\\command").unwrap().get_value::<String,_>("").unwrap();
+            assert_eq!(command,"\"C:\\Prueba Ícaro con espacios\\IcaroLauncher.exe\" --oauth-return \"%1\"");
+            assert!(register_at(&classes,std::path::Path::new("C:\\invalid\"quote.exe")).is_err());
+            assert_eq!(protocol.open_subkey("shell\\open\\command").unwrap().get_value::<String,_>("").unwrap(),command);
+        }));
+        drop(classes);user.delete_subkey_all(&ruta).unwrap();
+        if let Err(panic)=resultado {std::panic::resume_unwind(panic);}
+    }
+
     #[test]
     fn app_return_is_forwarded_only_to_loopback_with_the_original_state() {
         let (port, value) = request(&format!(
@@ -164,6 +194,21 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn el_retorno_nativo_confirma_sin_servir_una_pagina_y_respeta_la_cancelacion() {
+        for denied in [false,true] {
+            let listener=tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST,0)).await.unwrap();
+            let port=listener.local_addr().unwrap().port();
+            let proof=super::super::Proof {state:Zeroizing::new(format!("{port}.{STATE}")),verifier:Zeroizing::new("PRIVATE_VERIFIER".into())};
+            let received=tokio::spawn(async move {super::super::receive(&listener,&proof,port,super::super::ReturnMethod::App).await});
+            let field=if denied {"error=access_denied"}else{"code=CANARY_CODE"};
+            let reply=reqwest::Client::new().get(format!("http://localhost:{port}/?state={port}.{STATE}&{field}")).send().await.unwrap();
+            assert_eq!(reply.status(),200);
+            assert!(reply.bytes().await.unwrap().is_empty());
+            let result=received.await.unwrap();
+            if denied {assert_eq!(result,Err(Error::Denied));}else{assert_eq!(&*result.unwrap(),"CANARY_CODE");}
+        }
+    }
+    #[tokio::test]
     async fn forwarded_code_is_accepted_only_by_the_matching_pending_attempt() {
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
@@ -174,7 +219,7 @@ mod tests {
             verifier: Zeroizing::new("PRIVATE_VERIFIER".into()),
         };
         let received =
-            tokio::spawn(async move { super::super::receive(&listener, &proof, port).await });
+            tokio::spawn(async move { super::super::receive(&listener, &proof, port, super::super::ReturnMethod::App).await });
         let wrong = format!("{APP_REDIRECT}?state={port}.{}&code=WRONG", "X".repeat(43));
         assert_eq!(
             tokio::task::spawn_blocking(move || forward_app_return(&wrong))

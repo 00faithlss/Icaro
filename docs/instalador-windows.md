@@ -4,6 +4,8 @@ El instalador usa Inno Setup 6.7.3, el asistente estándar en español y los rec
 
 El asistente se usa en la primera instalación. Las actualizaciones iniciadas desde Ícaro ejecutan el setup oculto y silencioso en la misma ruta; la descarga, preparación y resultado se muestran en la pantalla original **Actualización** del launcher. Después del breve reinicio vuelve a ella. Ver [actualizaciones del launcher](actualizaciones-launcher.md) para el recorrido y su verificación.
 
+Registra `icaro://oauth/microsoft` en `HKCU\Software\Classes\icaro`, con icono y comando del ejecutable instalado. El inicio de sesión usa ese retorno de forma predeterminada en Windows, sin página local ni variables de prueba. Al desinstalar solo retira la asociación si todavía apunta al ejecutable de esa instalación; conserva una asociación que otra copia de Ícaro haya registrado después. Ver [inicio de sesión](login-y-catalogo.md).
+
 Los datos continúan en `%APPDATA%\Icaro`, separados del programa. El script no incorpora `[UninstallDelete]`, ni elimina carpetas de datos o credenciales. Desinstalar retira archivos/accesos registrados por esa instalación y conserva archivos ajenos añadidos manualmente.
 
 ## Compilar y empaquetar

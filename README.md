@@ -86,7 +86,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 ### Cuenta y sesión
 
 - [x] Autorización de Microsoft con PKCE y comprobación de `state`; intercambio con Xbox y validación de acceso y perfil de Minecraft Java.
-- [x] Retorno local y retorno directo a Ícaro en Windows mediante `icaro://oauth/microsoft`; probados con una cuenta real.
+- [x] Retorno directo predeterminado en Windows mediante `icaro://oauth/microsoft`, con registro del protocolo desde el instalador; probado anteriormente con una cuenta real. Linux conserva el retorno local.
 - [x] Almacenamiento protegido de una cuenta mediante el almacén del sistema; recuperación al reabrir confirmada en Windows.
 - [x] Renovación de sesión y eliminación de la credencial al cerrar sesión implementadas; validación manual de ambos recorridos todavía pendiente.
 - [x] Bienvenida sin cuenta activa, acceso como invitado y progreso de las etapas del inicio de sesión.
