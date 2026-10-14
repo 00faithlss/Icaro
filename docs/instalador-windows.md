@@ -26,13 +26,13 @@ Para volver a empaquetar ejecutables ya compilados se admiten `-Binario` y `-Ser
 
 ## Automatización
 
-`windows-package.yml` corre manualmente, desde `main`, ramas `vX.Y.Z` o tags `vX.Y.Z`; valida la versión de las ramas/tags y ejecuta pruebas antes de compilar. Obtiene Inno Setup del proveedor y valida su firma. Las acciones GitHub están fijadas a revisiones. La ejecución manual conserva artefactos; las automáticas publican una release y `latest.json` con hashes reales para instalada y portable, según el [contrato del actualizador](actualizaciones-launcher.md). La primera ejecución remota sigue pendiente.
+`windows-package.yml` corre manualmente, desde `main`, ramas `vX.Y.Z` o tags `vX.Y.Z`; valida la versión de las ramas/tags y ejecuta pruebas antes de compilar. Obtiene Inno Setup del proveedor y valida su firma. Las acciones GitHub están fijadas a revisiones. La ejecución manual conserva artefactos; las automáticas publican una release y `latest.json` con hashes reales para instalada y portable, según el [contrato del actualizador](actualizaciones-launcher.md). La primera publicación remota completó pruebas, empaquetado y publicación. Las notas de la entrega se mantienen en `docs/releases`; una integración con contenido idéntico no genera otra actualización.
 
 El instalador y binarios de Ícaro todavía no tienen firma digital configurada. La firma comprobada del compilador pertenece al proveedor de Inno Setup, no a Ícaro.
 
 ## Validación
 
-Validación local del 13-10-2026: artefactos release generados e integridad comprobada; instalación y reinstalación en una ruta del workspace con espacios y acento, acceso de Inicio, apertura de las escenas del launcher instalado en Tinta/Piedra y ayuda del servicio. La desinstalación retiró programa, acceso y registro, conservó un archivo ajeno y dejó intactos los tres metadatos de usuario revisados. Esto no sustituye una máquina limpia ni la validación de cuenta, inicio del juego y actualización sobre versiones publicadas. El workflow aún necesita su primera ejecución remota.
+Validación local del 13-10-2026: artefactos release generados e integridad comprobada; instalación y reinstalación en una ruta del workspace con espacios y acento, acceso de Inicio, apertura de las escenas del launcher instalado en Tinta/Piedra y ayuda del servicio. La desinstalación retiró programa, acceso y registro, conservó un archivo ajeno y dejó intactos los tres metadatos de usuario revisados. Esto no sustituye una máquina limpia ni la validación de cuenta, inicio del juego y actualización sobre versiones publicadas. La primera ejecución remota ya publicó los paquetes correctamente.
 
 Quedan pruebas en un equipo limpio con otro usuario/rutas con acentos, actualización instalada, apertura del launcher/juego y conservación de la sesión protegida. El actualizador portable está descrito en [actualizaciones](actualizaciones-launcher.md); actualizar su ejecutable no valida por sí solo el registro y recorrido de una instalación.
 

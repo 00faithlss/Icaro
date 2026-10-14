@@ -64,13 +64,19 @@ jobs:
           $metadata = Get-Content target/dist/windows/icaro-*-artefactos.json -Raw | ConvertFrom-Json
           $version = $metadata.version
           $tag = "v$version-build.$env:ICARO_COMPILACION"
+          $notesFile = "docs/releases/$version.md"
+          $notesData = Get-Content "docs/releases/$version.json" -Raw | ConvertFrom-Json
+          if (-not (Test-Path -LiteralPath $notesFile) -or $notesData.version -ne $version -or $notesData.notas.Count -lt 1 -or $notesData.notas.Count -gt 200) { throw 'Faltan notas de versión válidas' }
+          foreach ($note in $notesData.notas) {
+            if ($note.tipo -notin @('nuevo','mejora','correccion') -or -not $note.texto -or $note.texto.Length -gt 4096) { throw 'Nota de versión inválida' }
+          }
           $portable = Get-ChildItem target/dist/windows -Filter '*.exe' | Where-Object Name -NotLike '*-setup.exe' | Select-Object -First 1
           $setup = Get-ChildItem target/dist/windows -Filter '*-setup.exe' | Select-Object -First 1
           if (-not $portable -or -not $setup) { throw 'Faltan artefactos de actualización' }
           $manifest = @{
             version = $version
             compilacion = [long]$env:ICARO_COMPILACION
-            notas = @(@{tipo='mejora';texto="Actualización publicada desde $env:ICARO_REF."})
+            notas = @($notesData.notas)
             plataformas = @{
               'windows-x86_64' = @{archivo=$portable.Name;sha256=(Get-FileHash -LiteralPath $portable.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
               'windows-x86_64-setup' = @{archivo=$setup.Name;sha256=(Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
@@ -80,9 +86,22 @@ jobs:
           $files = @(Get-ChildItem target/dist/windows -File | ForEach-Object FullName)
           $revision = (git rev-parse HEAD).Trim()
           $latest = 'true'
-          $previous = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" --jq '.tag_name' 2>$null
-          if ($LASTEXITCODE -eq 0 -and $previous -match '^v(\d+\.\d+\.\d+)') {
-            if ([version]$Matches[1] -gt [version]$version) { $latest = 'false' }
+          $previous = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $previous = $previous | ConvertFrom-Json
+            if ($previous.tag_name -match '^v(\d+\.\d+\.\d+)(?:-build\.\d+)?$') {
+              $previousVersion = [version]$Matches[1]
+              if ($previousVersion -gt [version]$version) { $latest = 'false' }
+              if ($previousVersion -eq [version]$version) {
+                $previousTree = gh api "repos/$env:GITHUB_REPOSITORY/commits/$($previous.tag_name)" --jq '.commit.tree.sha'
+                if ($LASTEXITCODE -ne 0) { throw 'No se pudo comprobar la revisión ya publicada' }
+                $currentTree = (git rev-parse 'HEAD^{tree}').Trim()
+                if ($previousTree.Trim() -eq $currentTree) {
+                  Write-Output 'Este contenido ya está publicado; se conservan su versión y compilación.'
+                  exit 0
+                }
+              }
+            }
           }
-          gh release create $tag @files --target $revision --title "Icaro $version · $env:ICARO_REF" --notes "Paquete de Windows y actualización automática comprobados por CI." "--latest=$latest"
+          gh release create $tag @files --target $revision --title "Icaro Launcher $version" --notes-file $notesFile "--latest=$latest"
           if ($LASTEXITCODE -ne 0) { throw 'No se pudo publicar la actualización' }

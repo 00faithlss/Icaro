@@ -2,6 +2,8 @@
 
 Launcher de Minecraft escrito en Rust, para Windows y Linux.
 
+La primera entrega pública es **0.1.0**, con paquetes para Windows. Descarga el instalador o el ZIP portable desde [Releases](https://github.com/00faithlss/Icaro-launcher/releases/latest) y consulta las [funciones y pendientes de esta versión](docs/releases/0.1.0.md). El proyecto sigue en desarrollo; el recorrido completo en Linux aún necesita validación.
+
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
