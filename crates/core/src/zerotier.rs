@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Consulta y pertenencia a redes ZeroTier mediante su CLI oficial.
+//! Consulta y pertenencia a redes ZeroTier mediante su API local y CLI oficial.
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
@@ -19,6 +19,97 @@ pub enum Estado {
         redes: Vec<Red>,
     },
     SinAcceso,
+}
+const MAX_RESPUESTA: usize = 256 * 1024;
+
+#[cfg(any(windows, test))]
+struct ApiLocal {
+    cliente: reqwest::Client,
+    puerto: u16,
+    autorizacion: reqwest::header::HeaderValue,
+}
+#[cfg(any(windows, test))]
+impl ApiLocal {
+    fn nueva(puerto: u16, token: &[u8]) -> Result<Self, ()> {
+        let token = std::str::from_utf8(token).map_err(|_| ())?.trim();
+        if puerto == 0 || token.is_empty() || token.len() > 256 || !token.bytes().all(|b| b.is_ascii_graphic()) {
+            return Err(());
+        }
+        let mut autorizacion = reqwest::header::HeaderValue::from_str(token).map_err(|_| ())?;
+        autorizacion.set_sensitive(true);
+        Ok(Self {
+            cliente: reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(2))
+                .build()
+                .map_err(|_| ())?,
+            puerto,
+            autorizacion,
+        })
+    }
+    async fn peticion(&self, metodo: reqwest::Method, ruta: &str) -> Result<Vec<u8>, ()> {
+        // El acceso de ZeroTier permanece en memoria y solo se envía al servicio local.
+        let mut respuesta = self.cliente
+            .request(metodo, format!("http://127.0.0.1:{}{ruta}", self.puerto))
+            .header("X-ZT1-Auth", self.autorizacion.clone())
+            .send().await.map_err(|_| ())?;
+        if !respuesta.status().is_success() || respuesta.content_length().is_some_and(|n| n > MAX_RESPUESTA as u64) {
+            return Err(());
+        }
+        let mut bytes = vec![];
+        while let Some(parte) = respuesta.chunk().await.map_err(|_| ())? {
+            if bytes.len() + parte.len() > MAX_RESPUESTA { return Err(()); }
+            bytes.extend_from_slice(&parte);
+        }
+        Ok(bytes)
+    }
+    async fn estado(&self) -> Result<Estado, ()> {
+        let (info, redes) = tokio::try_join!(
+            self.peticion(reqwest::Method::GET, "/status"),
+            self.peticion(reqwest::Method::GET, "/network"),
+        )?;
+        analizar(&info, &redes)
+    }
+}
+#[cfg(any(windows, test))]
+async fn leer_limitado(path: &std::path::Path, max: usize) -> std::io::Result<Vec<u8>> {
+    let mut archivo = tokio::fs::File::open(path).await?.take(max as u64 + 1);
+    let mut bytes = vec![];
+    archivo.read_to_end(&mut bytes).await?;
+    if bytes.len() > max { return Err(std::io::ErrorKind::InvalidData.into()); }
+    Ok(bytes)
+}
+#[cfg(any(windows, test))]
+async fn buscar_api(base: &std::path::Path, tokens: &[PathBuf]) -> Result<(ApiLocal, Estado), ()> {
+    let puerto = match leer_limitado(&base.join("zerotier-one.port"), 16).await {
+        Ok(bytes) => std::str::from_utf8(&bytes).map_err(|_| ())?.trim().parse::<u16>().map_err(|_| ())?,
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied) => 9993,
+        Err(_) => return Err(()),
+    };
+    for path in tokens {
+        if let Ok(bytes) = leer_limitado(path, 1024).await {
+            let bytes = zeroize::Zeroizing::new(bytes);
+            if let Ok(api) = ApiLocal::nueva(puerto, &bytes) {
+                if let Ok(estado) = api.estado().await { return Ok((api, estado)); }
+            }
+        }
+    }
+    Err(())
+}
+#[cfg(windows)]
+fn configuracion_api() -> (PathBuf, Vec<PathBuf>) {
+    let base = std::env::var_os("ProgramData").map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData")).join("ZeroTier/One");
+    let mut tokens = vec![];
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let local = PathBuf::from(local);
+        // La aplicación oficial concede acceso al usuario mediante esta copia.
+        tokens.push(local.join("ZeroTier/authtoken.secret"));
+        tokens.push(local.join("ZeroTier/One/authtoken.secret"));
+    }
+    tokens.push(base.join("authtoken.secret"));
+    (base, tokens)
 }
 fn candidatos() -> Vec<(PathBuf, bool)> {
     let mut v = vec![];
@@ -68,10 +159,10 @@ async fn comando(path: &PathBuf, one: bool, args: &[&str]) -> Result<Vec<u8>, ()
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
     let mut child = cmd.spawn().map_err(|_| ())?;
-    let mut out = child.stdout.take().ok_or(())?.take(256 * 1024 + 1);
+    let mut out = child.stdout.take().ok_or(())?.take(MAX_RESPUESTA as u64 + 1);
     let mut bytes = vec![];
     out.read_to_end(&mut bytes).await.map_err(|_| ())?;
-    if bytes.len() > 256 * 1024 || !child.wait().await.map_err(|_| ())?.success() {
+    if bytes.len() > MAX_RESPUESTA || !child.wait().await.map_err(|_| ())?.success() {
         return Err(());
     }
     Ok(bytes)
@@ -140,6 +231,23 @@ pub async fn cambiar_red(id: &str, a: Accion, cancel: CancellationToken) -> Resu
     if cancel.is_cancelled() {
         return Err("La solicitud fue cancelada antes de enviarse.".into());
     }
+    #[cfg(windows)]
+    {
+        let (base, tokens) = configuracion_api();
+        let api = tokio::select! {
+            _=cancel.cancelled()=>return Err("La solicitud fue cancelada antes de enviarse.".into()),
+            r=tokio::time::timeout(Duration::from_secs(5), buscar_api(&base, &tokens))=>r.ok().and_then(Result::ok),
+        };
+        if let Some((api, _)) = api {
+            let metodo = match a { Accion::Unirse => reqwest::Method::POST, Accion::Salir => reqwest::Method::DELETE };
+            let ruta = format!("/network/{id}");
+            tokio::select! {
+                _=cancel.cancelled()=>return Err("La solicitud se interrumpió. Actualiza el estado para comprobar la pertenencia a la red.".into()),
+                r=api.peticion(metodo, &ruta)=>r.map_err(|_| "No se pudo modificar la red. Comprueba el servicio y los permisos de ZeroTier.".to_string())?,
+            };
+            return Ok(detectar().await);
+        }
+    }
     let Some((p, one)) = candidatos().into_iter().find(|(p, _)| p.is_file()) else {
         return Err("ZeroTier no está instalado.".into());
     };
@@ -158,10 +266,20 @@ pub async fn cambiar_red(id: &str, a: Accion, cancel: CancellationToken) -> Resu
     Ok(detectar().await)
 }
 pub async fn detectar() -> Estado {
-    let Some((p, one)) = candidatos().into_iter().find(|(p, _)| p.is_file()) else {
+    let cli = candidatos().into_iter().find(|(p, _)| p.is_file());
+    #[cfg(windows)]
+    let (base, tokens) = configuracion_api();
+    #[cfg(windows)]
+    let instalado = cli.is_some() || tokens.iter().any(|p| p.is_file()) || base.join("zerotier-one.port").is_file();
+    #[cfg(not(windows))]
+    let instalado = cli.is_some();
+    if !instalado {
         return Estado::Ausente;
-    };
+    }
     tokio::time::timeout(Duration::from_secs(5), async {
+        #[cfg(windows)]
+        if let Ok((_, estado)) = buscar_api(&base, &tokens).await { return Ok(estado); }
+        let (p, one) = cli.ok_or(())?;
         let info = comando(&p, one, &["info"]).await?;
         let redes = comando(&p, one, &["listnetworks"]).await?;
         analizar(&info, &redes)
@@ -174,6 +292,46 @@ pub async fn detectar() -> Estado {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn api_local_reconoce_una_red_unida_desde_la_aplicacion_oficial() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = ApiLocal::nueva(listener.local_addr().unwrap().port(), b"acceso-de-prueba").unwrap();
+        assert!(api.autorizacion.is_sensitive());
+        let servidor = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut solicitud = vec![];
+                let mut buffer = [0u8; 512];
+                while !solicitud.windows(4).any(|v| v == b"\r\n\r\n") {
+                    let n = socket.read(&mut buffer).await.unwrap();
+                    assert!(n > 0 && solicitud.len() + n <= 2048);
+                    solicitud.extend_from_slice(&buffer[..n]);
+                }
+                let solicitud = String::from_utf8(solicitud).unwrap();
+                assert!(solicitud.to_ascii_lowercase().contains("x-zt1-auth: acceso-de-prueba\r\n"));
+                let cuerpo = if solicitud.starts_with("GET /status ") {
+                    r#"{"version":"1.16.2","online":true}"#
+                } else {
+                    assert!(solicitud.starts_with("GET /network "));
+                    r#"[{"id":"1234567890abcdef","name":"Amigos","status":"OK","assignedAddresses":["10.147.17.4/24"]}]"#
+                };
+                let respuesta = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{cuerpo}", cuerpo.len());
+                socket.write_all(respuesta.as_bytes()).await.unwrap();
+            }
+        });
+        let Estado::Disponible { online, redes, .. } = api.estado().await.unwrap() else { panic!() };
+        assert!(online);
+        assert_eq!(redes[0].estado, "OK");
+        assert_eq!(redes[0].ips, ["10.147.17.4/24"]);
+        servidor.await.unwrap();
+    }
+    #[test]
+    fn acceso_local_rechaza_puerto_invalido_y_cabeceras_inyectadas() {
+        assert!(ApiLocal::nueva(0, b"token").is_err());
+        assert!(ApiLocal::nueva(9993, b"token\r\nOtra: cabecera").is_err());
+        assert!(ApiLocal::nueva(9993, b"").is_err());
+    }
     #[test]
     fn id_de_red_no_admite_comandos_ni_valores_ambiguos() {
         assert_eq!(id_red(" ABCDEF0123456789 ").unwrap(), "abcdef0123456789");

@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "notas": [
+    {"tipo": "correccion", "texto": "Los mods reconocidos por hash con metadatos incompletos de Minecraft o loader se comparten como archivos propios con avisos, sin bloquear el índice."},
+    {"tipo": "correccion", "texto": "Los descriptores Fabric con saltos de línea sin escapar o ilegibles generan avisos con el JAR afectado y no bloquean todo el índice."},
+    {"tipo": "mejora", "texto": "Los JAR propios del anfitrión se sincronizan por hash aunque no estén en Modrinth, con avisos y conservación de archivos locales."},
+    {"tipo": "nuevo", "texto": "Sincroniza con los mods de un servidor dedicado mediante el servicio del anfitrión, sin necesitar una instancia de Ícaro en ese PC."},
+    {"tipo": "nuevo", "texto": "Comparte automáticamente sensibilidad, teclas y ajustes gráficos compatibles entre tus instancias al jugar."},
+    {"tipo": "correccion", "texto": "Detecta las redes a las que te conectaste desde la aplicación oficial de ZeroTier en Windows."},
+    {"tipo": "correccion", "texto": "Permite desplegar y elegir la instancia vinculada al crear o editar un servidor, y actualiza las instancias disponibles."},
+    {"tipo": "mejora", "texto": "Actualiza periódicamente las redes y los servidores guardados conservando los datos que estás editando."}
+  ]
+}

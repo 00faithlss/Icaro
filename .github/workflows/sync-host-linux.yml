@@ -1,0 +1,37 @@
+name: Servicio de sincronización Linux
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'crates/core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/sync-host-linux.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Rust estable
+        run: rustup update stable
+      - name: Dependencias de compilación
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libdbus-1-dev libssl-dev
+      - name: Pruebas del protocolo y compilación x86_64
+        run: |
+          cargo test --locked -p icaro-core --lib mods::sincronizacion -- --test-threads=1
+          cargo build --locked --release -p icaro-core --example sync_host
+      - name: Paquete del servicio
+        run: |
+          mkdir -p dist/icaro-sync-host-linux-x86_64
+          cp target/release/examples/sync_host dist/icaro-sync-host-linux-x86_64/icaro-sync-host
+          cp LICENSE docs/sincronizacion-servidores.md dist/icaro-sync-host-linux-x86_64/
+          tar -czf dist/icaro-sync-host-linux-x86_64.tar.gz -C dist icaro-sync-host-linux-x86_64
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: icaro-sync-host-linux-x86_64
+          path: dist/icaro-sync-host-linux-x86_64.tar.gz
+          if-no-files-found: error

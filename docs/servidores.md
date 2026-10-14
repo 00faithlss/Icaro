@@ -17,7 +17,9 @@ El lanzamiento hacia el servidor está implementado y probado mediante construcc
 
 ## Estado y persistencia
 
-Al abrir la sección y cada 30 segundos mientras está visible se consultan versión publicada, jugadores, mensaje y latencia. Se limitan las consultas a cuatro simultáneas, cinco segundos por servidor y 256 KiB por respuesta. Se descartan respuestas anteriores. Un error conserva el servidor y deshabilita Jugar en la tarjeta, como en el diseño original; no demuestra que el proceso Minecraft esté apagado.
+Al abrir la sección y cada 30 segundos mientras está visible se relee la lista guardada y se consultan versión publicada, jugadores, mensaje y latencia. El estado anterior sigue visible durante la consulta. Se limitan las consultas a cuatro simultáneas, cinco segundos por servidor y 256 KiB por respuesta. Se descartan respuestas anteriores. Un error conserva el servidor y deshabilita Jugar en la tarjeta, como en el diseño original; no demuestra que el proceso Minecraft esté apagado.
+
+Al entrar en Servidores o abrir su editor se releen las instancias del disco, conservando la selección, grupos y ajustes de Java por identidad. Las operaciones activas mantienen sus registros hasta terminar. El refresco periódico conserva los campos del editor sin guardar y el orden mientras se arrastra.
 
 La lista se guarda en Icaro/servidores.json, esquema 1, con identificadores estables y hasta 64 entradas. Direcciones repetidas se rechazan. Una lista dañada o de esquema desconocido se conserva y bloquea cambios; **Releer lista** permite cargarla de nuevo después de corregir el archivo.
 
@@ -27,11 +29,15 @@ Los nombres de versión pueden ser etiquetas de proxies. La interfaz compara con
 
 ## Detección de ZeroTier
 
-La detección busca la CLI oficial en PATH y ubicaciones habituales de instalación; consulta info y listnetworks en JSON, con límites de tiempo y salida. En Windows los procesos auxiliares no abren una consola.
+En Windows la detección consulta la API local de ZeroTier con el acceso que ya tiene la aplicación oficial en el perfil del usuario. Ese acceso se lee en cada consulta, permanece en memoria y solo se envía a 127.0.0.1, sin proxies ni redirecciones. Permite reconocer redes unidas desde la aplicación oficial sin ejecutar Ícaro como administrador. También se conserva la CLI oficial como alternativa y para otros sistemas; los procesos auxiliares de Windows no abren una consola. Las respuestas tienen límites de tiempo y tamaño.
+
+La sección Servidores comprueba ZeroTier cada 10 segundos. No hace falta unirse a la red desde Ícaro para que aparezcan su autorización e IP.
 
 Se distinguen instalación ausente, servicio no consultable y respuesta válida. Cuando el servicio permite consultar, se muestra su versión, conexión, redes, autorización e IP asignada. Si el servicio está detenido o faltan permisos, se explica que no pudo consultarse; no se presentan datos de ejemplo como reales.
 
-La pantalla RedPrivada usa la lámina y pasos originales y permite solicitar pertenencia con un ID hexadecimal de 16 caracteres. Consulta cada 10 segundos, distingue espera de autorización e IP asignada y avisa cuando una red solicitada aparece autorizada. La CLI debe disponer de los permisos que exige ZeroTier; no se eleva automáticamente. El botón de instalación abre la descarga oficial y Crear una red abre Central. La instalación automatizada, elevación, administración de miembros y salida desde la interfaz siguen pendientes. No se inventa la lista de amigos a partir de peers de la CLI. Los servidores directos funcionan sin ZeroTier.
+La pantalla RedPrivada usa la lámina y pasos originales y permite solicitar pertenencia con un ID hexadecimal de 16 caracteres. Consulta cada 10 segundos, distingue espera de autorización e IP asignada y avisa cuando una red solicitada aparece autorizada. La API local o la CLI deben disponer del acceso que exige ZeroTier; no se eleva automáticamente. El botón de instalación abre la descarga oficial y Crear una red abre Central. La instalación automatizada, elevación, administración de miembros y salida desde la interfaz siguen pendientes. No se inventa la lista de amigos a partir de peers de la CLI. Los servidores directos funcionan sin ZeroTier.
+
+El formato de consultas y la autorización están descritos en la [API local oficial de ZeroTier](https://github.com/zerotier/ZeroTierOne/blob/dev/service/README.md#network-virtualization-service-api).
 
 Consulta local de diagnóstico, sin modificar redes:
 
@@ -41,7 +47,7 @@ El funcionamiento de la CLI y la autorización de redes se describen en la [docu
 
 ## Sincronización de mods
 
-El servicio del anfitrión, su índice y la pantalla SincronizarMods están conectados. Activar la casilla del PanelLateral hace la comprobación antes de Jugar. Consulta la [guía de sincronización](sincronizacion-servidores.md) para iniciar el servicio, sus puertos, fuentes exactas de Modrinth, conservación de archivos y recuperación. La validación con dos equipos reales sigue pendiente.
+El servicio del anfitrión, su índice y la pantalla SincronizarMods están conectados. Activar la casilla del PanelLateral hace la comprobación antes de Jugar. El anfitrión puede publicar directamente desde la carpeta de su servidor dedicado, sin una instancia cliente ni el launcher instalado en ese PC. Consulta la [guía de sincronización](sincronizacion-servidores.md) para iniciar el servicio, sus puertos, fuentes exactas de Modrinth, conservación de archivos y recuperación. La validación con dos equipos reales sigue pendiente.
 
 ## Verificación
 

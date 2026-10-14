@@ -470,6 +470,9 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
         body = body.push(line);
     }
     if let Some(plan) = &s.plan {
+        for aviso in &plan.indice.avisos {
+            body=body.push(text(aviso.clone()).size(13).color(p.text_muted));
+        }
         body = body.push(
             text(format!(
                 "Se mantienen {} mods locales o de cliente: {}.",

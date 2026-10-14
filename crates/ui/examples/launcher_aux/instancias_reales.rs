@@ -135,6 +135,48 @@ impl Estado {
     }
 }
 
+/// Relee las instancias conservando los ajustes y la selección por identidad.
+pub fn recargar(app: &mut App) -> Result<(), String> {
+    if app.servicios.demo || app.servicios.instancias.operando || app.servicios.instancias.creando
+        || app.servicios.mods.busy.is_some() || app.editor.is_some()
+        || app.servicios.instancias.registros.iter().any(|i| app.servicios.juego.ocupada(&i.id)) {
+        return Ok(());
+    }
+    let store = app.servicios.instancias.almacen.clone();
+    let report = store.cargar().map_err(|e| e.to_string())?;
+    if report.omitidas > 0 {
+        return Err(format!("No se pudieron leer {} instancias. Sus archivos se conservan en disco.", report.omitidas));
+    }
+    let anteriores = &app.servicios.instancias.registros;
+    let elegida = app.seleccionada.and_then(|n| anteriores.get(n)).map(|i| i.id.clone());
+    let editor = anteriores.get(app.editor_inst).map(|i| i.id.clone());
+    let tarjetas = crate::instancias();
+    let anteriores: std::collections::BTreeMap<_, _> = anteriores.iter().enumerate()
+        .map(|(n, i)| (i.id.clone(), tarjetas.get(n).cloned())).collect();
+    let mut guardado = crate::estado::Guardado::nuevo(&app.lista_grupos, &app.grupos, &app.cerrados, &app.configs, &[]);
+    guardado.asociar(app.servicios.instancias.registros.iter().map(|i| i.id.clone()).collect());
+    guardado.restaurar_instancias(report.instancias.iter().map(|i| i.id.clone()).collect());
+    guardado.cargar_configs(&store)?;
+    let mut tarjetas = vec![];
+    for i in &report.instancias {
+        icaro_core::minecraft::migrar_directorio(&store, i).map_err(|e| e.to_string())?;
+        let actual = Estado::datos(&store, i);
+        let mut tarjeta = anteriores.get(&i.id).cloned().flatten().unwrap_or_else(|| actual.clone());
+        if tarjeta.version != actual.version { tarjeta.estado = actual.estado; tarjeta.detalle = actual.detalle; }
+        tarjeta.nombre = actual.nombre;
+        tarjeta.version = actual.version;
+        tarjeta.portada = actual.portada;
+        tarjetas.push(tarjeta);
+    }
+    app.seleccionada = elegida.and_then(|id| report.instancias.iter().position(|i| i.id == id));
+    app.editor_inst = editor.and_then(|id| report.instancias.iter().position(|i| i.id == id)).unwrap_or(0);
+    app.grupos = guardado.grupos.clone();
+    app.configs = guardado.configs();
+    app.servicios.instancias.registros = report.instancias;
+    *crate::lista_instancias().lock().unwrap() = tarjetas;
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub enum Accion {
     ModsCompatibles(

@@ -439,6 +439,7 @@ pub(crate) fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::p
                 && app.editor_inst == index
                 && app.general.pantalla_completa,
             servidor: None,
+            opciones_compartidas: icaro_core::opciones_minecraft::ruta(&app.servicios.instancias.almacen).ok(),
         },
         crate::java_real::efectiva(&c, &app.java_global).0,
     )

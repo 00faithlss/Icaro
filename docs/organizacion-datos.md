@@ -50,6 +50,7 @@ Icaro/
   cache/                    # Respuestas y descargas temporales recuperables
   logs/                     # Registros del launcher con rotación
   estado.json               # Preferencias globales, sin configuraciones activas por instancia
+  opciones-minecraft.json   # Sensibilidad, teclas y gráficos compartidos del jugador
   instances/
     boys/
       instance.json         # Identidad y configuración por instancia, esquema 2

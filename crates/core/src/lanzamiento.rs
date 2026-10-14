@@ -28,6 +28,8 @@ pub struct Config {
     pub resolucion: Option<(u32, u32)>,
     pub fullscreen: bool,
     pub servidor: Option<String>,
+    /// Archivo de preferencias compartidas; el launcher lo sitúa en su raíz de datos.
+    pub opciones_compartidas: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -39,6 +41,7 @@ impl Default for Config {
             resolucion: None,
             fullscreen: false,
             servidor: None,
+            opciones_compartidas: None,
         }
     }
 }
@@ -860,9 +863,28 @@ pub async fn ejecutar(
         &config,
     )?;
     let mut comando = Command::new(java);
+    let opciones = config.opciones_compartidas.as_ref().and_then(|path| {
+        match crate::opciones_minecraft::preparar(path, &juego, instalado) {
+            Ok(sesion) => Some(sesion),
+            Err(error) => {
+                on_event(Evento::Linea { origen: Origen::Stderr, nivel: Nivel::Advertencia,
+                    texto: format!("No se aplicaron las preferencias compartidas: {error}") });
+                None
+            }
+        }
+    });
     comando.current_dir(&juego).args(argumentos.iter());
     drop(argumentos);
-    proceso(comando, cuenta.minecraft_token(), cancel, &on_event).await
+    let resultado = proceso(comando, cuenta.minecraft_token(), cancel, &on_event).await;
+    if resultado.is_ok() {
+        if let Some(sesion) = opciones {
+            if let Err(error) = crate::opciones_minecraft::capturar(&sesion) {
+                on_event(Evento::Linea { origen: Origen::Stderr, nivel: Nivel::Advertencia,
+                    texto: format!("No se guardaron las preferencias compartidas: {error}") });
+            }
+        }
+    }
+    resultado
 }
 
 #[cfg(test)]

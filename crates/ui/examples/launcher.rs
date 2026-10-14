@@ -3647,7 +3647,14 @@ fn iniciar_app(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo:
             app.pantalla=Some(pantallas::Pantalla::Actualizacion);
         }
         app.actualizacion.comprobando = true;
-        {let iconos=icono_instancia::cargar(&app); let java=java_real::detectar(&mut app); (app, Task::batch([inicio, actualizacion_real::comprobar(),iconos,java]))}
+        {
+            let servidores = if app.seccion == Seccion::Servidores {
+                servidores_reales::actualizar(&mut app, servidores_reales::Accion::Abrir)
+            } else { Task::none() };
+            let iconos = icono_instancia::cargar(&app);
+            let java = java_real::detectar(&mut app);
+            (app, Task::batch([inicio, actualizacion_real::comprobar(), iconos, java, servidores]))
+        }
     } else { (app, inicio) }
 }
 
