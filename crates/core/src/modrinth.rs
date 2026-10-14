@@ -8,7 +8,12 @@ pub use crate::http::Error;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+mod cache;
+#[cfg(test)]
+mod cache_tests;
 
 const API: &str = "https://api.modrinth.com/v2/";
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
@@ -284,7 +289,7 @@ pub struct License {
     #[serde(default)]
     pub url: Option<String>,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Version {
     pub id: String,
     pub project_id: String,
@@ -301,7 +306,7 @@ pub struct Version {
     #[serde(default)]
     pub downloads: u64,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
     pub filename: String,
     pub url: String,
@@ -309,7 +314,7 @@ pub struct File {
     pub primary: bool,
     pub hashes: Hashes,
 }
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hashes {
     pub sha512: String,
 }
@@ -339,11 +344,96 @@ fn project_url(id: &str) -> Result<Url, Error> {
 #[derive(Clone)]
 pub struct Catalog {
     client: Client,
-    cooldown: Arc<Mutex<Option<Instant>>>,
+    cooldown: Arc<Mutex<Cooldown>>,
+    metadata: Option<Arc<tokio::sync::Mutex<cache::Cache>>>,
+    api: String,
+    metadata_path: Option<PathBuf>,
+}
+#[derive(Default)]
+struct Cooldown {
+    until: Option<Instant>,
+    failures: u32,
 }
 impl Catalog {
+    /// Comparte metadatos durante los reintentos del anfitrión, con límites de tamaño y edad.
+    pub fn with_metadata_cache(mut self) -> Self {
+        self.metadata = Some(Arc::new(tokio::sync::Mutex::new(cache::Cache::default())));
+        self
+    }
+    /// Reutiliza respuestas vigentes entre aperturas; la caducidad no se reinicia.
+    pub fn with_persistent_metadata_cache(mut self, path: PathBuf) -> Self {
+        self.metadata = Some(Arc::new(tokio::sync::Mutex::new(cache::Cache::cargar(&path))));
+        self.metadata_path = Some(path);
+        self
+    }
+    pub async fn guardar_metadata_cache(&self) -> Result<(), Error> {
+        let (Some(path), Some(cache)) = (&self.metadata_path, &self.metadata) else { return Ok(()); };
+        let snapshot = cache.lock().await.snapshot();
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || crate::almacenamiento::escribir_json(&path, &snapshot))
+            .await.map_err(|_| Error::Response("la caché de Modrinth"))?
+            .map_err(|_| Error::Response("la caché de Modrinth"))
+    }
+    fn version_url(&self, id: &str) -> Result<Url, Error> {
+        let mut url = self.project_url(id)?;
+        url.set_path(&format!("/v2/version/{id}"));
+        Ok(url)
+    }
+    /// Consulta solo IDs ausentes de caché, en lotes acotados de 50 versiones.
+    pub async fn versions_by_ids(&self, ids: &[String]) -> Result<std::collections::BTreeMap<String, Version>, Error> {
+        if ids.len() > 512 { return Err(Error::Response("las versiones de Modrinth")); }
+        let mut result = std::collections::BTreeMap::new();
+        let mut missing = std::collections::BTreeSet::new();
+        let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
+        for id in ids {
+            let key = format!("GET {}", self.version_url(id)?);
+            if let Some(v) = cache.as_mut().and_then(|c| c.get::<Version>(&key)).filter(|v| &v.id == id) {
+                result.insert(id.clone(), v);
+            } else { missing.insert(id.clone()); }
+        }
+        let missing: Vec<_> = missing.into_iter().collect();
+        for batch in missing.chunks(50) {
+            let mut url = Url::parse(&format!("{}versions", self.api)).map_err(|_| Error::Response("Modrinth"))?;
+            url.query_pairs_mut().append_pair("ids", &serde_json::to_string(batch).map_err(|_| Error::Response("Modrinth"))?);
+            let versions: Vec<Version> = self.json(self.client.get(url)).await?;
+            let fetched: std::collections::BTreeMap<_, _> = versions.iter().map(|v| (v.id.clone(), v.clone())).collect();
+            if versions.len() != batch.len() || fetched.len() != batch.len() || batch.iter().any(|id| !fetched.contains_key(id)) {
+                return Err(Error::Response("las versiones de Modrinth"));
+            }
+            for (id, version) in fetched {
+                if let Some(cache) = &mut cache {
+                    cache.insert(format!("GET {}", self.version_url(&id)?), &version, cache::TTL)?;
+                }
+                result.insert(id, version);
+            }
+        }
+        Ok(result)
+    }
+    /// Espera restante del proveedor; los aciertos de caché siguen disponibles.
+    pub fn retry_after(&self) -> Duration {
+        self.cooldown.lock().ok().and_then(|state| state.until)
+            .and_then(|until| until.checked_duration_since(Instant::now())).unwrap_or_default()
+    }
+    fn project_url(&self, id: &str) -> Result<Url, Error> {
+        let original = project_url(id)?;
+        let mut url = Url::parse(&self.api).map_err(|_| Error::Response("Modrinth"))?;
+        url.set_path(original.path());
+        Ok(url)
+    }
+    async fn metadata_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, Error> {
+        let Some(cache) = &self.metadata else { return self.json(self.client.get(url)).await; };
+        // Serializar las consultas evita duplicados entre clones y respeta el cooldown común.
+        let mut cache = cache.lock().await;
+        let key = format!("GET {url}");
+        if let Some(value) = cache.get(&key) { return Ok(value); }
+        let value: serde_json::Value = self.json(self.client.get(url)).await?;
+        let decoded = serde_json::from_value(value.clone()).map_err(|_| Error::Response("Modrinth"))?;
+        cache.insert(key, &value, cache::TTL)?;
+        Ok(decoded)
+    }
+
     pub async fn creator_projects(&self, id: &str, organization: bool) -> Result<Vec<RelatedProject>, Error> {
-        let mut url=project_url(id)?;
+        let mut url=self.project_url(id)?;
         url.set_path(&if organization {format!("/v3/organization/{id}/projects")}else{format!("/v2/user/{id}/projects")});
         let mut projects:Vec<RelatedProject>=self.json(self.client.get(url)).await?;
         projects.sort_by(|a,b|b.downloads.cmp(&a.downloads));
@@ -360,14 +450,41 @@ impl Catalog {
             return Err(Error::Response("los hashes de Modrinth"));
         }
         if hashes.is_empty() { return Ok(Default::default()); }
+        if target.is_none() {
+            if let Some(cache) = &self.metadata {
+                let mut cache = cache.lock().await;
+                let mut result = std::collections::BTreeMap::new();
+                let mut missing = std::collections::BTreeSet::new();
+                for hash in hashes {
+                    match cache.get::<Option<Version>>(&format!("hash:{hash}")) {
+                        Some(Some(v)) => { result.insert(hash.clone(), v); }
+                        Some(None) => {}
+                        None => { missing.insert(hash.clone()); }
+                    }
+                }
+                if !missing.is_empty() {
+                    let missing: Vec<_> = missing.into_iter().collect();
+                    let fetched = self.request_hashes(&missing, None).await?;
+                    for hash in missing {
+                        let value = fetched.get(&hash);
+                        cache.insert(format!("hash:{hash}"), &value, if value.is_some() { cache::TTL } else { cache::NEGATIVE_TTL })?;
+                    }
+                    result.extend(fetched);
+                }
+                return Ok(result);
+            }
+        }
+        self.request_hashes(hashes, target).await
+    }
+    async fn request_hashes(&self, hashes: &[String], target: Option<(&str, &str)>) -> Result<std::collections::BTreeMap<String, Version>, Error> {
         let mut body = serde_json::json!({"hashes":hashes, "algorithm":"sha512"});
         let endpoint = if let Some((minecraft, loader)) = target {
             body["game_versions"] = serde_json::json!([minecraft]);
             body["loaders"] = serde_json::json!([loader]);
             "version_files/update"
         } else { "version_files" };
-        let result: std::collections::BTreeMap<String, Version> = self.json(self.client.post(format!("{API}{endpoint}")).json(&body)).await?;
-        if result.keys().any(|hash| !hashes.contains(hash)) { return Err(Error::Response("los hashes de Modrinth")); }
+        let result: std::collections::BTreeMap<String, Version> = self.json(self.client.post(format!("{}{endpoint}", self.api)).json(&body)).await?;
+        if result.iter().any(|(hash, v)| !hashes.contains(hash) || (target.is_none() && !v.files.iter().any(|f| f.hashes.sha512.eq_ignore_ascii_case(hash)))) { return Err(Error::Response("los hashes de Modrinth")); }
         Ok(result)
     }
     pub async fn download_mod(&self, file: &File) -> Result<Vec<u8>, Error> {
@@ -395,29 +512,30 @@ impl Catalog {
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             client: http::client()?,
-            cooldown: Arc::new(Mutex::new(None)),
+            cooldown: Arc::new(Mutex::new(Cooldown::default())),
+            metadata: None,
+            api: API.into(),
+            metadata_path: None,
         })
     }
     async fn json<T: serde::de::DeserializeOwned>(
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<T, Error> {
-        if let Some(deadline) = *self
-            .cooldown
-            .lock()
-            .map_err(|_| Error::Response("Modrinth"))?
-        {
-            if let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
-                return Err(Error::RateLimited(remaining.as_secs() + 1));
-            }
-        }
+        let remaining = self.retry_after();
+        if !remaining.is_zero() { return Err(Error::RateLimited(remaining.as_secs() + 1)); }
         let result = http::json(request, "Modrinth", BODY_LIMIT).await;
+        let mut cooldown = self.cooldown.lock().map_err(|_| Error::Response("Modrinth"))?;
         if let Err(Error::RateLimited(seconds)) = &result {
-            let wait = Duration::from_secs((*seconds).min(86400));
-            *self
-                .cooldown
-                .lock()
-                .map_err(|_| Error::Response("Modrinth"))? = Some(Instant::now() + wait);
+            let exponential = 60u64.saturating_mul(1u64 << cooldown.failures.min(4)).min(900);
+            let wait = Duration::from_secs((*seconds).clamp(1, 86400).max(exponential));
+            let until = Instant::now() + wait;
+            cooldown.until = Some(cooldown.until.map_or(until, |old| old.max(until)));
+            cooldown.failures = cooldown.failures.saturating_add(1);
+            return Err(Error::RateLimited(wait.as_secs()));
+        } else if result.is_ok() && cooldown.until.is_none_or(|until| until <= Instant::now()) {
+            cooldown.failures = 0;
+            cooldown.until = None;
         }
         result
     }
@@ -477,7 +595,7 @@ impl Catalog {
         http::body_bytes(response, "la imagen", limit).await
     }
     pub async fn project(&self, id: &str) -> Result<Project, Error> {
-        let mut project: Project = self.json(self.client.get(project_url(id)?)).await?;
+        let mut project: Project = self.metadata_json(self.project_url(id)?).await?;
         project.gallery.sort_by(|a, b| {
             a.ordering
                 .cmp(&b.ordering)
@@ -486,7 +604,7 @@ impl Catalog {
         Ok(project)
     }
     pub async fn members(&self, id: &str) -> Result<Vec<Member>, Error> {
-        let mut url = project_url(id)?;
+        let mut url = self.project_url(id)?;
         url.set_path(&format!("{}/members", url.path()));
         let mut members: Vec<Member> = self.json(self.client.get(url)).await?;
         // v2 identifica al propietario mediante el rol; otras respuestas incluyen is_owner.
@@ -497,12 +615,10 @@ impl Catalog {
         Ok(members)
     }
     pub async fn version(&self, id: &str) -> Result<Version, Error> {
-        let mut url = project_url(id)?;
-        url.set_path(&format!("/v2/version/{id}"));
-        self.json(self.client.get(url)).await
+        self.metadata_json(self.version_url(id)?).await
     }
     pub async fn organization(&self, id: &str) -> Result<Organization, Error> {
-        let mut url = project_url(id)?;
+        let mut url = self.project_url(id)?;
         // Las organizaciones se consultan en v3; la ficha v2 conserva su ID.
         url.set_path(&format!("/v3/organization/{id}"));
         self.json(self.client.get(url)).await
@@ -513,7 +629,7 @@ impl Catalog {
         minecraft: Option<&str>,
         loader: Option<&str>,
     ) -> Result<Vec<Version>, Error> {
-        let mut url = project_url(id)?;
+        let mut url = self.project_url(id)?;
         url.set_path(&format!("{}/version", url.path()));
         url.query_pairs_mut()
             .append_pair("include_changelog", "false");
@@ -527,7 +643,7 @@ impl Catalog {
                 &serde_json::json!([loader.to_lowercase()]).to_string(),
             );
         }
-        let versions: Vec<Version> = self.json(self.client.get(url)).await?;
+        let versions: Vec<Version> = self.metadata_json(url).await?;
         let mut versions: Vec<_> = versions
             .into_iter()
             .filter(|v| {
@@ -663,7 +779,7 @@ mod tests {
     #[tokio::test]
     async fn cooldown_blocks_queries_before_a_network_request() {
         let catalog = Catalog::new().unwrap();
-        *catalog.cooldown.lock().unwrap() = Some(Instant::now() + Duration::from_secs(30));
+        catalog.cooldown.lock().unwrap().until = Some(Instant::now() + Duration::from_secs(30));
         let search = Search {
             query: "sodium".into(),
             kind: Kind::Mod,

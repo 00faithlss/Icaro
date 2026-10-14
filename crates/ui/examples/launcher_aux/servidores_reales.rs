@@ -26,6 +26,7 @@ pub struct Estado {
     saving: bool,
     revision: u64,
     request: u64,
+    zero_request: u64,
     pub(crate) registros: Vec<Servidor>,
     estados: BTreeMap<String, Result<servidores::Estado, String>>,
     cancel: Option<CancellationToken>,
@@ -95,6 +96,7 @@ pub enum Accion {
     Abrir,
     Cargados(Result<Vec<Servidor>, String>),
     Consultar,
+    ConsultarZero,
     Estado(u64, String, Result<servidores::Estado, String>),
     Zero(u64, zerotier::Estado),
     Nuevo,
@@ -116,6 +118,18 @@ pub enum Accion {
 }
 fn m(a: Accion) -> Mensaje {
     Mensaje::Servidores(a)
+}
+fn recargar_instancias(app: &mut App) {
+    if !app.servicios.servidores.visual {
+        if let Err(error) = crate::instancias_reales::recargar(app) {
+            app.avisar(error);
+        } else if let Some(editor) = &mut app.servicios.servidores.editor {
+            if let Some(elegida) = &editor.instancia {
+                editor.instancia = app.servicios.instancias.registros.iter().find(|i| i.id == elegida.id)
+                    .map(|i| Instancia { id: i.id.clone(), nombre: i.nombre.clone() });
+            }
+        }
+    }
 }
 fn persistir(app: &mut App, v: Vec<Servidor>) -> Task<Mensaje> {
     let s = &mut app.servicios.servidores;
@@ -146,18 +160,19 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     if app.servicios.servidores.saving
         && !matches!(
             a,
-            Accion::Guardados(..) | Accion::Estado(..) | Accion::Zero(..)
+            Accion::Guardados(..) | Accion::Estado(..) | Accion::Zero(..) | Accion::ConsultarZero
         )
     {
         return Task::none();
     }
     match a {
         Accion::Abrir => {
+            recargar_instancias(app);
             let s = &mut app.servicios.servidores;
             if s.loading {
                 return Task::none();
             }
-            if s.loaded && s.error.is_none() {
+            if s.editor.is_some() || s.arrastre.is_some() {
                 return actualizar(app, Accion::Consultar);
             }
             s.loading = true;
@@ -179,6 +194,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             match r {
                 Ok(v) => {
                     s.registros = v;
+                    s.estados.retain(|id, _| s.registros.iter().any(|v| &v.id == id));
                     s.error = None;
                 }
                 Err(e) => {
@@ -199,12 +215,8 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             let g = s.request;
             let c = CancellationToken::new();
             s.cancel = Some(c.clone());
-            s.estados.clear();
-            s.zero = None;
             let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-            let mut tasks = vec![Task::perform(zerotier::detectar(), move |z| {
-                m(Accion::Zero(g, z))
-            })];
+            let mut tasks = vec![];
             for server in s.registros.clone() {
                 let c = c.clone();
                 let slots = slots.clone();
@@ -215,7 +227,14 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     }
                 },move|r|m(Accion::Estado(g,server.id.clone(),r))));
             }
+            tasks.push(actualizar(app, Accion::ConsultarZero));
             return Task::batch(tasks);
+        }
+        Accion::ConsultarZero => {
+            let s = &mut app.servicios.servidores;
+            s.zero_request += 1;
+            let g = s.zero_request;
+            return Task::perform(zerotier::detectar(), move |z| m(Accion::Zero(g, z)));
         }
         Accion::Estado(g, id, r) => {
             let s = &mut app.servicios.servidores;
@@ -225,7 +244,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::Zero(g, z) => {
             let s = &mut app.servicios.servidores;
-            if g == s.request {
+            if g == s.zero_request {
                 s.zero = Some(z);
             }
         }
@@ -233,6 +252,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             if app.servicios.servidores.error.is_some() {
                 return Task::none();
             }
+            recargar_instancias(app);
             app.servicios.servidores.editor = Some(Editor {
                 id: None,
                 nombre: String::new(),
@@ -249,6 +269,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             ));
         }
         Accion::Editar(i) => {
+            recargar_instancias(app);
             if let Some(v) = app.servicios.servidores.registros.get(i) {
                 let instancia = v
                     .instancia
@@ -771,7 +792,10 @@ pub fn suscripcion(app: &App) -> iced::Subscription<Mensaje> {
         && app.pantalla.is_none()
         && app.servicios.servidores.arrastre.is_none()
     {
-        iced::time::every(std::time::Duration::from_secs(30)).map(|_| m(Accion::Consultar))
+        iced::Subscription::batch([
+            iced::time::every(std::time::Duration::from_secs(30)).map(|_| m(Accion::Abrir)),
+            iced::time::every(std::time::Duration::from_secs(10)).map(|_| m(Accion::ConsultarZero)),
+        ])
     } else {
         iced::Subscription::none()
     }
@@ -854,6 +878,67 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct DatosTemporales(std::path::PathBuf);
+    impl DatosTemporales {
+        fn nuevos() -> Self {
+            let id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            Self(std::env::temp_dir().join(format!("icaro-selector-servidores-{}-{id}", std::process::id())))
+        }
+    }
+    impl Drop for DatosTemporales {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    #[test]
+    fn selector_recarga_instancias_del_disco_y_conserva_java_por_identidad() {
+        let temp = DatosTemporales::nuevos();
+        let store = icaro_core::instancias::Almacen::nuevo(temp.0.clone());
+        let primera = store.crear_con_loader("Primera", "1.21.1", "fabric", 0).unwrap();
+        let mut a = app();
+        a.servicios.servidores.visual = false;
+        a.servicios.instancias.almacen = store.clone();
+        a.servicios.instancias.registros = vec![primera.clone()];
+        *crate::lista_instancias().lock().unwrap() = vec![crate::instancias_reales::Estado::datos(&store, &primera)];
+        a.configs = vec![crate::config_por_defecto()];
+        a.configs[0].memoria_max = 6144;
+        a.grupos = vec![Some("Amigos".into())];
+        a.seleccionada = Some(0);
+        // Simula una instancia creada por otra copia del launcher después del inicio.
+        let segunda = store.crear_con_loader("Segunda", "26.2", "fabric", 0).unwrap();
+        store.guardar_configuracion(&segunda.id, &serde_json::json!({"memoria_max":8192})).unwrap();
+        let _ = actualizar(&mut a, Accion::Nuevo);
+        assert_eq!(a.servicios.instancias.registros.len(), 2);
+        let n = a.servicios.instancias.registros.iter().position(|i| i.id == primera.id).unwrap();
+        assert_eq!(a.configs[n].memoria_max, 6144);
+        assert_eq!(a.grupos[n].as_deref(), Some("Amigos"));
+        assert_eq!(a.seleccionada, Some(n));
+        let n = a.servicios.instancias.registros.iter().position(|i| i.id == segunda.id).unwrap();
+        assert_eq!(a.configs[n].memoria_max, 8192);
+        let _ = actualizar(&mut a, Accion::Instancia(Instancia { id: segunda.id.clone(), nombre: segunda.nombre }));
+        assert_eq!(a.servicios.servidores.editor.as_ref().unwrap().instancia.as_ref().unwrap().id, segunda.id);
+    }
+    #[test]
+    fn refresco_conserva_el_estado_y_la_edicion_sin_guardar() {
+        let mut a = app();
+        let _ = actualizar(&mut a, Accion::Editar(0));
+        let _ = actualizar(&mut a, Accion::Nombre("Nombre sin guardar".into()));
+        let estados = a.servicios.servidores.estados.len();
+        let _ = actualizar(&mut a, Accion::Abrir);
+        assert_eq!(a.servicios.servidores.editor.as_ref().unwrap().nombre, "Nombre sin guardar");
+        assert_eq!(a.servicios.servidores.estados.len(), estados);
+        assert!(a.servicios.servidores.zero.is_some());
+        assert!(!a.servicios.servidores.loading);
+    }
+    #[test]
+    fn al_reabrir_se_relee_la_lista_y_se_descarta_el_estado_antiguo_de_zerotier() {
+        let mut a = app();
+        let _ = actualizar(&mut a, Accion::Abrir);
+        assert!(a.servicios.servidores.loading);
+        a.servicios.servidores.zero_request = 4;
+        let _ = actualizar(&mut a, Accion::Zero(3, zerotier::Estado::Ausente));
+        assert!(matches!(a.servicios.servidores.zero, Some(zerotier::Estado::Disponible { .. })));
+        let _ = actualizar(&mut a, Accion::Zero(4, zerotier::Estado::Ausente));
+        assert!(matches!(a.servicios.servidores.zero, Some(zerotier::Estado::Ausente)));
+    }
     fn app() -> App {
         let (mut a, _) = crate::iniciar_con_guardado(
             icaro_ui::shell::Seccion::Servidores,

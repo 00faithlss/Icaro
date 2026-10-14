@@ -20,6 +20,7 @@ pub mod vault;
 pub mod java;
 pub mod minecraft;
 pub mod lanzamiento;
+pub mod opciones_minecraft;
 pub mod versiones_instancia;
 pub mod actualizacion;
 pub mod archivos_no_verificados;

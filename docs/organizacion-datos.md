@@ -26,7 +26,7 @@ El instalador Vanilla comparte `assets/`, `libraries/<sha1>/<ruta Maven>` y `met
 
 Al preparar una instalación antigua, se verifican tamaño y SHA-1 de sus copias contra el manifiesto actual, se publican archivos completos en el almacén común y se guarda el marcador de esquema 2. Solo después se eliminan las copias antiguas verificadas que ya tienen un destino válido, retirando sus carpetas si quedan vacías. Una cancelación previa a la publicación conserva esas copias. Las instancias de esquema 1 siguen siendo legibles hasta prepararse. Un bloqueo del sistema operativo coordina las preparaciones del mismo almacén, incluso entre procesos; la espera se puede cancelar. El archivo de bloqueo permanece en disco, pero el SO libera el bloqueo al cerrar el proceso.
 
-La selección actual de Java respeta la ruta manual y usa dos modos automáticos como Prism. Con descargas habilitadas reutiliza o prepara el runtime administrado del perfil; con descargas deshabilitadas detecta instalaciones compatibles locales, incluidos runtimes del launcher oficial de Minecraft, y puede reutilizar las copias guardadas por Ícaro. La compatibilidad es una lista explícita de versiones mayores del perfil; si los metadatos de Prism no están disponibles, se conserva el requisito oficial de Mojang. No se considera compatible cualquier Java más nuevo.
+La selección actual de Java respeta la ruta manual y usa dos modos automáticos como Prism. Con descargas habilitadas reutiliza o prepara el runtime administrado del perfil; con descargas deshabilitadas detecta instalaciones compatibles locales, incluidos runtimes del launcher oficial de Minecraft, y puede reutilizar las copias guardadas por Ícaro. La selección automática usa la lista explícita de versiones mayores del perfil; si los metadatos de Prism no están disponibles, se conserva el requisito oficial de Mojang. Una ruta seleccionada manualmente, global o por instancia, permite una versión igual o superior al mínimo del perfil: por ejemplo, Java 25 para un perfil que recomienda Java 21. Esta elección no amplía la lista de versiones recomendadas automáticamente.
 
 La detección consulta `JAVA_HOME`, `PATH`, claves JavaSoft y carpetas de proveedores en Windows; en Linux busca en `/usr/lib/jvm`, `/usr/java`, `/opt/java`, `~/.jvm` y `~/.sdkman/candidates/java`. También inspecciona `.minecraft/runtime` y el runtime del launcher de Microsoft Store. El recorrido de runtimes oficiales está acotado, no sale de su raíz y deduplica ejecutables reales. Una instalación fuera de estas ubicaciones puede seleccionarse manualmente.
 
@@ -50,6 +50,7 @@ Icaro/
   cache/                    # Respuestas y descargas temporales recuperables
   logs/                     # Registros del launcher con rotación
   estado.json               # Preferencias globales, sin configuraciones activas por instancia
+  opciones-minecraft.json   # Sensibilidad, teclas y gráficos compartidos del jugador
   instances/
     boys/
       instance.json         # Identidad y configuración por instancia, esquema 2
@@ -75,7 +76,7 @@ El perfil instalado y los nativos permanecen privados; los registros de proceden
 
 **Implementado para Vanilla:** selección manual global o por instancia, herencia, detección de Java, comprobación de arquitectura, modo administrado y permiso de descarga persistente. Los requisitos de loaders deben integrarse con sus perfiles cuando se implemente su instalación; actualmente no se presentan como jugables.
 
-1. **Ruta manual efectiva:** comprobar el ejecutable y su pertenencia a la lista compatible del perfil. Ante un error, conservar la ruta para corregirla sin sustitución silenciosa.
+1. **Ruta manual efectiva:** comprobar el ejecutable, la arquitectura y que su versión no sea inferior al mínimo del perfil. Se permite una versión superior elegida por el usuario y no se sustituye silenciosamente por el runtime recomendado. Ante un error, conservar la ruta para corregirla.
 2. **Automático con descarga habilitada:** reutilizar una copia verificada del componente administrado requerido o descargarlo del catálogo oficial de Mojang. Este modo no elige primero un Java del sistema; corresponde al flujo administrado de Prism.
 3. **Automático sin descarga:** detectar Java compatible disponible, ordenar candidatos compatibles por versión y usar el más reciente admitido. Si no hay uno local, comprobar runtimes guardados por Ícaro. Si tampoco hay uno compatible, mostrar qué Java falta; no descargar.
 

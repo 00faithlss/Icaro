@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "notas": [
+    {"tipo": "correccion", "texto": "Completa automáticamente dependencias de cliente omitidas durante la sincronización, incluidas Litematica y MaLiLib para Litemoretica 1.2.5 de Minecraft 1.21.1."},
+    {"tipo": "correccion", "texto": "Conserva los mods personales del cliente y desactiva la sincronización al iniciar después de completarla correctamente."},
+    {"tipo": "mejora", "texto": "Reutiliza metadatos de Modrinth entre aperturas, consulta versiones en lotes y descarga solo archivos ausentes o cambiados, respetando los límites de solicitudes."},
+    {"tipo": "correccion", "texto": "Corrige las rutas de Java en Windows que impedían cargar Fabric y admite un Java superior al mínimo cuando lo seleccionas manualmente."},
+    {"tipo": "mejora", "texto": "Agiliza la navegación entre instancias y permite cambiar de sección durante la consulta o aplicación de la sincronización."},
+    {"tipo": "correccion", "texto": "Los mods reconocidos por hash con metadatos incompletos de Minecraft o loader se comparten como archivos propios con avisos, sin bloquear el índice."},
+    {"tipo": "correccion", "texto": "Los descriptores Fabric con saltos de línea sin escapar o ilegibles generan avisos con el JAR afectado y no bloquean todo el índice."},
+    {"tipo": "mejora", "texto": "Los JAR propios del anfitrión se sincronizan por hash aunque no estén en Modrinth, con avisos y conservación de archivos locales."},
+    {"tipo": "nuevo", "texto": "Sincroniza con los mods de un servidor dedicado mediante el servicio del anfitrión, sin necesitar una instancia de Ícaro en ese PC."},
+    {"tipo": "nuevo", "texto": "Comparte automáticamente sensibilidad, teclas y ajustes gráficos compatibles entre tus instancias al jugar."},
+    {"tipo": "correccion", "texto": "Detecta las redes a las que te conectaste desde la aplicación oficial de ZeroTier en Windows."},
+    {"tipo": "correccion", "texto": "Permite desplegar y elegir la instancia vinculada al crear o editar un servidor, y actualiza las instancias disponibles."},
+    {"tipo": "mejora", "texto": "Actualiza periódicamente las redes y los servidores guardados conservando los datos que estás editando."}
+  ]
+}

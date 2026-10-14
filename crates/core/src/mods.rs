@@ -225,6 +225,16 @@ pub fn inventario(store: &Almacen, id: &str) -> Result<Vec<Instalado>, Error> {
     Ok(mods)
 }
 pub trait Fuente: Sync {
+    fn versiones_exactas(&self, ids: &[String]) -> impl std::future::Future<Output = Result<BTreeMap<String, Version>, Error>> + Send {
+        async move {
+            let mut versions = BTreeMap::new();
+            for id in ids { versions.insert(id.clone(), self.version(id).await?); }
+            Ok(versions)
+        }
+    }
+    fn versiones_por_hash(&self, _hashes: &[String]) -> impl std::future::Future<Output = Result<BTreeMap<String, Version>, Error>> + Send {
+        async { Ok(BTreeMap::new()) }
+    }
     fn solo_cliente(&self, _project: &str) -> impl std::future::Future<Output = Result<bool, Error>> + Send {
         async { Ok(false) }
     }
@@ -246,6 +256,12 @@ pub trait Fuente: Sync {
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Error>> + Send;
 }
 impl Fuente for Catalog {
+    async fn versiones_exactas(&self, ids: &[String]) -> Result<BTreeMap<String, Version>, Error> {
+        Ok(self.versions_by_ids(ids).await?)
+    }
+    async fn versiones_por_hash(&self, hashes: &[String]) -> Result<BTreeMap<String, Version>, Error> {
+        Ok(self.versions_from_hashes(hashes).await?)
+    }
     async fn solo_cliente(&self, project: &str) -> Result<bool, Error> {
         let p = self.project(project).await?;
         Ok(p.server_side == "unsupported" && p.client_side != "unsupported")
@@ -984,7 +1000,7 @@ pub async fn resolver(
         if !visited.insert(v.id.clone()) {
             continue;
         }
-        if visited.len() > 128 {
+        if visited.len() > 512 {
             return Err(Error::Datos);
         }
         for dep in v

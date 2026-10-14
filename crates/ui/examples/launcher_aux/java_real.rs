@@ -190,7 +190,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     app.java_estado = format!(
                         "Prueba de memoria y argumentos correcta · {} · Java {} · {} · {} · {}",
                         if compatible {
-                            "compatible con el perfil"
+                            "selección admitida por el perfil"
                         } else {
                             "compatibilidad del perfil pendiente"
                         },
@@ -333,7 +333,9 @@ pub fn resumen(app: &App) -> String {
             let compatibility = game
                 .map(|g| {
                     if g.perfil_java().acepta(j.major) {
-                        "compatible".into()
+                        "versión recomendada por el perfil".into()
+                    } else if path.is_some() && g.perfil_java().permite_manual(j.major) {
+                        "versión superior seleccionada manualmente".into()
                     } else {
                         format!(
                             "incompatible: el perfil acepta Java {:?}",

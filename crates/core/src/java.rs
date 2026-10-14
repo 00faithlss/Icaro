@@ -41,7 +41,7 @@ pub struct Java {
     pub arquitectura: String,
 }
 
-/// Requisitos del perfil; nunca interpreta una versión mayor como un mínimo.
+/// Versiones recomendadas para selección automática y mínimo para elección manual.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Perfil {
     pub majors: Vec<u32>,
@@ -52,6 +52,18 @@ pub struct Perfil {
 impl Perfil {
     pub fn acepta(&self, major: u32) -> bool {
         self.majors.contains(&major)
+    }
+    /// Una elección explícita puede usar un Java más reciente que el recomendado.
+    pub fn permite_manual(&self, major: u32) -> bool {
+        major <= 255 && self.majors.iter().min().is_some_and(|minimo| major >= *minimo)
+    }
+    pub fn verificar_manual(&self, java: Java) -> Result<Java, Error> {
+        self.validar()?;
+        if self.permite_manual(java.major) {
+            Ok(java)
+        } else {
+            self.verificar(java)
+        }
     }
     pub fn validar(&self) -> Result<(), Error> {
         if self.majors.is_empty()
@@ -497,7 +509,7 @@ pub async fn probar(
         .map_err(|e| Error::PruebaJvm(e.to_string()))?;
     let java = inspeccionar_argumentos(path, 0, false, &cancel, &args).await?;
     match perfil {
-        Some(perfil) => perfil.verificar(java),
+        Some(perfil) => perfil.verificar_manual(java),
         None => Ok(java),
     }
 }
@@ -1461,7 +1473,7 @@ async fn preparar_perfil_con_candidatos(
             .ok()
             .zip(fs::canonicalize(ejecutable(path)).ok())
             .is_some_and(|(root, executable)| executable.starts_with(root));
-        return perfil.verificar(inspeccionar(path, 0, managed, &cancel).await?);
+        return perfil.verificar_manual(inspeccionar(path, 0, managed, &cancel).await?);
     }
     // Como Prism: la descarga habilitada selecciona el runtime administrado.
     // La selección manual siempre tiene prioridad; sin descargas se detecta Java local.
@@ -1936,7 +1948,8 @@ mod tests {
         let source = root.join("fixture.rs");
         fs::write(&source, r#"fn main() {
             let exe = std::env::current_exe().unwrap();
-            let version = if exe.file_stem().unwrap().to_string_lossy().contains("17") { "17.0.1" } else { "21.0.1" };
+            let nombre = exe.file_stem().unwrap().to_string_lossy();
+            let version = if nombre.contains("17") { "17.0.1" } else if nombre.contains("25") { "25.0.1" } else { "21.0.1" };
             let args: Vec<_> = std::env::args().skip(1).collect();
             for arg in &args {
                 if let Some(path) = arg.strip_prefix("-Dtest.capture=") { std::fs::write(path, args.join("\n")).unwrap(); }
@@ -1970,6 +1983,8 @@ mod tests {
             "local17"
         });
         fs::copy(&local, &incompatible).unwrap();
+        let reciente = local.with_file_name(if cfg!(windows) { "local25.exe" } else { "local25" });
+        fs::copy(&local, &reciente).unwrap();
         let base = root.join("data");
         let resolve = |candidates: Vec<PathBuf>| {
             preparar_con_candidatos(
@@ -2071,6 +2086,19 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(manual.major, 17);
+        let solo21 = Perfil { majors: vec![21], component: profile.component.clone(), prism: true };
+        let manual25 = preparar_perfil_con_candidatos(
+            &base, &solo21, Some(&reciente), CancellationToken::new(), |_| {}, true,
+            || panic!("No sustituir Java 25 seleccionado manualmente"),
+        ).await.unwrap();
+        assert_eq!(manual25.major, 25);
+        assert_eq!(manual25.executable, fs::canonicalize(&reciente).unwrap());
+        probar(&reciente, Some(&solo21), &crate::lanzamiento::Config::default(), CancellationToken::new()).await.unwrap();
+        let automatico = preparar_perfil_con_candidatos(
+            &base, &solo21, None, CancellationToken::new(), |_| {}, false,
+            || vec![reciente.clone(), local.clone()],
+        ).await.unwrap();
+        assert_eq!(automatico.major, 21);
         let detected = preparar_perfil_con_candidatos(
             &base,
             &profile,

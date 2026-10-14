@@ -301,6 +301,10 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for PanelDerecho<'_, M> {
     fn mouse_interaction(&self, arbol: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, visible: &Rectangle, renderer: &iced::Renderer) -> mouse::Interaction {
         self.contenido.as_widget().mouse_interaction(&arbol.children[0], layout.children().next().unwrap(), cursor, visible, renderer)
     }
+    fn overlay<'b>(&'b mut self, arbol: &'b mut Tree, layout: Layout<'_>, renderer: &iced::Renderer,
+        translation: iced::Vector) -> Option<iced::advanced::overlay::Element<'b, M, iced::Theme, iced::Renderer>> {
+        self.contenido.as_widget_mut().overlay(&mut arbol.children[0], layout.children().next().unwrap(), renderer, translation)
+    }
     fn draw(&self, arbol: &Tree, renderer: &mut iced::Renderer, tema: &iced::Theme,
         estilo: &renderer::Style, layout: Layout<'_>, cursor: mouse::Cursor, visible: &Rectangle) {
         use iced::advanced::Renderer as _;
@@ -308,6 +312,41 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for PanelDerecho<'_, M> {
         renderer.with_layer(recorte, |renderer| {
             self.contenido.as_widget().draw(&arbol.children[0], renderer, tema, estilo, layout.children().next().unwrap(), cursor, &recorte);
         });
+    }
+}
+
+#[cfg(test)]
+mod pruebas_panel_selector {
+    use super::*;
+
+    #[test]
+    fn selector_del_panel_abre_menu_y_emite_la_instancia_elegida() {
+        let renderer = iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(iced::Font::DEFAULT, 16.into()));
+        for desfase in [0.0, 40.0] {
+            let selector = iced::widget::pick_list(vec!["Primera", "Segunda"], None::<&str>, |v| v)
+                .width(300);
+            let mut panel = panel_desde_derecha(selector.into(), desfase);
+            let mut arbol = Tree::new(panel.as_widget());
+            let tam = Size::new(1000.0, 700.0);
+            let nodo = panel.as_widget().layout(&mut arbol, &renderer, &layout::Limits::new(Size::ZERO, tam));
+            let layout = Layout::new(&nodo);
+            let cursor = mouse::Cursor::Available(layout.children().next().unwrap().bounds().center());
+            let mut mensajes = Vec::new();
+            let mut clipboard = iced::advanced::clipboard::Null;
+            panel.as_widget_mut().on_event(&mut arbol,
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), layout, cursor,
+                &renderer, &mut clipboard, &mut Shell::new(&mut mensajes), &Rectangle::new(Point::ORIGIN, tam));
+            let mut menu = panel.as_widget_mut().overlay(&mut arbol, layout, &renderer, iced::Vector::ZERO)
+                .expect("El panel debe transmitir el desplegable abierto");
+            let nodo_menu = menu.layout(&renderer, tam);
+            let limites = Layout::new(&nodo_menu).bounds();
+            let cursor = mouse::Cursor::Available(Point::new(limites.x + 15.0, limites.y + 15.0));
+            menu.on_event(Event::Mouse(mouse::Event::CursorMoved { position: cursor.position().unwrap() }),
+                Layout::new(&nodo_menu), cursor, &renderer, &mut clipboard, &mut Shell::new(&mut mensajes));
+            menu.on_event(Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Layout::new(&nodo_menu), cursor, &renderer, &mut clipboard, &mut Shell::new(&mut mensajes));
+            assert_eq!(mensajes, vec!["Primera"]);
+        }
     }
 }
 

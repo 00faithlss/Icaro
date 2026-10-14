@@ -4,12 +4,14 @@ Launcher de Minecraft escrito en Rust, para Windows y Linux.
 
 La primera entrega pública es **0.1.0**, con paquetes para Windows. Descarga el instalador o el ZIP portable desde [Releases](https://github.com/00faithlss/Icaro-launcher/releases/latest) y consulta las [funciones y pendientes de esta versión](docs/releases/0.1.0.md). El proyecto sigue en desarrollo; el recorrido completo en Linux aún necesita validación.
 
+La versión **0.2.0** incorpora la sincronización con servidores dedicados y corrige dependencias, Java y navegación, con caché persistente de Modrinth. Consulta las [notas de 0.2.0](docs/releases/0.2.0.md) y el [changelog](CHANGELOG.md).
+
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
-[![Avance del roadmap: 73% — 61 de 83 tareas completadas](docs/assets/progreso.svg)](#roadmap)
+[![Avance del roadmap: 74% — 62 de 84 tareas completadas](docs/assets/progreso.svg)](#roadmap)
 
-**73% del roadmap implementado · 61/83 tareas.** Cada casilla tiene el mismo peso.
+**74% del roadmap implementado · 62/84 tareas.** Cada casilla tiene el mismo peso.
 <!-- avance:fin -->
 
 Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da nombre al proyecto. Hefesto, el herrero, está en los ajustes, Atlas en el mundo y Faetón en los errores. Hay más figuras repartidas por el launcher, y descubrirlas es parte de usarlo.
@@ -35,6 +37,8 @@ El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, com
 Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** reutiliza la tienda original con resultados en lista y filtros. **Elegir versión** abre la tabla del proyecto y permite instalar su versión exacta. Instala los MRPACK de Modrinth en nuevas instancias Vanilla o Fabric, con revisión previa, elección de archivos opcionales, hashes verificados y pausa/cancelación en Descargas. Los packs de Quilt, Forge y NeoForge requieren sus instaladores pendientes.
 
 Las instancias usan carpetas legibles por nombre, mantienen su identidad interna y guardan su configuración en `instance.json`. La carpeta `.icaro` contiene el perfil instalado y los nativos; assets, bibliotecas y clientes se comparten entre instancias. Las rutas anteriores se migran al recuperar las instancias, conservando sus mundos. El editor permite cambiar el icono desde su imagen o el menú de acciones, recortarlo y volver al icono generado. Consulta [instancias locales](docs/instancias-locales.md).
+
+El código en desarrollo comparte automáticamente sensibilidad, teclas y ajustes gráficos entre instancias: aplica las preferencias antes de jugar y recoge los cambios al terminar. Las acciones de mods se filtran según las opciones del destino y se conservan los archivos propios de cada instancia. Consulta [preferencias compartidas de Minecraft](docs/opciones-minecraft.md).
 
 Apariencia incluye el tema del sistema, Mármol/Plata/Bronce y escala de 80 a 150 %. Los avisos se apilan con acciones, y la eliminación utiliza Picar con revisión de respaldos. La exportación de instancia incorpora el árbol de archivos y formatos Ícaro y Prism/MultiMC. La lista de mods se exporta por separado como HTML, Markdown, texto, JSON, CSV o una plantilla personalizada.
 
@@ -66,7 +70,7 @@ La herramienta de línea de comandos consulta el manifiesto de Mojang y verifica
 
 ## Roadmap
 
-Actualizado el **13-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
+Actualizado el **14-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
 
 La barra cuenta las casillas de este roadmap con el mismo peso para cada una. Al cambiar una casilla o añadir una tarea, ejecuta `python scripts/actualizar_avance.py` para actualizar el porcentaje y la imagen.
 
@@ -104,6 +108,7 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] Selectores de versión y loader separados, con versiones oficiales seleccionables y elección persistida.
 - [x] Cambio de Minecraft y cambio separado de versión del loader, conservando su familia, con el nuevo `CambioVersionInstancia`: compatibilidad por lotes de todos los mods instalados, actualizaciones opcionales, respaldo obligatorio al bajar y copia independiente. Preparación aislada y recuperación de archivos/metadatos si falla; Fabric ya se prepara con la versión elegida; Quilt, Forge y NeoForge siguen pendientes.
 - [x] Recuperación de instancias, grupos y ajustes de Java desde disco; renombrado de la carpeta con conservación de la identidad y los archivos del juego.
+- [x] Compartir automáticamente sensibilidad, teclas y ajustes gráficos compatibles entre instancias, con filtrado de acciones de mods y mezcla por opción; pruebas automáticas completas y comprobación manual en el juego pendiente.
 - [x] Eliminación de instancias a la papelera del sistema y recuperación mediante Deshacer.
 - [x] Vanilla omite la pestaña y el contador de mods; la barra inferior de Jugar se oculta sin sesión o sin instancia seleccionada.
 - [x] Explorador conectado a la carpeta real: árbol, tamaños, vista previa de texto, abrir, copiar ruta, renombrar y mover archivos a la papelera del sistema.
@@ -174,7 +179,7 @@ Consulta el [detalle de implementación pendiente](docs/pendientes-implementacio
 
 ### Servidores, ZeroTier y sincronización
 
-Servidores guarda su lista y orden por arrastre, usa el PanelLateral original, consulta Minecraft con DNS SRV y lanza la instancia vinculada. RedPrivada permite solicitar pertenencia mediante la CLI de ZeroTier. La sincronización consulta un servicio en el PC del anfitrión y revisa/aplica versiones exactas de Modrinth antes de Jugar. Faltan instalación/permisos automáticos de ZeroTier y validación con dos equipos. Consulta [servidores](docs/servidores.md) y [sincronización con el anfitrión](docs/sincronizacion-servidores.md).
+Servidores guarda su lista y orden por arrastre, usa el PanelLateral original, consulta Minecraft con DNS SRV y lanza la instancia vinculada. RedPrivada permite solicitar pertenencia mediante la API local o la CLI de ZeroTier; reconoce también redes unidas desde la aplicación oficial. La sincronización consulta un servicio en el PC del anfitrión y revisa/aplica versiones exactas antes de Jugar. El servicio lee directamente la carpeta de mods del servidor dedicado, filtra mods exclusivos de servidor y actualiza el índice cuando cambian los archivos; no requiere una instancia cliente de Ícaro. Los mods de Modrinth se descargan de su catálogo y los JAR propios, ausentes o modificados se descargan del anfitrión, con avisos y verificación de tamaño/SHA-512. Incluye un arranque para Arch y un workflow de compilación Linux x86_64 cuya ejecución está pendiente. También faltan instalación/permisos automáticos de ZeroTier y validación con dos equipos. Consulta [servidores](docs/servidores.md) y [sincronización con el anfitrión](docs/sincronizacion-servidores.md).
 
 - [x] Añadir, editar, eliminar y guardar servidores reales con dirección, puerto e instancia asociada.
 - [x] Consultar estado, latencia, versión y jugadores cuando el servidor entregue esos datos; DNS ordinario, IP y resolución SRV conectados.

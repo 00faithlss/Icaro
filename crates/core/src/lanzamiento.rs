@@ -28,6 +28,8 @@ pub struct Config {
     pub resolucion: Option<(u32, u32)>,
     pub fullscreen: bool,
     pub servidor: Option<String>,
+    /// Archivo de preferencias compartidas; el launcher lo sitúa en su raíz de datos.
+    pub opciones_compartidas: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -39,6 +41,7 @@ impl Default for Config {
             resolucion: None,
             fullscreen: false,
             servidor: None,
+            opciones_compartidas: None,
         }
     }
 }
@@ -251,9 +254,27 @@ fn expandir(plantilla: &str, valores: &HashMap<&str, &str>) -> Result<String, Er
     Ok(std::mem::take(&mut *salida))
 }
 
-fn ruta_texto(path: &Path) -> Result<&str, Error> {
+// Java no interpreta los prefijos extendidos que devuelve canonicalize en Windows.
+// La conversión se limita a rutas; nunca se aplica a credenciales expandidas.
+fn ruta_java(texto: &str) -> String {
+    #[cfg(windows)]
+    {
+        if let Some(unc) = texto.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{unc}");
+        }
+        if let Some(disco) = texto.strip_prefix(r"\\?\") {
+            if disco.as_bytes().get(1) == Some(&b':') {
+                return disco.to_owned();
+            }
+        }
+    }
+    texto.to_owned()
+}
+
+fn ruta_texto(path: &Path) -> Result<String, Error> {
     path.to_str()
         .filter(|s| !s.contains('\0'))
+        .map(ruta_java)
         .ok_or(Error::Instalacion)
 }
 
@@ -276,7 +297,12 @@ fn preparar(
     {
         return Err(Error::Instalacion);
     }
-    let classpath = std::env::join_paths(&instalado.classpath).map_err(|_| Error::Instalacion)?;
+    let rutas = instalado
+        .classpath
+        .iter()
+        .map(|path| ruta_texto(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let classpath = std::env::join_paths(rutas).map_err(|_| Error::Instalacion)?;
     let classpath = classpath.to_str().ok_or(Error::Instalacion)?;
     let bibliotecas = instalado
         .assets
@@ -292,6 +318,10 @@ fn preparar(
         .resolucion
         .map(|r| r.1.to_string())
         .unwrap_or_default();
+    let juego = ruta_texto(juego)?;
+    let assets = ruta_texto(&instalado.assets)?;
+    let natives = ruta_texto(&instalado.natives)?;
+    let bibliotecas = ruta_texto(&bibliotecas)?;
     let valores = HashMap::from([
         ("auth_player_name", nombre),
         ("auth_uuid", uuid),
@@ -307,13 +337,13 @@ fn preparar(
             instalado.perfil_id.as_deref().unwrap_or(&instalado.version),
         ),
         ("version_type", "release"),
-        ("game_directory", ruta_texto(juego)?),
-        ("assets_root", ruta_texto(&instalado.assets)?),
-        ("game_assets", ruta_texto(&instalado.assets)?),
+        ("game_directory", juego.as_str()),
+        ("assets_root", assets.as_str()),
+        ("game_assets", assets.as_str()),
         ("assets_index_name", instalado.asset_index.as_str()),
-        ("natives_directory", ruta_texto(&instalado.natives)?),
+        ("natives_directory", natives.as_str()),
         ("classpath", classpath),
-        ("library_directory", ruta_texto(&bibliotecas)?),
+        ("library_directory", bibliotecas.as_str()),
         ("launcher_name", "Icaro"),
         ("launcher_version", env!("CARGO_PKG_VERSION")),
         ("classpath_separator", if cfg!(windows) { ";" } else { ":" }),
@@ -328,13 +358,23 @@ fn preparar(
         if plantilla.starts_with("-Xms") || plantilla.starts_with("-Xmx") {
             continue;
         }
-        argumentos.push(expandir(plantilla, &valores)?);
+        // El perfil guarda algunas rutas literales, como la configuración de Log4j.
+        let plantilla = if plantilla.starts_with("-D") {
+            if let Some((clave, valor)) = plantilla.split_once('=') {
+                format!("{clave}={}", ruta_java(valor))
+            } else {
+                plantilla.clone()
+            }
+        } else {
+            plantilla.clone()
+        };
+        argumentos.push(expandir(&plantilla, &valores)?);
     }
     argumentos.extend(argumentos_extra(&config.argumentos_jvm)?.drain(..));
     argumentos.push(instalado.main_class.clone());
     let mut juego_args = Zeroizing::new(Vec::new());
     for plantilla in &instalado.game_arguments {
-        juego_args.push(expandir(plantilla, &valores)?);
+        juego_args.push(expandir(&ruta_java(plantilla), &valores)?);
     }
     argumentos.extend(juego_args.drain(..));
     if let Some((ancho, alto)) = config.resolucion {
@@ -860,9 +900,28 @@ pub async fn ejecutar(
         &config,
     )?;
     let mut comando = Command::new(java);
+    let opciones = config.opciones_compartidas.as_ref().and_then(|path| {
+        match crate::opciones_minecraft::preparar(path, &juego, instalado) {
+            Ok(sesion) => Some(sesion),
+            Err(error) => {
+                on_event(Evento::Linea { origen: Origen::Stderr, nivel: Nivel::Advertencia,
+                    texto: format!("No se aplicaron las preferencias compartidas: {error}") });
+                None
+            }
+        }
+    });
     comando.current_dir(&juego).args(argumentos.iter());
     drop(argumentos);
-    proceso(comando, cuenta.minecraft_token(), cancel, &on_event).await
+    let resultado = proceso(comando, cuenta.minecraft_token(), cancel, &on_event).await;
+    if resultado.is_ok() {
+        if let Some(sesion) = opciones {
+            if let Err(error) = crate::opciones_minecraft::capturar(&sesion) {
+                on_event(Evento::Linea { origen: Origen::Stderr, nivel: Nivel::Advertencia,
+                    texto: format!("No se guardaron las preferencias compartidas: {error}") });
+            }
+        }
+    }
+    resultado
 }
 
 #[cfg(test)]
@@ -949,6 +1008,54 @@ mod tests {
             "-Djava.library.path={}",
             installed.natives.display()
         )));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn lanzamiento_convierte_rutas_extendidas_sin_alterar_credenciales() {
+        let mut installed = instalado();
+        installed.assets = PathBuf::from(r"\\?\C:\Icaro con espacios\assets");
+        installed.natives = PathBuf::from(r"\\?\C:\Icaro con espacios\natives");
+        installed.classpath = vec![
+            PathBuf::from(r"\\?\C:\Icaro con espacios\fabric-loader.jar"),
+            PathBuf::from(r"\\?\UNC\servidor\juegos\cliente.jar"),
+        ];
+        installed
+            .jvm_arguments
+            .push(r"-Dlog4j.configurationFile=\\?\C:\Icaro con espacios\client.xml".into());
+        installed.game_arguments.extend([
+            "--assetsDir".into(),
+            "${assets_root}".into(),
+            "--gameAssets".into(),
+            r"\\?\C:\Icaro con espacios\legacy".into(),
+        ]);
+        let token = r"\\?\C:\TOKEN_${version_name}";
+        let args = preparar(
+            &installed,
+            Path::new(r"\\?\C:\Icaro con espacios\juego"),
+            "Jugador",
+            "uuid",
+            token,
+            "xuid",
+            &Config::default(),
+        )
+        .unwrap();
+        let cp = args.iter().position(|a| a == "-cp").unwrap();
+        assert_eq!(
+            args[cp + 1],
+            r"C:\Icaro con espacios\fabric-loader.jar;\\servidor\juegos\cliente.jar"
+        );
+        for esperado in [
+            r"C:\Icaro con espacios\juego",
+            r"C:\Icaro con espacios\assets",
+            r"C:\Icaro con espacios\legacy",
+            r"-Djava.library.path=C:\Icaro con espacios\natives",
+            r"-Dlog4j.configurationFile=C:\Icaro con espacios\client.xml",
+            token,
+        ] {
+            assert!(args.iter().any(|a| a == esperado), "Falta {esperado}");
+        }
+        assert_eq!(ruta_java(r"C:\normal\cliente.jar"), r"C:\normal\cliente.jar");
     }
 
     #[test]

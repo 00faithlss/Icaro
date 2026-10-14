@@ -567,6 +567,9 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
             app.busqueda.abierta = false;
             app.menu = None;
             app.menu_grupos = false;
+            if app.pantalla == Some(pantallas::Pantalla::Sincronizar) {
+                sincronizacion_real::salir(app);
+            }
             app.pantalla = None;
             return actualizar_estado(app, Mensaje::Ir(seccion));
         }
@@ -842,6 +845,9 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Capt(a) => return capt::actualizar(app, a),
         Mensaje::Ir(s) => {
+            if app.pantalla == Some(pantallas::Pantalla::Sincronizar) {
+                sincronizacion_real::salir(app);
+            }
             if !app.servicios.demo && app.editor.is_some() {
                 let nombre = app.general.nombre.clone();
                 if let Err(error) = instancias_reales::renombrar(app, &nombre) {
@@ -3647,7 +3653,14 @@ fn iniciar_app(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo:
             app.pantalla=Some(pantallas::Pantalla::Actualizacion);
         }
         app.actualizacion.comprobando = true;
-        {let iconos=icono_instancia::cargar(&app); let java=java_real::detectar(&mut app); (app, Task::batch([inicio, actualizacion_real::comprobar(),iconos,java]))}
+        {
+            let servidores = if app.seccion == Seccion::Servidores {
+                servidores_reales::actualizar(&mut app, servidores_reales::Accion::Abrir)
+            } else { Task::none() };
+            let iconos = icono_instancia::cargar(&app);
+            let java = java_real::detectar(&mut app);
+            (app, Task::batch([inicio, actualizacion_real::comprobar(), iconos, java, servidores]))
+        }
     } else { (app, inicio) }
 }
 

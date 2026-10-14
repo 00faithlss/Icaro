@@ -1,18 +1,39 @@
 # Sincronización con el servidor de un amigo
 
-Se eligió un servicio en el PC del anfitrión, accesible por ZeroTier, que publica el índice de una instancia de cliente de Ícaro. Al pulsar Jugar, con **Sincronizar mods al iniciar** activado, el launcher consulta ese índice, muestra las diferencias en la pantalla original `SincronizarMods` y descarga archivos exactos desde Modrinth.
+El servicio lee directamente `mods` de la carpeta del servidor dedicado que ejecuta el PC del anfitrión. No requiere una instancia cliente de Ícaro ni instalar el launcher en ese equipo. Al pulsar Jugar, con **Sincronizar mods al iniciar** activado, el launcher consulta ese índice por ZeroTier, muestra las diferencias en la pantalla original `SincronizarMods` y descarga archivos exactos desde Modrinth o los JAR propios publicados por el anfitrión.
 
 ## Preparar al anfitrión
 
-El anfitrión mantiene una instancia de cliente con el Minecraft, familia y versión exacta del loader y mods necesarios para entrar a su servidor dedicado. La carpeta del servidor puede incluir mods exclusivos de servidor y no sustituye esa instancia de cliente. Debe autorizar a sus amigos en ZeroTier.
+El anfitrión debe autorizar a sus amigos en ZeroTier y conocer la carpeta, versión de Minecraft y versión exacta del loader de su servidor. El servicio lee archivos y publica metadatos; no modifica el servidor, sus mundos ni sus configuraciones.
 
-El paquete portable y el instalador incluyen `icaro-sync-host.exe`. Obtener el `id` de la instancia en su `instance.json` y ejecutar:
+### Arch Linux del anfitrión
 
-```powershell
-& .\icaro-sync-host.exe --datos "$env:APPDATA\Icaro" --instancia ID_DE_INSTANCE_JSON --escuchar 10.147.17.1:25566
+Con Rust estable actualizado y herramientas de compilación C instaladas, desde la raíz del código actualizado:
+
+```bash
+cargo build --locked --release -p icaro-core --example sync_host
+./target/release/examples/sync_host --servidor "/ruta/absoluta/al/servidor" \
+  --minecraft 1.21.1 --loader fabric --version-loader 0.19.5 \
+  --escuchar 10.62.50.154:25566
 ```
 
-Reemplazar la IP del ejemplo por la IP de ZeroTier del anfitrión. El servicio escucha en **el puerto de Minecraft más uno**: Minecraft 25565 → servicio 25566; Minecraft 25570 → servicio 25571. Permitir ese puerto en el cortafuegos de la red/interfaz correspondiente, sin abrirlo en el router. Se rechazan direcciones públicas y comodines; loopback se admite para pruebas. Ctrl+C detiene el servicio.
+Estos son los datos reales proporcionados por el anfitrión. Cambia únicamente la carpeta por la real. También puede arrancarse mediante `bash packaging/linux/iniciar-sincronizacion.sh /ruta/absoluta/al/servidor`; `ICARO_SYNC_BIN` permite indicar otra ubicación del ejecutable. En su script de arranque, iniciar este comando en segundo plano con `&` junto a Minecraft y conservar su PID para cerrarlo cuando termine el servidor.
+
+El workflow de GitHub Actions compila y prueba el servicio en Linux x86_64 y guarda un `.tar.gz` como artefacto; sus resultados se consultan en Actions. El 14-10-2026 el anfitrión confirmó compilación en Arch con Rust 1.99, pruebas de sincronización y escucha en `10.62.50.154:25566`. Después confirmó que la corrección de descriptores solucionó Debugify y Weapon Master YDM y pasaron las 12 pruebas anteriores. La carpeta real reveló otro caso: Ksyxis 1.4.4 tiene metadatos de versiones extremas en Modrinth. La conversión de ese caso a archivo propio se comprobó con fixtures y el JAR real de Modrinth en carpetas temporales. El anfitrión confirmó después que Ksyxis ya no bloqueaba; reportó un pin de Surveyor incompatible con la versión instalada de Fabric API y límites de solicitudes durante los reintentos. La publicación con la carpeta completa del anfitrión sigue siendo una comprobación externa. Para compilar los cambios en desarrollo, usa la rama `develop`; los paquetes públicos de 0.1.0 no incluyen estas funciones.
+
+Cuando exista el paquete Linux del workflow, extraerlo y ejecutar `./icaro-sync-host` con los mismos argumentos anteriores; no necesita Rust para ejecutarse. No usar el `.exe` de Windows en Arch.
+
+### Windows
+
+El paquete portable y el instalador incluyen `icaro-sync-host.exe`. Puede copiarse por separado al PC del anfitrión Windows:
+
+```powershell
+& .\icaro-sync-host.exe --servidor "C:\Minecraft\Servidor" --minecraft "1.21.1" --loader "fabric" --version-loader "0.19.5" --escuchar "10.62.50.154:25566"
+```
+
+Reemplazar la IP del ejemplo por la IP de ZeroTier del anfitrión. El servicio escucha en **el puerto de Minecraft más uno**: Minecraft 25565 → servicio 25566; Minecraft 25570 → servicio 25571. Permitir ese puerto en el cortafuegos de la red/interfaz correspondiente, sin abrirlo en el router. Se rechazan direcciones públicas y comodines; loopback se admite para pruebas. Ctrl+C detiene el servicio. Mantenerlo abierto junto al servidor: comprueba cambios cada 10 segundos y rehace el índice cuando cambia el contenido. Durante la preparación o un error responde 503, sin entregar el índice anterior.
+
+Las versiones se indican explícitamente para evitar adivinarlas por nombres de archivos o logs antiguos. Si actualizas Minecraft o el loader, reinicia el servicio con los argumentos nuevos. Para conservar el origen anterior, también admite `--datos "C:\...\Icaro" --instancia ID --escuchar IP:PUERTO`; ambos modos son excluyentes.
 
 El servicio se inicia por esta herramienta. No se inventó una pantalla de publicación del anfitrión; su integración visual posterior necesita un componente entregado o aprobación del usuario.
 
@@ -22,21 +43,53 @@ Agregar en Servidores la IP privada de ZeroTier y **el puerto de Minecraft**, vi
 
 Consulta `GET /icaro/v1/mods`, comprueba esquema y límites, Minecraft y loader exactos, y pide a Modrinth las versiones indicadas. Verifica proyecto, compatibilidad, dependencias y SHA-512; no busca por nombres aproximados ni instala la última versión por suposición.
 
-La pantalla original muestra agregar, actualizar/activar y quitar, tamaños y archivos conservados. **Sincronizar y jugar** aplica y conecta; **Solo sincronizar** aplica y vuelve; **Jugar sin sincronizar** exige confirmar el riesgo en el diálogo existente. Sin diferencias, verifica y registra el conjunto antes de conectar. Escape cancela la consulta o la preparación, esperando el acuse antes de desbloquear la instancia. Hay progreso general y por fila.
+La pantalla original muestra agregar, actualizar/activar y quitar, tamaños y archivos conservados. **Sincronizar y jugar** aplica y conecta; **Solo sincronizar** aplica y vuelve; **Jugar sin sincronizar** exige confirmar el riesgo en el diálogo existente. Al completar la sincronización, se desactiva y guarda **Sincronizar mods al iniciar** para ese servidor e instancia: las siguientes partidas arrancan directamente. Se puede volver a activar desde el panel del servidor cuando se quiera comprobar cambios. Un error o una cancelación no desactiva la opción. Sin diferencias, verifica el conjunto y lo registra solo si todavía no estaba gestionado; un conjunto ya registrado no se copia ni publica otra vez. **Cancelar** o Escape cancela la consulta o la preparación, esperando el acuse antes de desbloquear la instancia. Se puede cambiar de apartado: cancela una consulta pendiente o deja terminar una aplicación en segundo plano, sin iniciar Minecraft al terminar. Hay progreso general y por fila.
 
 ## Contenido y recuperación
 
-El índice contiene solo Minecraft, loader, versión del loader, proyecto, versión y hash de cada mod. El servicio entrega únicamente el índice: no comparte JAR, archivos arbitrarios, mundos, capturas, cuentas, credenciales ni rutas del anfitrión, ni acepta órdenes de instalación.
+El índice contiene Minecraft, loader, versión del loader y entradas de Modrinth. El esquema 2 añade archivos propios: identidad, nombre, versión, nombre del JAR, tamaño y SHA-512, más los avisos para la revisión. Para estas correcciones y conjuntos de más de 128 mods, utiliza el cliente y el servicio de la publicación consolidada 0.2.0. El servicio sirve únicamente esos JAR mediante `GET /icaro/v1/files/<SHA-512>`, desde su carpeta de mods y solo si el contenido sigue coincidiendo. No acepta rutas ni URLs externas; no comparte mundos, cuentas, credenciales ni archivos arbitrarios.
 
-Identifica los archivos activos por su contenido en Modrinth. Excluye mods exclusivos de cliente/servidor de la base común e incluye dependencias de cliente obligatorias de un mod común. Un archivo activo no identificado en Modrinth impide publicar un índice incompleto. CurseForge y mods privados requieren proveedores adicionales.
+Identifica los JAR activos directamente en `mods` por su SHA-512 en Modrinth. No incluye archivos `.disabled`. Excluye proyectos sin soporte de cliente; un mod Fabric que declare `environment: server` también se excluye aunque sea privado. Un JAR válido no identificado genera un aviso y se publica como archivo propio: no bloquea el resto del índice. Los JAR anidados se rechazan para evitar omitirlos silenciosamente. La integración de CurseForge como tienda sigue pendiente; un JAR instalado en el servidor puede compartirse como archivo propio sin esa integración.
 
-Comprueba cambios de la instancia cliente cada 10 segundos y vuelve a preparar el índice si cambian los mods o el perfil. Un fallo lo deja indisponible. No inspecciona ni controla el proceso del servidor dedicado; el anfitrión debe mantener consistente su instancia cliente compartida.
+La compatibilidad de un archivo propio no se confirma por Modrinth: el anfitrión debe revisar cuáles requiere el cliente. `--excluir-archivo nombre.jar` permite excluir archivos concretos y puede repetirse. Se usan nombres exactos, sin rutas ni comodines. Para Fabric se conserva la identidad del mod del descriptor al cambiar su nombre de archivo; en otros JAR se deriva del nombre.
 
-Conserva archivos locales ajenos y mods de cliente. Solo puede quitar proyectos que esta instancia haya sincronizado previamente con ese mismo origen, y conserva los que Modrinth identifica como exclusivos de cliente. Cambiar de anfitrión no autoriza borrar el conjunto gestionado por otro.
+Si Modrinth reconoce el SHA-512 pero no enumera el Minecraft o loader del servidor, el JAR instalado se publica como archivo propio con un aviso. No se interpretan versiones extremas como un rango ni se cambia el archivo por otra versión. La regla es general para JAR universales y metadatos incompletos, no una excepción por nombre para Ksyxis. Primero se excluyen los proyectos sin soporte de cliente. Una respuesta que no confirme el hash sigue siendo un error.
 
-Prepara los archivos en una carpeta separada, comprueba tamaño y SHA-512, revalida los archivos y perfil y publica el conjunto con el respaldo/recuperación del instalador de mods existente. Un fallo, cancelación, nombre ocupado o modificación local conserva los mods anteriores. Vuelve a consultar la revisión del índice antes de aplicar el plan. Bloquea las operaciones del launcher mientras aplica; no modifica una instancia ocupada por Minecraft.
+La elección se propaga a los mods instalados que dependan obligatoriamente de ese proyecto, incluyendo cadenas y ciclos: también se comparten sus JAR exactos con avisos. Primero se resuelve el grafo completo, incluidas las dependencias de cliente de los mods que terminarán como archivos propios. Así el launcher no vuelve a exigir los pins de Modrinth de un archivo universal o de otro mod convertido a archivo propio. Una dependencia ausente sigue requiriendo una versión válida del catálogo; dos pins incompatibles sobre una dependencia no instalada impiden publicar.
+
+El cliente también completa dependencias obligatorias de los JAR propios reconocidos por SHA-512 en Modrinth. Esto permite instalar desde cero con índices antiguos que omitían bibliotecas como CodxLib o Lithostitched. Respeta los proyectos que el anfitrión ya proporciona, fija las versiones y hashes de las bibliotecas recuperadas y las incluye en el plan visible. Antes de publicar rechaza una biblioteca recuperada que declare `environment: server`. La comprobación de cambios del anfitrión utiliza la revisión original de su índice, sin confundir las dependencias añadidas por el cliente con un cambio remoto.
+
+La lectura de `fabric.mod.json` intenta primero JSON estricto. Si falla, sustituye caracteres de control sin escapar por espacios únicamente en una copia en memoria y reintenta. Los JAR y sus hashes no cambian. El aviso identifica el archivo normalizado. Si el descriptor sigue siendo ilegible o supera el límite de 128 KiB, se publica un aviso con el nombre del JAR y se mantiene la identificación por Modrinth o por nombre de archivo, sin bloquear toda la lista. No se supone que sea exclusivo de servidor cuando no puede confirmarse su entorno; el anfitrión puede excluirlo explícitamente.
+
+La clasificación usa los metadatos de [Modrinth](https://docs.modrinth.com/api/operations/getproject/) y el campo `environment` del [descriptor oficial de Fabric](https://wiki.fabricmc.net/documentation:fabric_mod_json_spec).
+
+Las dependencias obligatorias usan la versión instalada en el servidor cuando existe. Si Modrinth fija otra versión y **ambos JAR están instalados e identificados por hash**, conserva la dependencia instalada y publica el mod que la requiere como archivo propio, con un aviso que indica el pin y la versión conservada. Por ejemplo, Surveyor 1.2.4 puede conservar Fabric API 0.116.17 sin sustituirla por el pin 0.104.0. También funciona si la dependencia solo trae un ID de versión: primero consulta su proyecto para localizar el JAR instalado.
+
+Esta política conserva el conjunto elegido por el anfitrión; no interpreta el pin como un rango de Fabric ni afirma haber ejecutado el juego. El aviso requiere revisar la compatibilidad en el cliente. No se modifica el JAR ni se altera su hash. Si Modrinth clasifica una dependencia como exclusiva de servidor, se comprueba el descriptor Fabric del JAR instalado: se incluye si admite cliente (`environment: "*"`, `"client"` o sin ese campo), con un aviso sobre la discrepancia. Así no se omiten bibliotecas obligatorias como CodxLib y Lithostitched solo por la etiqueta del catálogo. Si no hay un descriptor instalado que confirme soporte de cliente, se conserva la exclusión y su dependiente instalado se publica como propio.
+
+Si falta una dependencia de cliente, usa la versión exacta declarada; si solo declara proyecto, selecciona la release estable compatible más reciente y fija su versión y hash en el índice. Los pins contradictorios sin ambos archivos instalados, las respuestas con otro proyecto/hash y las incompatibilidades explícitas entre entradas de catálogo siguen impidiendo publicar. No instala nada en el anfitrión. Anfitrión y cliente admiten hasta 512 mods en el índice y en la resolución. Los cambios de archivos durante la consulta invalidan la preparación y se reintentan.
+
+Si Minecraft responde pero la sincronización no, comprobar el servicio separado y su puerto: estar aprobado en ZeroTier no inicia `icaro-sync-host`. Desde otro equipo autorizado, `Invoke-RestMethod "http://IP_DEL_ANFITRION:25566/icaro/v1/mods"` debe devolver el índice. La comprobación integral entre los dos PCs sigue pendiente; las pruebas automáticas cubren carpeta dedicada, filtro de servidor, dependencias, cambios de archivos y publicación HTTP.
+
+Comprueba cambios de la carpeta del servidor cada 10 segundos mediante hashes del contenido; ese sondeo local no vuelve a consultar todos los JAR a Modrinth. Un conflicto, contenedor JAR inválido o cambio durante la consulta lo deja indisponible; los archivos no reconocidos y los descriptores ilegibles son avisos. No inspecciona ni controla el proceso de Minecraft.
+
+### Caché y recuperación del servicio
+
+El anfitrión comparte una caché en memoria por SHA-512, proyecto, versión y filtros de Minecraft/loader. Las respuestas válidas duran una hora; los hashes no reconocidos, diez minutos. Conserva las respuestas ya resueltas aunque falle una consulta posterior. Un archivo cambiado usa su hash nuevo; los archivos que no cambiaron reutilizan sus respuestas mientras sigan vigentes. Nunca guarda un fallo HTTP o JSON inválido como ausencia de un mod. La caché tiene límites de 2048 entradas y 32 MiB de cuerpos; se vacía al reiniciar el servicio y puede descartar entradas al alcanzar esos límites.
+
+El launcher también reutiliza metadatos y guarda las respuestas vigentes en `cache/modrinth-metadatos.json`, conservando su caducidad entre aperturas. Durante la sincronización consulta las versiones que falten en lotes de hasta 50 IDs mediante `/versions`, en vez de una petición por mod. Un ID nuevo no invalida el resto de la caché. Una prueba con 163 versiones requiere cuatro peticiones iniciales de metadatos de versión, ninguna al repetir o recargar la caché vigente y una petición que contiene solo el ID cambiado. Las consultas por hash, por proyecto y de dependencias adicionales se contabilizan aparte. Los archivos locales siguen comprobándose por hash; solo se descargan los ausentes o modificados. Las respuestas parciales válidas se conservan y guardan aunque otro lote responda 429; los fallos y las respuestas incompletas o con IDs duplicados no se guardan como válidos.
+
+Un 429 suspende nuevas peticiones a la API durante el mayor plazo de `Retry-After`, `X-RateLimit-Reset` y una espera creciente (60, 120, 240, 480 y hasta 900 segundos). `Retry-After` admite segundos o fecha HTTP; las esperas del proveedor se acotan a 24 horas. Los aciertos de caché siguen disponibles. Una respuesta correcta tras la pausa reinicia la espera del catálogo.
+
+Los fallos de preparación tienen su propia espera de 30, 60, 120, 240, 480 y hasta 600 segundos, respetando además la pausa de Modrinth. El registro muestra el error y la espera prevista una vez por intento. Un conjunto de archivos nuevo reinicia la espera de preparación, pero no la pausa del proveedor. El servicio reanuda desde los metadatos ya resueltos, incluso si la preparación anterior agotó su tiempo de 120 segundos. Durante el error devuelve 503 y no sirve un índice anterior con archivos distintos. Ctrl+C sigue disponible durante las consultas y las esperas.
+
+Conserva los mods personales añadidos al cliente, tanto desde el catálogo como mediante JAR copiados a `mods`, incluidos los `.jar.disabled`, sin activarlos ni incorporarlos al registro de mods gestionados por el anfitrión. Solo puede quitar proyectos o JAR propios que esta instancia haya sincronizado previamente con ese mismo origen, y conserva los proyectos que Modrinth identifica como exclusivos de cliente. Los JAR propios modificados por el jugador no se sobrescriben ni eliminan. Un nombre ocupado por un mod personal con contenido distinto impide aplicar el plan y conserva el archivo. Cambiar de anfitrión no autoriza borrar el conjunto gestionado por otro.
+
+Prepara los archivos en una carpeta separada, comprueba tamaño y SHA-512, revalida los archivos y perfil y publica el conjunto con el respaldo/recuperación del instalador de mods existente. Un fallo, cancelación, nombre ocupado o modificación local conserva los mods anteriores. Vuelve a consultar la revisión del índice antes de aplicar el plan. Bloquea las operaciones que modifican la instancia mientras aplica, pero permite navegar por el launcher; no modifica una instancia ocupada por Minecraft.
 
 ## Por qué no basta el mensaje de Minecraft
+
+La sincronización completa los requisitos declarados, pero algunos mods omiten dependencias de cliente en sus metadatos. Para Litemoretica 1.2.5 de Minecraft 1.21.1 (proyecto `OYR5DMCo`, versión `nhi2RkZ9`) se aplica una corrección explícita: añadir Litematica compatible y resolver sus dependencias, incluida MaLiLib. Funciona tanto con índices de catálogo como con JAR propios identificados por hash, sin exigir que estén instaladas previamente en el cliente ni en el servidor. El servicio actualizado también las fija en el índice. La [documentación de Litemoretica](https://modrinth.com/mod/litemoretica) exige Litematica en cliente; la excepción queda limitada a la versión comprobada y no permite inferir requisitos arbitrarios de otros mods. Las bibliotecas se descargan y verifican dentro de la aplicación atómica del plan; una repetición sin cambios no las vuelve a descargar.
 
 Algunas versiones de Forge anuncian IDs y marcadores de compatibilidad; pueden truncar la información y no entregan hashes ni archivos de Modrinth. No existe una petición universal que proporcione el inventario instalable completo para todos los loaders. La comprobación al pulsar Jugar usa el servicio explícito. Fuentes: [código oficial de Forge](https://github.com/MinecraftForge/MinecraftForge/blob/1.20.x/src/main/java/net/minecraftforge/network/ServerStatusPing.java), [identificación por hash de Modrinth](https://docs.modrinth.com/api/operations/versionfromhash/) y [CLI de ZeroTier](https://docs.zerotier.com/cli/).
 
@@ -44,11 +97,16 @@ ZeroTier aporta conectividad y autorización de red; no publica el índice autom
 
 ## Verificación
 
-Las pruebas cubren HTTP local, rutas/métodos rechazados, índices y perfiles inválidos, actualización, retirada de proyectos gestionados, archivos locales, hash incorrecto, cancelación y planes obsoletos. La prueba de integración optativa instala Fabric API y Sodium reales en una instancia temporal, excluye Sodium de la base común y sincroniza Fabric API hacia otra instancia por HTTP local, comparando hashes finales.
+Las pruebas cubren HTTP local, rutas/métodos rechazados, índices y perfiles inválidos, actualización, retirada de proyectos gestionados y JAR propios, archivos locales, hash incorrecto, cancelación y planes obsoletos. Una carpeta de prueba contiene 163 mods: 144 identificados y 19 propios; se publica el índice completo y sus avisos. También se prueban descripciones con LF/CRLF/tabulaciones sin escapar, descriptores truncados, escapes JSON válidos, límites y conservación de hashes. No son los archivos reales del anfitrión. Las regresiones también cubren pins con y sin proyecto, dependencias transitivas y ciclos, 163 mods en el cliente, caché parcial y negativa, respuestas inválidas y pausas por 429. La integración optativa con Surveyor 1.2.4 y Fabric API 0.116.17 reales verifica la publicación, preparación y descarga final sin reemplazar la versión instalada. La publicación del índice corregido con su carpeta real y la conexión de los clientes siguen pendientes.
 
 ```powershell
 cargo test -j 1 -p icaro-core mods::sincronizacion --lib
+cargo test --locked -p icaro-core --lib modrinth::
+cargo test --locked -p icaro-core --lib http::
+cargo test --locked -p icaro-core --example sync_host
+cargo test --locked -p icaro-core --lib surveyor_real_con_fabric_instalada -- --ignored
 cargo test -j 1 -p icaro-core modrinth_real_publica_indice --lib -- --ignored
+cargo test --locked -j 1 -p icaro-core ksyxis_real_no_bloquea --lib -- --ignored
 cargo test -j 1 -p icaro-ui --example launcher sincronizacion_real -- --test-threads=1
 ```
 

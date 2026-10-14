@@ -1,5 +1,7 @@
 # Instancias locales y archivos sin verificar
 
+Las preferencias de sensibilidad, controles y gráficos se comparten automáticamente entre instancias mediante una mezcla de opciones compatibles al iniciar y al terminar Minecraft. Consulta [preferencias compartidas](opciones-minecraft.md) para el alcance, las teclas de mods y el comportamiento con sesiones simultáneas.
+
 Las instancias nuevas usan `Icaro/instances/<nombre>/minecraft`, bajo el directorio de datos del usuario. Por ejemplo, una instancia llamada `boys` queda en `%APPDATA%\Icaro\instances\boys\minecraft` en Windows. El identificador interno sigue siendo estable: cuentas, preferencias, trabajos y registros no dependen del nombre de la carpeta.
 
 Los caracteres reservados del sistema de archivos se sustituyen por `_`. Los nombres reservados de Windows reciben el prefijo `Instancia`, y las colisiones entre nombres saneados reciben `(2)`, `(3)`, etc. No se sobrescriben carpetas ajenas que ocupen ese nombre. Dos instancias con el mismo nombre visible, ignorando mayúsculas, siguen rechazándose.
