@@ -73,7 +73,7 @@ Una vista puede estar implementada visualmente y tener su función pendiente. Po
 | `ListaVirtual` | Parcial | Selectores de versiones y consola dibujan solo filas visibles; compatibilidad en segundo plano con caché y cuatro destinos simultáneos. Catálogos con paginación; falta extender la virtualización al explorador de archivos. |
 | `ListaReordenable` | Parcial | El arrastre de servidores reales guarda el orden al soltar y Escape lo cancela. Falta aplicarla a recursos reales y persistir sus prioridades en el juego. |
 | `SelectorColor` | Pendiente | Falta conectar el selector definido a iconos/colores de instancia y revisar su composición original. |
-| `ZonaSoltar` | Parcial | Hay estados de arrastre en las maquetas. Skins ya valida y carga PNG reales por arrastre; falta conectar la importación local de packs/recursos. |
+| `ZonaSoltar` | Parcial | La importación local de modpacks conecta clic y arrastre de MRPACK/ZIP a la revisión real, con los estados de reposo y arrastre del diseño. Skins también valida PNG reales por arrastre. Falta extenderla a la importación de recursos independientes. |
 
 ## Ventana, bienvenida y sesión
 

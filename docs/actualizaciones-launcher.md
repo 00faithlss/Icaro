@@ -1,6 +1,6 @@
 # Actualizaciones de Icaro Launcher
 
-El [instalador de Windows](instalador-windows.md) usa Inno Setup por usuario. El workflow compila, prueba y publica una actualización al recibir cambios en `main`, crear una rama `vX.Y.Z`, recibir cambios en ella o subir un tag `vX.Y.Z`. Rama/tag de versión deben coincidir con Cargo. Una ejecución manual solo entrega artefactos. La primera publicación automática pasó en GitHub; cada revisión nueva requiere completar sus comprobaciones antes de estar disponible para otros equipos.
+El [instalador de Windows](instalador-windows.md) usa Inno Setup por usuario. El workflow compila, prueba y publica una actualización al recibir cambios en `main`, crear una rama de mantenimiento `vX.Y.x`, recibir cambios en ella o subir un tag `vX.Y.Z`. La línea mayor/menor de la rama y la versión exacta del tag deben coincidir con Cargo. Una ejecución manual solo entrega artefactos. La primera publicación automática pasó en GitHub; cada revisión nueva requiere completar sus comprobaciones antes de estar disponible para otros equipos.
 
 La pantalla sigue `ActualizacionLauncher` del System Design: Saturno en el lateral, versión y tamaño reales, notas agrupadas y acciones **Actualizar ahora**, **Al cerrar Icaro Launcher** y **Más tarde**. Se abre desde **Ajustes → Acerca de → Actualización**; la comprobación por sí sola no interrumpe al usuario. Una nueva versión se anuncia con el banner informativo existente.
 
@@ -49,3 +49,18 @@ El workflow genera hashes de los archivos finales, `latest.json` y una release p
 Validación local del 13-10-2026: 9 pruebas del módulo de actualización, 49 del launcher y una regresión de integración con Windows PowerShell aprobadas. El ayudante real rechazó un hash incorrecto sin sustituir el portable, aplicó el reintento y sobrescribió el resultado de fallo. También ejecutó el setup silencioso sobre una compilación distinta en una ruta de prueba con espacios y acento: ejecutable final y registro comprobados; dos metadatos de usuario y un archivo ajeno conservados tras desinstalar la prueba. Se inspeccionaron 16 capturas nativas de fixtures de descarga, preparación, éxito y fallo, a 1280×800 y 940×720, en Tinta/Piedra, reutilizando la pantalla original. Los fixtures no descargan ni instalan actualizaciones. Esta validación local no sustituye el recorrido completo desde una release remota.
 
 Referencias: [releases de GitHub](https://docs.github.com/en/rest/releases/releases) y [parámetros de Inno Setup](https://jrsoftware.org/ishelp/topic_setupcmdline.htm).
+
+## Flujo de publicación
+
+Prepara código, versión de Cargo, lockfile y notas Markdown/JSON en la rama de mantenimiento, por ejemplo `v0.2.x`. Publica el tag de código `v0.2.1` y espera la compilación, pruebas y empaquetado de GitHub Actions. La release descargable conserva `v0.2.1-build.<compilación>`: no renombres ese tag o la release, porque los launchers anteriores comprueban que coincida con `latest.json`.
+
+Después integra la misma entrega en `develop` y `main`. Si la release más reciente contiene exactamente el mismo árbol y sus artefactos de actualización, el workflow reutiliza la publicación verificada. Evita así generar otras compilaciones de la misma entrega al subir el tag o hacer el merge. Un cambio de contenido o una ejecución manual sí vuelve a compilar.
+
+La verificación pública se ejecuta una vez publicada la release, sin aplicar la actualización:
+
+```powershell
+$env:ICARO_QA_VERSION_ACTUAL = '0.2.0'
+$env:ICARO_QA_VERSION_ESPERADA = '0.2.1'
+cargo test --locked -p icaro-core --test actualizacion_publicada -- --ignored --nocapture
+Remove-Item Env:ICARO_QA_VERSION_ACTUAL,Env:ICARO_QA_VERSION_ESPERADA
+```

@@ -22,7 +22,42 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ env.ICARO_REF }}
+      - name: Comprobar rama o tag de versión
+        if: startsWith(env.ICARO_REF, 'v')
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudo leer la versión de Cargo' }
+          $version = ($metadata.packages | Where-Object name -EQ 'icaro-ui').version
+          if ($env:ICARO_REF -match '^v(\d+)\.(\d+)\.x$') {
+            $linea = "$($Matches[1]).$($Matches[2])."
+            if (-not $version.StartsWith($linea)) { throw 'La rama de mantenimiento no coincide con la versión de Cargo' }
+          } elseif ($env:ICARO_REF -ne "v$version") {
+            throw 'La rama o tag no coincide con la versión de Cargo'
+          }
+      - name: Reutilizar una publicación idéntica
+        id: publicacion
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          'repetida=false' >> $env:GITHUB_OUTPUT
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') { exit 0 }
+          $previous = gh api "repos/$env:GITHUB_REPOSITORY/releases/latest" 2>$null
+          if ($LASTEXITCODE -ne 0) { exit 0 }
+          $previous = $previous | ConvertFrom-Json
+          $version = (Select-String -LiteralPath Cargo.toml -Pattern '^version = "(\d+\.\d+\.\d+)"$').Matches.Groups[1].Value
+          if ($previous.tag_name -notmatch ('^v' + [regex]::Escape($version) + '-build\.\d+$')) { exit 0 }
+          $assets = @($previous.assets.name)
+          if ('latest.json' -notin $assets -or "icaro-$version-windows-x86_64.exe" -notin $assets -or "icaro-$version-windows-x86_64-setup.exe" -notin $assets) { exit 0 }
+          $previousTree = gh api "repos/$env:GITHUB_REPOSITORY/commits/$($previous.tag_name)" --jq '.commit.tree.sha'
+          if ($LASTEXITCODE -ne 0) { throw 'No se pudo comprobar la revisión publicada' }
+          if ($previousTree.Trim() -eq (git rev-parse 'HEAD^{tree}').Trim()) {
+            'repetida=true' >> $env:GITHUB_OUTPUT
+            Write-Output 'El mismo contenido ya pasó las comprobaciones y tiene su actualización publicada.'
+          }
       - name: Verificar núcleo e interfaz
+        if: steps.publicacion.outputs.repetida != 'true'
         shell: pwsh
         run: |
           cargo test --locked -j1 -p icaro-core --lib --test actualizacion_local
@@ -30,6 +65,7 @@ jobs:
           cargo test --locked -j1 -p icaro-ui --lib --example launcher -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Fallaron las pruebas de la interfaz' }
       - name: Preparar Inno Setup firmado
+        if: steps.publicacion.outputs.repetida != 'true'
         shell: pwsh
         run: |
           $setup = Join-Path $env:RUNNER_TEMP 'inno-6.7.3.exe'
@@ -39,24 +75,19 @@ jobs:
           $compiler = Join-Path $env:RUNNER_TEMP 'inno-6.7.3'
           $process = Start-Process -FilePath $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS',('/DIR="' + $compiler + '"')) -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw 'No se pudo preparar Inno Setup' }
-      - name: Comprobar rama o tag de versión
-        if: startsWith(env.ICARO_REF, 'v')
-        shell: pwsh
-        run: |
-          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
-          $version = ($metadata.packages | Where-Object name -EQ 'icaro-ui').version
-          if ($env:ICARO_REF -ne "v$version") { throw 'La rama o tag no coincide con la versión de Cargo' }
       - name: Compilar y empaquetar
+        if: steps.publicacion.outputs.repetida != 'true'
         shell: pwsh
         run: ./scripts/empaquetar_windows.ps1 -Compilador (Join-Path $env:RUNNER_TEMP 'inno-6.7.3/ISCC.exe')
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: steps.publicacion.outputs.repetida != 'true'
         with:
           name: icaro-windows-x86_64
           path: target/dist/windows/*
           if-no-files-found: error
           retention-days: 30
       - name: Publicar actualización verificada
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch' && steps.publicacion.outputs.repetida != 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

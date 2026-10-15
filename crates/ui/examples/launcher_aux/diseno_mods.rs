@@ -4,7 +4,7 @@
 //! TiendaMods, FilaMod, ModsInstancia y FichaMod del RAR, con datos reales.
 use crate::{mods_reales, servicios, App, Mensaje};
 use icaro_core::{
-    modrinth::{Catalog, Kind, Order, Project, Version},
+    modrinth::{Kind, Order, Project, Version},
     mods,
 };
 use icaro_ui::{
@@ -114,9 +114,10 @@ fn preparar(
         roots.retain(|v| v.project_id != id);
     }
     let id = i.id.clone();
+    let source = app.servicios.catalog.clone();
     Task::perform(
         async move {
-            let catalog = Catalog::new().map_err(|e| e.to_string())?;
+            let catalog = source.map_err(|e| e.to_string())?;
             if let Some((project, chosen)) = agregar {
                 let mut available = if let Some(v) = chosen {
                     vec![catalog.version(&v).await.map_err(|e| e.to_string())?]
@@ -239,16 +240,21 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 .diseno
                 .pendientes
                 .extend(query.iter().cloned());
-            // Publicar cada fila al recibirla, sin esperar por toda la lista.
+            let source = app.servicios.catalog.clone();
+            // Consultar proyectos en lotes y reutilizar miembros ya resueltos.
             return Task::run(
                 iced::stream::channel(8, async move |mut output| {
-                    let catalog = Catalog::new().map_err(|e| e.to_string());
+                    let catalog = source.map_err(|e| e.to_string());
+                    let projects = match &catalog {
+                        Ok(catalog) => catalog.projects_by_ids(&query).await.map_err(|e|e.to_string()),
+                        Err(e) => Err(e.clone()),
+                    };
                     for id in query {
                         let r = match &catalog {
                             Ok(catalog) => {
                                 async {
-                                    let p =
-                                        catalog.project(&id).await.map_err(|e| e.to_string())?;
+                                    let p = projects.as_ref().map_err(Clone::clone)?.get(&id)
+                                        .cloned().ok_or("El proyecto ya no está disponible.".to_owned())?;
                                     let members = catalog.members(&id).await.unwrap_or_default();
                                     let author = members
                                         .iter()
@@ -263,6 +269,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                         };
                         let _ = output.send(Accion::Metadatos(vec![(id, r)])).await;
                     }
+                    if let Ok(catalog)=catalog {let _=catalog.guardar_metadata_cache().await;}
                 }),
                 m,
             );

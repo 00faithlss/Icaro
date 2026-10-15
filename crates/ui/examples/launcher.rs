@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 00faithlss
 
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
 //! Launcher con autenticación y catálogo conectados. ICARO_DEMO=1 carga ejemplos.
 //! Ejecutar con
 //! `cargo run -p icaro-ui --example launcher`.
@@ -262,6 +264,7 @@ enum Mensaje {
     Icono(icono_instancia::Accion),
     ExportarLista(exportar_lista_mods::Accion),
     IconoEvento(iced::Event),
+    ModpackEvento(iced::Event),
     TemaSistema(bool),
     ComprobarTemaSistema,
     Actualizacion(actualizacion_real::Accion),
@@ -1218,6 +1221,7 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         Mensaje::ExportarLista(a) => return exportar_lista_mods::actualizar(app,a),
         Mensaje::Icono(a) => return icono_instancia::actualizar(app,a),
         Mensaje::IconoEvento(e) => {if let Some(a)=icono_instancia::evento(app,&e){return icono_instancia::actualizar(app,a);}}
+        Mensaje::ModpackEvento(e) => {if let Some(a)=modpacks_reales::evento(app,e){return modpacks_reales::actualizar(app,a);}}
         Mensaje::TemaSistema(claro) => { if app.tema==2 {app.modo=if claro {Modo::Piedra}else{Modo::Tinta};Lamina::precargar(app.modo);} }
         Mensaje::Tema(i) => {
             app.tema = i.min(2);
@@ -3552,6 +3556,13 @@ fn main() -> iced::Result {
                     _ => None,
                 }));
                 return iced::Subscription::batch(subs);
+            }
+            if app.servicios.modpacks.abierto {
+                subs.push(iced::event::listen_with(|e,_,_| match e {
+                    iced::Event::Window(window::Event::FileHovered(_) | window::Event::FilesHoveredLeft | window::Event::FileDropped(_)) => Some(Mensaje::ModpackEvento(e)),
+                    iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter), .. }) => Some(Mensaje::ModpackEvento(e)),
+                    _=>None,
+                }));
             }
             subs.push(iced::keyboard::on_key_press(|k, _| {
                 (k == iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete)).then_some(Mensaje::PicarEmpezar)

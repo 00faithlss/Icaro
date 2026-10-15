@@ -5,7 +5,7 @@
 use crate::{App, Mensaje};
 use icaro_core::{
     instancias::Instancia,
-    modrinth::{Catalog, Version},
+    modrinth::Version,
     mods::{self, Instalado},
 };
 use icaro_ui::{
@@ -79,6 +79,7 @@ pub fn updates(app: &App) -> &[Version] {
         .map_or(&[], Vec::as_slice)
 }
 fn revisar(app: &mut App, i: Instancia) -> Task<Mensaje> {
+    let source = app.servicios.catalog.clone();
     let s = &mut app.servicios.mods;
     s.secuencia += 1;
     let request = s.secuencia;
@@ -87,10 +88,12 @@ fn revisar(app: &mut App, i: Instancia) -> Task<Mensaje> {
     let id = i.id.clone();
     Task::perform(
         async move {
-            let catalog = Catalog::new().map_err(|e| e.to_string())?;
-            mods::actualizaciones(&catalog, &installed, &i.minecraft, &i.loader)
+            let catalog = source.map_err(|e| e.to_string())?;
+            let result = mods::actualizaciones(&catalog, &installed, &i.minecraft, &i.loader)
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string());
+            let _ = catalog.guardar_metadata_cache().await;
+            result
         },
         move |r| m(Accion::Revisadas(id.clone(), request, r)),
     )
@@ -151,6 +154,7 @@ pub fn recargar(app: &mut App, id: &str) {
     }
 }
 pub fn ejecutar(app: &mut App, i: Instancia, versions: Vec<Version>) -> Task<Mensaje> {
+    let source = app.servicios.catalog.clone();
     let s = &mut app.servicios.mods;
     s.secuencia += 1;
     let request = s.secuencia;
@@ -166,8 +170,8 @@ pub fn ejecutar(app: &mut App, i: Instancia, versions: Vec<Version>) -> Task<Men
         iced::stream::channel(32, async move |mut output| {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
             let operation = async {
-                let catalog = Catalog::new().map_err(|e| e.to_string())?;
-                mods::instalar(
+                let catalog = source.map_err(|e| e.to_string())?;
+                let result = mods::instalar(
                     &catalog,
                     &store,
                     &id,
@@ -180,7 +184,9 @@ pub fn ejecutar(app: &mut App, i: Instancia, versions: Vec<Version>) -> Task<Men
                 )
                 .await
                 .map(|_| ())
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string());
+                let _ = catalog.guardar_metadata_cache().await;
+                result
             };
             tokio::pin!(operation);
             let result = loop {
@@ -252,9 +258,10 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             app.servicios.mods.errores.remove(&i.id);
             app.servicios.mods.progreso = "Buscando una versión compatible…".into();
             let record = i.clone();
+            let source = app.servicios.catalog.clone();
             return Task::perform(
                 async move {
-                    let catalog = Catalog::new().map_err(|e| e.to_string())?;
+                    let catalog = source.map_err(|e| e.to_string())?;
                     let mut versions = if let Some(v) = version {
                         vec![catalog.version(&v).await.map_err(|e| e.to_string())?]
                     } else {

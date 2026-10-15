@@ -225,6 +225,10 @@ pub fn inventario(store: &Almacen, id: &str) -> Result<Vec<Instalado>, Error> {
     Ok(mods)
 }
 pub trait Fuente: Sync {
+    fn actualizaciones_por_hash(&self, _hashes: &[String], _mc: &str, _loader: &str)
+        -> impl std::future::Future<Output = Result<Option<BTreeMap<String, Version>>, Error>> + Send {
+        async { Ok(None) }
+    }
     fn versiones_exactas(&self, ids: &[String]) -> impl std::future::Future<Output = Result<BTreeMap<String, Version>, Error>> + Send {
         async move {
             let mut versions = BTreeMap::new();
@@ -256,6 +260,11 @@ pub trait Fuente: Sync {
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Error>> + Send;
 }
 impl Fuente for Catalog {
+    async fn actualizaciones_por_hash(&self, hashes:&[String], mc:&str, loader:&str) -> Result<Option<BTreeMap<String, Version>>, Error> {
+        let mut result=BTreeMap::new();
+        for batch in hashes.chunks(512) {result.extend(self.latest_from_hashes(batch,mc,loader).await?);}
+        Ok(Some(result))
+    }
     async fn versiones_exactas(&self, ids: &[String]) -> Result<BTreeMap<String, Version>, Error> {
         Ok(self.versions_by_ids(ids).await?)
     }
@@ -950,6 +959,28 @@ pub async fn actualizaciones(
     mc: &str,
     loader: &str,
 ) -> Result<Vec<Version>, Error> {
+    let identificados: Vec<_> = installed.iter().filter(|m| !m.project_id.is_empty()
+        && m.sha512.len()==128 && m.sha512.bytes().all(|b|b.is_ascii_hexdigit())).collect();
+    let hashes: Vec<_> = identificados.iter().map(|m|m.sha512.to_lowercase()).collect::<BTreeSet<_>>().into_iter().collect();
+    let batch = source.actualizaciones_por_hash(&hashes,mc,loader).await?;
+    if let Some(batch) = &batch {
+        let mut result=vec![];
+        for m in &identificados {
+            if let Some(v)=batch.get(&m.sha512.to_lowercase()).filter(|v|v.project_id==m.project_id
+                && v.id!=m.version_id && v.version_type=="release" && compatible(v,mc,loader)) {
+                let published=if m.publicada.is_empty(){source.version(&m.version_id).await?.date_published}else{m.publicada.clone()};
+                if v.date_published>published {result.push(v.clone());}
+            }
+        }
+        let fallback:Vec<_>=installed.iter().filter(|m|!identificados.iter().any(|i|i.project_id==m.project_id)).cloned().collect();
+        // Los inventarios antiguos sin hash mantienen su comprobación por proyecto.
+        result.extend(actualizaciones_proyectos(source,&fallback,mc,loader).await?);
+        return Ok(result);
+    }
+    actualizaciones_proyectos(source,installed,mc,loader).await
+}
+
+async fn actualizaciones_proyectos(source:&impl Fuente, installed:&[Instalado], mc:&str, loader:&str) -> Result<Vec<Version>, Error> {
     let mut result = vec![];
     for m in installed.iter().filter(|m| !m.project_id.is_empty()) {
         let versions = source.versiones(&m.project_id, mc, loader).await?;

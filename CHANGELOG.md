@@ -1,8 +1,21 @@
 # Changelog
 
+## [0.2.1] - 2026-10-15
+
+- Añade selección de MRPACK/ZIP por ruta y con Examinar, y adapta ImportarModpack al diseño entregado: grabado, iconos, fases de lectura, resumen, nombre/grupo y recuperación de errores.
+- Conecta el componente ZonaSoltar del diseño a la importación local: clic, arrastre, revisión y protección frente a archivos adicionales durante una operación.
+
+- Corrige la rueda del selector de versiones dentro del asistente de instancias.
+- El ejecutable del launcher para Windows abre la interfaz sin una consola de fondo.
+- Añade importación local de MRPACK y ZIP completos Vanilla/Fabric en instancias nuevas, con revisión, extracción por bloques y recuperación desde Descargas.
+- Comparte caché y pausa de Modrinth entre tienda, cesta e instalación; agrupa comprobaciones de actualización por hash y fichas por proyecto para evitar repetir peticiones al añadir otro mod.
+- Adapta la publicación a la rama de mantenimiento `v0.2.x`, conserva el tag `v0.2.1` para el código y evita volver a compilar/publicar el mismo contenido al integrarlo en otras ramas.
+
+Validación: pruebas del núcleo y de la interfaz, importación ZIP64 sintética de más de 2 GiB, conservación de archivos y capturas en Tinta/Piedra. El usuario confirmó la importación de su instancia real. Los ZIP que solo contienen referencias de CurseForge y los instaladores de Quilt/Forge/NeoForge siguen pendientes; consulta las [notas completas](docs/releases/0.2.1.md).
+
 ## [0.2.0] - 2026-10-14
 
-Publicación consolidada de las mejoras de servidores y las correcciones probadas durante su preparación. La rama y el tag de esta entrega son `v0.2.0`.
+Publicación consolidada de las mejoras de servidores y las correcciones probadas durante su preparación. Su tag es `v0.2.0`; la rama de mantenimiento es `v0.2.x`.
 
 ### Añadido
 
@@ -42,5 +55,6 @@ Publicación consolidada de las mejoras de servidores y las correcciones probada
 
 Primera entrega pública para Windows: instancias Vanilla y Fabric, catálogo de contenido, cuentas, consola, capturas y actualización del launcher. Consulta las [notas completas](docs/releases/0.1.0.md).
 
+[0.2.1]: https://github.com/00faithlss/Icaro-launcher/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/00faithlss/Icaro-launcher/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/00faithlss/Icaro-launcher/tree/v0.1.0
