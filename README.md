@@ -6,6 +6,8 @@ La primera entrega pública es **0.1.0**, con paquetes para Windows. Descarga el
 
 La versión **0.2.0** incorpora la sincronización con servidores dedicados y corrige dependencias, Java y navegación, con caché persistente de Modrinth. Consulta las [notas de 0.2.0](docs/releases/0.2.0.md) y el [changelog](CHANGELOG.md).
 
+La actualización **0.2.1** añade importación local de MRPACK/ZIP, corrige el scroll del selector y la consola de fondo en Windows, y comparte las consultas de Modrinth entre instalaciones. Consulta las [notas de 0.2.1](docs/releases/0.2.1.md). La línea de mantenimiento es `v0.2.x`.
+
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
@@ -34,7 +36,7 @@ Icaro Launcher está en desarrollo. La interfaz ya permite recorrer instancias, 
 
 El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, comprueba tamaño y SHA-1 y reutiliza la instalación guardada. Java respeta la selección manual y la compatibilidad del perfil. En automático, con descargas habilitadas prepara el runtime gestionado; con descargas deshabilitadas detecta Java local compatible, incluidos runtimes del launcher oficial. Consulta [Vanilla y Java](docs/vanilla-y-java.md) para probar el recorrido.
 
-Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** reutiliza la tienda original con resultados en lista y filtros. **Elegir versión** abre la tabla del proyecto y permite instalar su versión exacta. Instala los MRPACK de Modrinth en nuevas instancias Vanilla o Fabric, con revisión previa, elección de archivos opcionales, hashes verificados y pausa/cancelación en Descargas. Los packs de Quilt, Forge y NeoForge requieren sus instaladores pendientes.
+Los mods, resourcepacks y shaders se gestionan dentro de cada instancia con filas y controles compartidos. Los resourcepacks se activan en `options.txt`; los shaders usan la configuración existente de Iris. La sección **Modpacks** reutiliza la tienda original con resultados en lista y filtros. **Elegir versión** abre la tabla del proyecto y permite instalar su versión exacta. Instala los MRPACK de Modrinth en nuevas instancias Vanilla o Fabric, con revisión previa, elección de archivos opcionales, hashes verificados y pausa/cancelación en Descargas. **Instancias → Importar** también admite MRPACK locales y ZIP completos, incluidos mods, resourcepacks y configuración: consulta [importación local](docs/importar-modpacks.md). Los packs de Quilt, Forge y NeoForge requieren sus instaladores pendientes.
 
 Las instancias usan carpetas legibles por nombre, mantienen su identidad interna y guardan su configuración en `instance.json`. La carpeta `.icaro` contiene el perfil instalado y los nativos; assets, bibliotecas y clientes se comparten entre instancias. Las rutas anteriores se migran al recuperar las instancias, conservando sus mundos. El editor permite cambiar el icono desde su imagen o el menú de acciones, recortarlo y volver al icono generado. Consulta [instancias locales](docs/instancias-locales.md).
 

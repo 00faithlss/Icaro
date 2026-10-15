@@ -22,14 +22,15 @@ Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; F
 
 ## 2. Importación e instalación de modpacks
 
-**Estado actual:** la tienda instala los MRPACK de Modrinth en nuevas instancias Vanilla/Fabric. La revisión muestra Minecraft, la versión exacta del loader y los archivos opcionales; la instalación verifica SHA-512/SHA-1 y aplica overrides/client-overrides antes de preparar el juego. Pasó la instalación completa de Fabulously Optimized 14.1.1 con Minecraft 26.2/Fabric 0.19.5 y reutilización sin descargas. La importación desde archivos locales, ZIP de otros launchers y los instaladores de Quilt/Forge/NeoForge siguen pendientes.
+**Estado actual:** la tienda instala los MRPACK de Modrinth en nuevas instancias Vanilla/Fabric. La revisión muestra Minecraft, la versión exacta del loader y los archivos opcionales; la instalación verifica SHA-512/SHA-1 y aplica overrides/client-overrides antes de preparar el juego. Pasó la instalación completa de Fabulously Optimized 14.1.1 con Minecraft 26.2/Fabric 0.19.5 y reutilización sin descargas. Instancias también permite seleccionar MRPACK locales y ZIP completos, incluidos perfiles Vanilla/Fabric de Prism/MultiMC y contenido exportado por Ícaro. La lectura/extracción se hace por bloques; consulta [importación local](importar-modpacks.md). Siguen pendientes los instaladores de Quilt/Forge/NeoForge. El usuario confirmó la importación de su instancia; las comprobaciones de compatibilidad y juego siguen siendo específicas de cada paquete.
 
 - [x] Leer MRPACK desde el catálogo de Modrinth: metadatos, Minecraft, loader, referencias de archivos, hashes y archivos incluidos; presentar una revisión antes de importar.
 - [x] Descargar y verificar los archivos referenciados de MRPACK de Modrinth, aplicar los archivos incluidos y preparar Vanilla o Fabric mediante sus perfiles oficiales.
 - [ ] Extender la instalación de modpacks a Quilt, Forge y NeoForge cuando estén disponibles sus instaladores.
-- [ ] Importar los ZIP de Ícaro y los formatos compatibles de Prism/MultiMC; detectar el formato y explicar los formatos no admitidos.
-- [ ] Conectar la selección de archivo y ZonaSoltar a la importación real.
-- [ ] Aplicar a la importación local y los ZIP de otros launchers las validaciones de rutas, enlaces y límites de extracción que ya tiene el instalador MRPACK de Modrinth.
+- [x] Importar contenido de ZIP de Ícaro y perfiles Vanilla/Fabric compatibles de Prism/MultiMC; detectar el formato y explicar los formatos no admitidos.
+- [x] Conectar la selección de archivo a la importación real de MRPACK y ZIP completos.
+- [x] Conectar ZonaSoltar a la importación real, con clic, arrastre y estados ocupado/cancelado.
+- [x] Validar rutas, enlaces, colisiones, integridad y límites de extracción en la importación local.
 - [ ] Integrar ArchivosNoVerificados para los archivos sin origen comprobado; conservar las decisiones de confianza asociadas al contenido exacto.
 - [ ] Completar el descubrimiento/importación desde otros launchers y la duplicación de una instancia sin alterar el original.
 - [ ] Probar la importación manual de los ZIP exportados en Prism/MultiMC; actualmente se verifica su estructura con pruebas.

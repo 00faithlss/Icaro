@@ -16,6 +16,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 const LIMITE: u64 = 256 * 1024 * 1024;
 const ESTADO: &str = "modpack.json";
+pub mod local;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Indice {
@@ -52,6 +53,8 @@ pub struct Plan {
     pub opcionales: bool,
     fuente: Fuente,
     indice: Indice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    local: Option<local::ArchivoLocal>,
 }
 #[derive(Serialize, Deserialize)]
 struct Guardado {
@@ -393,6 +396,51 @@ fn zip(bytes: &[u8]) -> Result<(Indice, BTreeMap<String, Vec<u8>>), String> {
     Ok((index, overrides))
 }
 impl Plan {
+    pub fn formato(&self) -> &str {
+        self.local.as_ref().map_or("Modrinth", |l| l.formato())
+    }
+    pub fn bytes_archivo(&self) -> u64 {
+        self.fuente.size
+    }
+    pub fn archivos_por_descargar(&self) -> usize {
+        self.indice
+            .files
+            .iter()
+            .filter(|f| {
+                f.env
+                    .get("client")
+                    .is_none_or(|v| v != "unsupported" && (self.opcionales || v != "optional"))
+                    && !self.local.as_ref().is_some_and(|l| l.contiene(&f.path))
+            })
+            .count()
+    }
+    /// Tamaños y carpetas reales de la selección de cliente, sin contar dos veces overrides.
+    pub fn resumen(&self) -> (u64, u64, Vec<String>, usize) {
+        let (incluidos, carpetas, mut mods) = self
+            .local
+            .as_ref()
+            .map(|l| l.resumen(self))
+            .unwrap_or_default();
+        let mut descarga = 0;
+        for f in &self.indice.files {
+            if f.env
+                .get("client")
+                .is_some_and(|v| v == "unsupported" || (!self.opcionales && v == "optional"))
+            {
+                continue;
+            }
+            if !self.local.as_ref().is_some_and(|l| l.contiene(&f.path)) {
+                descarga += f.file_size;
+                if f.path.starts_with("mods/") && f.path.ends_with(".jar") {
+                    mods.push(f.path.clone());
+                }
+            }
+        }
+        (descarga, incluidos, carpetas, mods.len())
+    }
+    pub fn archivos_incluidos(&self) -> usize {
+        self.local.as_ref().map_or(0, |l| l.cantidad(self))
+    }
     pub fn archivos_cliente(&self) -> usize {
         self.indice
             .files
@@ -481,6 +529,7 @@ pub async fn preparar(
         opcionales: true,
         fuente,
         indice: index,
+        local: None,
     })
 }
 pub fn crear(store: &Almacen, plan: &Plan) -> Result<Instancia, String> {
@@ -530,13 +579,24 @@ pub fn crear(store: &Almacen, plan: &Plan) -> Result<Instancia, String> {
     Ok(instance)
 }
 /// La instancia no está lista mientras su MRPACK conserve una instalación pendiente.
-pub fn completo(store:&Almacen,instance:&Instancia)->bool {
-    let Ok(folder)=store.carpeta(&instance.id) else{return false;};
-    let path=folder.join(".icaro").join(ESTADO);
-    if segura(&folder,&path,false).is_err(){return false;}
-    if !path.exists(){return true;}
-    if !fs::metadata(&path).is_ok_and(|m|m.len()<=16*1024*1024){return false;}
-    fs::read(path).ok().and_then(|b|serde_json::from_slice::<Guardado>(&b).ok()).is_some_and(|s|s.schema==1&&s.completo)
+pub fn completo(store: &Almacen, instance: &Instancia) -> bool {
+    let Ok(folder) = store.carpeta(&instance.id) else {
+        return false;
+    };
+    let path = folder.join(".icaro").join(ESTADO);
+    if segura(&folder, &path, false).is_err() {
+        return false;
+    }
+    if !path.exists() {
+        return true;
+    }
+    if !fs::metadata(&path).is_ok_and(|m| m.len() <= 16 * 1024 * 1024) {
+        return false;
+    }
+    fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Guardado>(&b).ok())
+        .is_some_and(|s| s.schema == 1 && s.completo)
 }
 
 pub async fn instalar(
@@ -578,22 +638,66 @@ pub async fn instalar(
             total,
         })
     };
-    let bytes = descargar(&client, &saved.plan.fuente, &root, &c, || {
-        report("Descargando modpack", 0, 0)
-    })
-    .await?;
-    let (index, mut overrides) = zip(&bytes)?;
+    let (index, mut overrides) = if let Some(local) = saved
+        .plan
+        .local
+        .as_ref()
+        .map(|l| l.para_cliente(&saved.plan))
+    {
+        let store = store.clone();
+        let instance = instance.clone();
+        let token = c.clone();
+        // Extracción y SHA-512 fuera del ejecutor; memoria acotada para paquetes grandes.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let worker = tokio::task::spawn_blocking(move || {
+            local::extraer(&store, &instance, &local, &token, |done, total| {
+                let _ = tx.send((done, total));
+            })
+        });
+        tokio::pin!(worker);
+        loop {
+            tokio::select! {
+                result = &mut worker => {
+                    result.map_err(|_| "No se pudo extraer el modpack.".to_owned())??;
+                    break;
+                },
+                Some((done, total)) = rx.recv() => report("Extrayendo archivos del modpack", done, total),
+            }
+        }
+        (saved.plan.indice.clone(), BTreeMap::new())
+    } else {
+        let bytes = descargar(&client, &saved.plan.fuente, &root, &c, || {
+            report("Descargando modpack", 0, 0)
+        })
+        .await?;
+        zip(&bytes)?
+    };
     if serde_json::to_value(&index).map_err(|e| e.to_string())?
         != serde_json::to_value(&saved.plan.indice).map_err(|e| e.to_string())?
     {
         return Err("El índice del modpack cambió; sus archivos se conservan.".into());
     }
-    overrides.retain(|path,_|index.files.iter().find(|f|&f.path==path).is_none_or(|f|f.env.get("client").is_none_or(|v|v!="unsupported"&&(saved.plan.opcionales||v!="optional"))));
+    overrides.retain(|path, _| {
+        index
+            .files
+            .iter()
+            .find(|f| &f.path == path)
+            .is_none_or(|f| {
+                f.env.get("client").is_none_or(|v| {
+                    v != "unsupported" && (saved.plan.opcionales || v != "optional")
+                })
+            })
+    });
     let files: Vec<_> = index
         .files
         .iter()
         .filter(|f| {
             !overrides.contains_key(&f.path)
+                && !saved
+                    .plan
+                    .local
+                    .as_ref()
+                    .is_some_and(|l| l.contiene(&f.path))
                 && f.env.get("client").is_none_or(|v| {
                     v != "unsupported" && (saved.plan.opcionales || v != "optional")
                 })
@@ -729,7 +833,7 @@ mod tests {
         .unwrap();
         let instance = crear(&store, &plan).unwrap();
         let game = store.juego(&instance.id).unwrap();
-        assert!(!completo(&store,&instance));
+        assert!(!completo(&store, &instance));
         let cancel = CancellationToken::new();
         let observer = cancel.clone();
         assert!(instalar(&store, &instance, cancel, |p| {
@@ -751,7 +855,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(fs::read(game.join("config/test.json")).unwrap(), b"cliente");
-        assert!(completo(&store,&instance));
+        assert!(completo(&store, &instance));
         assert!(
             !game.join("mods/server.jar").exists()
                 && !game.join("mods/optional.jar").exists()

@@ -450,13 +450,17 @@ impl Catalog {
             return Err(Error::Response("los hashes de Modrinth"));
         }
         if hashes.is_empty() { return Ok(Default::default()); }
-        if target.is_none() {
+        {
             if let Some(cache) = &self.metadata {
                 let mut cache = cache.lock().await;
                 let mut result = std::collections::BTreeMap::new();
                 let mut missing = std::collections::BTreeSet::new();
+                let key = |hash: &str| match target {
+                    Some((mc,loader)) => format!("update:{mc}:{loader}:{hash}"),
+                    None => format!("hash:{hash}"),
+                };
                 for hash in hashes {
-                    match cache.get::<Option<Version>>(&format!("hash:{hash}")) {
+                    match cache.get::<Option<Version>>(&key(hash)) {
                         Some(Some(v)) => { result.insert(hash.clone(), v); }
                         Some(None) => {}
                         None => { missing.insert(hash.clone()); }
@@ -464,10 +468,13 @@ impl Catalog {
                 }
                 if !missing.is_empty() {
                     let missing: Vec<_> = missing.into_iter().collect();
-                    let fetched = self.request_hashes(&missing, None).await?;
+                    let fetched = self.request_hashes(&missing, target).await?;
                     for hash in missing {
                         let value = fetched.get(&hash);
-                        cache.insert(format!("hash:{hash}"), &value, if value.is_some() { cache::TTL } else { cache::NEGATIVE_TTL })?;
+                        let ttl = if target.is_some() { Duration::from_secs(300) }
+                            else if value.is_some() { cache::TTL } else { cache::NEGATIVE_TTL };
+                        cache.insert(key(&hash), &value, ttl)?;
+                        if let Some(v)=value {cache.insert(format!("GET {}",self.version_url(&v.id)?),v,cache::TTL)?;}
                     }
                     result.extend(fetched);
                 }
@@ -481,6 +488,7 @@ impl Catalog {
         let endpoint = if let Some((minecraft, loader)) = target {
             body["game_versions"] = serde_json::json!([minecraft]);
             body["loaders"] = serde_json::json!([loader]);
+            body["version_types"] = serde_json::json!(["release"]);
             "version_files/update"
         } else { "version_files" };
         let result: std::collections::BTreeMap<String, Version> = self.json(self.client.post(format!("{}{endpoint}", self.api)).json(&body)).await?;
@@ -603,10 +611,36 @@ impl Catalog {
         });
         Ok(project)
     }
+    /// Reutiliza fichas vigentes y consulta hasta 50 proyectos por petición.
+    pub async fn projects_by_ids(&self, ids: &[String]) -> Result<std::collections::BTreeMap<String, Project>, Error> {
+        if ids.len()>512 {return Err(Error::Response("los proyectos de Modrinth"));}
+        let mut result=std::collections::BTreeMap::new();let mut missing=std::collections::BTreeSet::new();
+        let mut cache=if let Some(c)=&self.metadata {Some(c.lock().await)} else {None};
+        for id in ids {
+            let key=format!("GET {}",self.project_url(id)?);
+            if let Some(p)=cache.as_mut().and_then(|c|c.get::<Project>(&key)).filter(|p|p.id==*id) {result.insert(id.clone(),p);} else {missing.insert(id.clone());}
+        }
+        let missing:Vec<_>=missing.into_iter().collect();
+        for batch in missing.chunks(50) {
+            let mut url=Url::parse(&format!("{}projects",self.api)).map_err(|_|Error::Response("Modrinth"))?;
+            url.query_pairs_mut().append_pair("ids",&serde_json::to_string(batch).map_err(|_|Error::Response("Modrinth"))?);
+            let values:Vec<serde_json::Value>=self.json(self.client.get(url)).await?;
+            let mut fetched=std::collections::BTreeMap::new();
+            for value in values {
+                let p:Project=serde_json::from_value(value.clone()).map_err(|_|Error::Response("los proyectos de Modrinth"))?;
+                if !batch.contains(&p.id)||fetched.insert(p.id.clone(),(p,value)).is_some() {return Err(Error::Response("los proyectos de Modrinth"));}
+            }
+            for (id,(p,value)) in fetched {
+                if let Some(c)=&mut cache {c.insert(format!("GET {}",self.project_url(&id)?),&value,cache::TTL)?;}
+                result.insert(id,p);
+            }
+        }
+        Ok(result)
+    }
     pub async fn members(&self, id: &str) -> Result<Vec<Member>, Error> {
         let mut url = self.project_url(id)?;
         url.set_path(&format!("{}/members", url.path()));
-        let mut members: Vec<Member> = self.json(self.client.get(url)).await?;
+        let mut members: Vec<Member> = self.metadata_json(url).await?;
         // v2 identifica al propietario mediante el rol; otras respuestas incluyen is_owner.
         for member in &mut members {
             member.is_owner |= member.role.eq_ignore_ascii_case("owner");
@@ -654,6 +688,10 @@ impl Catalog {
             })
             .collect();
         versions.sort_by(|a, b| b.date_published.cmp(&a.date_published));
+        if let Some(cache)=&self.metadata {
+            let mut cache=cache.lock().await;
+            for v in &versions {cache.insert(format!("GET {}",self.version_url(&v.id)?),v,cache::TTL)?;}
+        }
         Ok(versions)
     }
 }
