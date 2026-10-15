@@ -1,17 +1,13 @@
 {
   "version": "0.2.1",
   "notas": [
-    {
-      "tipo": "correccion",
-      "texto": "Conserva las dependencias instaladas cuando el pin de Modrinth difiere, con avisos y sin sustituir los JAR del anfitrión."
-    },
-    {
-      "tipo": "mejora",
-      "texto": "Reutiliza metadatos de Modrinth por hash, proyecto y versión, y aplica esperas crecientes ante fallos y límites de solicitudes."
-    },
-    {
-      "tipo": "correccion",
-      "texto": "Permite resolver hasta 512 mods en el cliente y conserva las dependencias transitivas necesarias para sincronizar."
-    }
+    {"tipo":"nuevo","texto":"Importa modpacks .mrpack y ZIP completos desde Instancias: arrastra el archivo, usa Examinar o pega su ruta y pulsa Enter."},
+    {"tipo":"nuevo","texto":"Conserva mods, resourcepacks, configuración y carpetas de juego incluidas; reconoce perfiles Vanilla/Fabric compatibles de Prism y MultiMC."},
+    {"tipo":"nuevo","texto":"Revisa el paquete antes de instalar, elige nombre y grupo, y conserva los iconos, grabados y estados del diseño en Tinta y Piedra."},
+    {"tipo":"correccion","texto":"El scroll vuelve a funcionar en el selector de versiones del asistente de instancias."},
+    {"tipo":"correccion","texto":"El launcher compilado para Windows abre su ventana sin mostrar una terminal de fondo."},
+    {"tipo":"mejora","texto":"La tienda y las instalaciones comparten caché y pausa de Modrinth, agrupan actualizaciones y fichas y consultan solo los hashes nuevos mientras los resultados sigan vigentes."},
+    {"tipo":"mejora","texto":"Los paquetes grandes se procesan por bloques fuera de la interfaz, con verificación de rutas e integridad, pausa, cancelación y reintento desde Descargas."},
+    {"tipo":"correccion","texto":"Cancelar o cambiar el archivo descarta revisiones antiguas y evita aplicar el perfil manual de otro paquete; el original y los archivos modificados se conservan."}
   ]
 }

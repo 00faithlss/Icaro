@@ -3,7 +3,7 @@
 use crate::{mods_reales, App, Mensaje};
 use icaro_core::{
     instancias::Instancia,
-    modrinth::{Catalog, Project, Version},
+    modrinth::{Project, Version},
     mods::{self, Instalado, TipoPack},
 };
 use icaro_ui::{
@@ -134,9 +134,10 @@ pub fn cargar(app: &mut App, tipo: TipoPack) -> Task<Mensaje> {
     state.generation += 1;
     let generation = state.generation;
     state.consultas.insert((i.id.clone(), tipo), generation);
+    let source = app.servicios.catalog.clone();
     Task::perform(
         async move {
-            let cat = Catalog::new().map_err(|e| e.to_string())?;
+            let cat = source.map_err(|e| e.to_string())?;
             let mut updates = vec![];
             let mut projects = vec![];
             for item in installed
@@ -200,13 +201,16 @@ fn ejecutar(app: &mut App, i: Instancia, tipo: TipoPack, versions: Vec<Version>)
     app.servicios.mods.progreso = format!("Instalando {}…", tipo.etiqueta());
     let store = app.servicios.instancias.almacen.clone();
     let id = i.id.clone();
+    let source = app.servicios.catalog.clone();
     Task::perform(
         async move {
-            let cat = Catalog::new().map_err(|e| e.to_string())?;
-            mods::instalar_packs(&cat, &store, &id, versions, tipo, |_| {})
+            let cat = source.map_err(|e| e.to_string())?;
+            let result = mods::instalar_packs(&cat, &store, &id, versions, tipo, |_| {})
                 .await
                 .map(|_| ())
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string());
+            let _ = cat.guardar_metadata_cache().await;
+            result
         },
         move |r| m(Accion::Terminada(i.id.clone(), tipo, generation, r)),
     )
@@ -257,9 +261,10 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             let g = state.generation;
             state.pendientes_cesta.insert((i.id.clone(), t, project.clone()), g);
             let requested = project.clone();
+            let source = app.servicios.catalog.clone();
             let minecraft = i.minecraft.clone();
             return Task::perform(async move {
-                let catalog = Catalog::new().map_err(|e| e.to_string())?;
+                let catalog = source.map_err(|e| e.to_string())?;
                 let p = catalog.project(&requested).await.map_err(|e|e.to_string())?;
                 if p.project_type != if t == TipoPack::Recursos { "resourcepack" } else { "shader" } { return Err("El proyecto no corresponde a esta tienda.".into()); }
                 let mut versions = catalog.versions(&requested, None, None).await.map_err(|e|e.to_string())?;
@@ -361,9 +366,10 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             app.servicios.mods.busy = Some(i.id.clone());
             app.servicios.mods.progreso = "Buscando versión del paquete…".into();
             let record = i.clone();
+            let source = app.servicios.catalog.clone();
             return Task::perform(
                 async move {
-                    let cat = Catalog::new().map_err(|e| e.to_string())?;
+                    let cat = source.map_err(|e| e.to_string())?;
                     let project = cat.project(&p).await.map_err(|e| e.to_string())?;
                     if project.project_type
                         != if t == TipoPack::Recursos {

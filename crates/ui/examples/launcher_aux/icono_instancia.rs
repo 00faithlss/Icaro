@@ -467,7 +467,7 @@ pub fn evento(app: &App, e: &iced::Event) -> Option<Accion> {
         _ => None,
     }
 }
-fn procedural<'a>(p: Paleta, name: &str, var: u32, size: f32) -> Element<'a, Mensaje> {
+pub(super) fn procedural<'a>(p: Paleta, name: &str, var: u32, size: f32) -> Element<'a, Mensaje> {
     let bits = core::patron(name, var);
     let colors = [
         p.surface_sunken,

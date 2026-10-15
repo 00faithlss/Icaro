@@ -87,6 +87,7 @@ iconos! {
     Corazon => "heart",
     Calendario => "calendar",
     Paquete => "package",
+    Archivo => "archive",
     Imagen => "image",
     Cuadricula => "grid-3x3",
     Brillo => "sparkle",

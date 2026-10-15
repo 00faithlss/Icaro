@@ -64,6 +64,49 @@ fn version(n: usize) -> Value {
     json!({"id":format!("v{n}"),"project_id":format!("p{n}"),"name":"Mod","version_number":"1","version_type":"release","game_versions":["1.21.1"],"loaders":["fabric"],"dependencies":[],"files":[{"filename":format!("p{n}.jar"),"url":"https://cdn.modrinth.com/data/mod.jar","size":123,"primary":true,"hashes":{"sha512":format!("{n:0128x}")}}]})
 }
 #[tokio::test]
+async fn instalacion_seguida_de_otro_mod_reutiliza_actualizaciones_y_fichas() {
+    let hashes:Vec<_>=(1..=163).map(|n|format!("{n:0128x}")).collect();
+    let updates:serde_json::Map<_,_>=(1..=163).map(|n|{
+        let mut v=version(n);v["date_published"]=json!("2026-01-02");
+        (format!("{n:0128x}"),v)
+    }).collect();
+    let ids:Vec<_>=(1..=163).map(|n|format!("p{n}")).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let mut replies=vec![(200,"",Value::Object(updates))];
+    replies.extend(ids.chunks(50).map(|batch|(200,"",Value::Array(batch.iter().map(|id|project(id)).collect()))));
+    replies.push((200,"",json!({format!("{:0128x}",164):version(164)})));
+    let api=Api::new(replies).await;
+    let installed:Vec<_>=(1..=163).map(|n|crate::mods::Instalado{
+        project_id:format!("p{n}"),nombre:format!("Mod {n}"),version_id:format!("vieja{n}"),version:"0".into(),
+        publicada:"2026-01-01".into(),archivo:format!("p{n}.jar"),sha512:format!("{n:0128x}"),activo:true,dependencias:vec![]
+    }).collect();
+    assert_eq!(crate::mods::actualizaciones(&api.catalog,&installed,"1.21.1","fabric").await.unwrap().len(),163);
+    assert_eq!(api.count(),1,"Un lote sustituye 163 consultas por proyecto");
+    assert_eq!(api.catalog.projects_by_ids(&ids).await.unwrap().len(),163);
+    assert_eq!(api.count(),5);
+    let next=api.catalog.clone();
+    next.project("p1").await.unwrap();next.version("v1").await.unwrap();
+    assert_eq!(next.projects_by_ids(&ids).await.unwrap().len(),163);
+    next.latest_from_hashes(&hashes,"1.21.1","fabric").await.unwrap();
+    assert_eq!(api.count(),5,"Otro flujo debe compartir caché y versiones ya identificadas");
+    let mut nuevas=hashes;nuevas.push(format!("{:0128x}",164));
+    next.latest_from_hashes(&nuevas,"1.21.1","fabric").await.unwrap();
+    assert_eq!(api.count(),6);
+    let requests=api.requests.lock().unwrap();
+    assert_eq!(requests[0].1["version_types"],json!(["release"]));
+    assert_eq!(requests[5].1["hashes"],json!([format!("{:0128x}",164)]));
+}
+
+#[tokio::test]
+async fn proyectos_en_lote_rechazan_ids_ajenos_y_duplicados() {
+    let api=Api::new(vec![(200,"",json!([project("ajeno")])),(200,"",json!([project("p1"),project("p1")])),(200,"",json!([project("p1")]))]).await;
+    let ids=vec!["p1".into()];
+    assert!(api.catalog.projects_by_ids(&ids).await.is_err());
+    assert!(api.catalog.projects_by_ids(&ids).await.is_err());
+    assert_eq!(api.catalog.projects_by_ids(&ids).await.unwrap().len(),1);
+    assert_eq!(api.count(),3);
+}
+
+#[tokio::test]
 async fn versiones_en_lotes_reinicio_y_cambio_solo_consultan_ids_ausentes() {
     let ids: Vec<_> = (1..=163).map(|n| format!("v{n}")).collect();
     let sorted: Vec<_> = ids.iter().cloned().collect::<std::collections::BTreeSet<_>>().into_iter().collect();

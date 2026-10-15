@@ -327,7 +327,8 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             Accion::CambiarVersion(i) => return crate::instancias_reales::abrir_cambio(app, *i),
             Accion::CambiarVersionLoader(i) => return crate::instancias_reales::abrir_cambio_loader(app,*i),
             Accion::AplicarVersionLoader => return crate::instancias_reales::aplicar_cambio_loader(app),
-            Accion::Importar | Accion::ImportarConfirmar | Accion::Duplicar(_) => {
+            Accion::Importar => return crate::modpacks_reales::actualizar(app,crate::modpacks_reales::Accion::Importar),
+            Accion::ImportarConfirmar | Accion::Duplicar(_) => {
                 app.avisar("La importación y duplicación todavía están en preparación.".into());
                 return Task::none();
             }
@@ -1398,6 +1399,39 @@ fn selector_version_completo<'a>(
     .into()
 }
 
+#[cfg(test)]
+mod pruebas_scroll_version {
+    use super::*;
+    use iced::advanced::{layout, mouse, widget::Tree, Clipboard, Layout, Shell};
+    use iced::{Event, Point, Rectangle, Size};
+
+    #[test]
+    fn rueda_del_asistente_desplaza_la_lista_de_versiones() {
+        let (mut app,_) = crate::iniciar_con_guardado(icaro_ui::shell::Seccion::Instancias,false,None,false,crate::servicios::Estado::nuevo(true),None);
+        app.servicios.demo=false;
+        app.servicios.instancias.versiones=(0..100).map(|n|icaro_core::manifest::VersionEntry {
+            id:format!("1.21.{n}"),kind:"release".into(),url:String::new(),sha1:String::new(),release_time:String::new()
+        }).collect();
+        let state=Asistente {paso:0,tipo_version:0,busqueda:String::new(),version:0,loader:0,nombre:String::new(),portada:0};
+        let renderer=iced::Renderer::Secondary(iced_tiny_skia::Renderer::new(iced::Font::DEFAULT,16.into()));
+        let mut widget=asistente(&app,&state);let mut tree=Tree::new(widget.as_widget());
+        let size=Size::new(1000.,750.);
+        let node=widget.as_widget().layout(&mut tree,&renderer,&layout::Limits::new(Size::ZERO,size));
+        fn buscar(layout:Layout<'_>)->Option<Rectangle> {
+            if (layout.bounds().height-252.).abs()<0.1 && layout.bounds().width>200. {return Some(layout.bounds());}
+            layout.children().find_map(buscar)
+        }
+        let bounds=buscar(Layout::new(&node)).expect("Lista de versiones visible");
+        let mut messages=vec![];let mut clipboard=iced::advanced::clipboard::Null;
+        let _:&mut dyn Clipboard=&mut clipboard;
+        widget.as_widget_mut().on_event(&mut tree,
+            Event::Mouse(mouse::Event::WheelScrolled {delta:mouse::ScrollDelta::Lines{x:0.,y:-3.}}),
+            Layout::new(&node),mouse::Cursor::Available(bounds.center()),&renderer,&mut clipboard,
+            &mut Shell::new(&mut messages),&Rectangle::new(Point::ORIGIN,size));
+        assert!(messages.iter().any(|m|matches!(m,Mensaje::Pant(Accion::VersionScroll(false,y)) if *y>0.)),"La rueda debe llegar a la lista interior");
+    }
+}
+
 fn selector_loader_completo<'a>(
     app: &'a App,
     s: &Asistente,
@@ -1611,7 +1645,8 @@ pub fn asistente<'a>(app: &'a App, s: &'a Asistente) -> Element<'a, Mensaje> {
     formulario(
         p,
         "Crear instancia",
-        crate::desplazable_pub(cuerpo.into()),
+        // El scroll nativo entrega la rueda al selector interior antes de mover el formulario.
+        iced::widget::scrollable(cuerpo).height(Length::Fill).into(),
         row(acciones).spacing(espacio::S2).into(),
         880.0,
         610.0_f32.min(app.ventana.height - 48.),

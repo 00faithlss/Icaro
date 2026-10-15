@@ -10,6 +10,8 @@
 | [Integración real](integracion-real.md) | Estado del núcleo, autenticación, seguridad y tiendas de mods |
 | [Inicio de sesión y catálogo](login-y-catalogo.md) | Probar Microsoft, almacenamiento de sesión y catálogo público de Modrinth |
 | [Vanilla, Fabric, Java y modpacks](vanilla-y-java.md) | Perfiles oficiales, Java, instalación MRPACK, ejecución y validación |
+| [Importar modpacks locales](importar-modpacks.md) | MRPACK, ZIP completos, paquetes grandes y recuperación |
+| [Peticiones a Modrinth](modrinth-peticiones.md) | Caché compartida, consultas agrupadas y límites del proveedor |
 | [Instancias locales](instancias-locales.md) | Metadatos, migración, cambios de versión, eliminación y exportación |
 | [Organización de datos](organizacion-datos.md) | Almacén compartido, configuración por instancia, runtimes y mantenimiento |
 | [Implementación pendiente](pendientes-implementacion.md) | Límites actuales y criterios para completar las funciones restantes |

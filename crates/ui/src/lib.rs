@@ -33,3 +33,4 @@ pub mod tema;
 pub mod vacios;
 pub mod visor;
 pub mod scroll;
+pub mod zona_soltar;
