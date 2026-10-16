@@ -16,6 +16,7 @@
 | [Organización de datos](organizacion-datos.md) | Almacén compartido, configuración por instancia, runtimes y mantenimiento |
 | [Implementación pendiente](pendientes-implementacion.md) | Límites actuales y criterios para completar las funciones restantes |
 | [Actualizaciones del launcher](actualizaciones-launcher.md) | Pantalla, descarga verificada y publicación desde main/versiones y actualización instalada o portable |
+| [Cuentas sin conexión y skins locales](cuentas-sin-conexion.md) | Perfiles guardados, PNG local, identidad, almacenamiento y límites |
 | [Cuenta y estudio de skin](cuenta.md) | Pantallas de cuenta, perfil y PNG reales, modelos, historial y límites actuales |
 | [Servidores y ZeroTier](servidores.md) | Lista real, conexión por instancia, detección de redes y límites de sincronización |
 | [Sincronización con el anfitrión](sincronizacion-servidores.md) | Servicio en el PC del amigo, revisión de mods y descargas exactas de Modrinth |

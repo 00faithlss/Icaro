@@ -18,6 +18,8 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
     a.umbral = None;
     let scene = std::env::var("ICARO_VISTA_DISENO").unwrap_or_else(|_| "asistente".into());
     match scene.as_str() {
+        s if s.starts_with("skin-local")=>crate::skin_sin_conexion::preparar_diseno(&mut a,s),
+        s if s.starts_with("cuenta-local") => crate::cuenta_sin_conexion::preparar_diseno(&mut a,s),
         s if s.starts_with("importar-local") => crate::modpacks_reales::preparar_diseno(&mut a,s),
         "cuenta-original" => {a.pantalla=Some(pantallas::Pantalla::Cuenta);a.sesion.estado=icaro_ui::cuenta::EstadoSesion::Activa;},
         s if s.starts_with("estudio-original") => {a.pantalla=Some(pantallas::Pantalla::Estudio);a.sesion.estado=icaro_ui::cuenta::EstadoSesion::Activa;},

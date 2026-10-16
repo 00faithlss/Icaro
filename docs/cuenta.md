@@ -1,5 +1,7 @@
 # Cuenta y estudio de skin
 
+Las [cuentas sin conexión](cuentas-sin-conexion.md) reemplazan Invitado con perfiles locales guardados. Su botón **Skin** abre el componente local `SkinSinConexion`, con PNG, modelo y vista previa. El estudio, historial y servicios descritos a continuación corresponden a Microsoft.
+
 **Gestionar cuenta y skin**, en el menú de la barra lateral, abre `PantallaCuenta` original: Apolo Belvedere, nombre, skin de frente/espalda, historial y cierre de sesión. **Abrir estudio** usa `EstudioSkin` original, con dos cuerpos, suelo de líneas, giro, modelo, capas y acciones. Se conservan los componentes, medidas, fuentes, iconos y temas del System Design.
 
 El perfil y la skin activa se consultan en Minecraft Services. El PNG se descarga exclusivamente desde `textures.minecraft.net`, sin enviar allí credenciales. La cuenta solo muestra datos disponibles; no inventa un correo, la fecha del próximo cambio de nombre ni otras cuentas conectadas. **Cambiar** abre el perfil oficial de Minecraft.net. Cambiar de nombre dentro del launcher queda pendiente.
@@ -20,6 +22,6 @@ Los tokens permanecen en el núcleo y en el almacén protegido existente. El lau
 
 Hay pruebas de PNG completos, límites y URLs oficiales, composición UV de frente/espalda, modelo delgado y capas. La subida se conectó siguiendo las solicitudes públicas de [Prism](https://github.com/PrismLauncher/PrismLauncher/blob/develop/launcher/minecraft/skins/SkinRequests.cpp). Las pruebas no modifican una cuenta real: queda pendiente comprobar manualmente una subida y reutilización del historial con la cuenta del usuario.
 
-Gestión persistente de varias cuentas, selección de capes propias y cambio de nombre dentro del launcher siguen pendientes. El perfil consulta las capes, pero no añade una pantalla de selección nueva sin el componente aprobado. El modo `ICARO_DEMO=1` conserva las muestras originales y su subida simulada; sus resultados nunca se presentan como una subida real.
+Gestión persistente de varias cuentas Microsoft, selección de capes propias y cambio de nombre dentro del launcher siguen pendientes. El perfil consulta las capes, pero no añade una pantalla de selección nueva sin el componente aprobado. El modo `ICARO_DEMO=1` conserva las muestras originales y su subida simulada; sus resultados nunca se presentan como una subida real.
 
 Las escenas `cuenta-original` y `estudio-original` permiten revisar las composiciones en el capturador descrito en [desarrollo](desarrollo.md). El login se describe en [inicio de sesión y catálogo](login-y-catalogo.md).

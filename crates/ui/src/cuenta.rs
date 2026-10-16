@@ -24,7 +24,7 @@ use crate::tema::{borde, espacio, hex, medida, texto, Paleta};
 pub enum EstadoSesion {
     #[default]
     Activa,
-    Invitado,
+    SinConexion,
     Vencida,
     CodigoVencido,
     SinJuego,
@@ -35,7 +35,7 @@ impl EstadoSesion {
     pub const fn nombre(self) -> &'static str {
         match self {
             EstadoSesion::Activa => "Mineral_7",
-            EstadoSesion::Invitado => "Invitado",
+            EstadoSesion::SinConexion => "Sin cuenta",
             EstadoSesion::Vencida | EstadoSesion::CodigoVencido | EstadoSesion::SinJuego => "Forjador",
         }
     }
@@ -248,7 +248,7 @@ fn celdas_cara(cara: Cara) -> Vec<Color> {
         .collect()
 }
 
-/// Cabeza vacía y rayada: la de quien juega como invitado.
+/// Cabeza rayada de las cuentas sin conexión.
 pub fn cabeza_vacia<'a, M: 'a>(p: Paleta, lado: f32) -> Element<'a, M> {
     cabeza_con(p, None, Some(p.border_strong), lado, 0.0, None)
 }
@@ -324,6 +324,39 @@ impl<M> canvas::Program<M> for ProgCuerpo {
 }
 
 /// Cuerpo completo de 16 × 32 píxeles, de frente o de espalda.
+pub fn cuerpo_skin_local<'a,M:'a>(p:Paleta,espalda:bool,escala:f32,textura:Option<&[u8]>,delgada:bool,exterior:bool)->Element<'a,M> {
+    struct Vista {p:Paleta,espalda:bool,escala:f32,textura:Option<Vec<u8>>,delgada:bool,exterior:bool}
+    impl<M> canvas::Program<M> for Vista {
+        type State=();
+        fn draw(&self,_:&(),renderer:&Renderer,_:&Theme,bounds:Rectangle,_:mouse::Cursor)->Vec<Geometry> {
+            let mut f=Frame::new(renderer,bounds.size());
+            if let Some(bytes)=&self.textura {
+                let grid=pixeles_skin_local(bytes,self.espalda,self.delgada,self.exterior);
+                for (y,fila) in grid.iter().enumerate(){for(x,color)in fila.iter().enumerate(){if let Some(color)=color{rellenar(&mut f,x as f32*self.escala,y as f32*self.escala,self.escala,self.escala,*color);}}}
+            }else{
+                for (x,y,w,h) in [(4,0,8,8),(0,8,16,12),(4,20,8,12)] {
+                    for py in y* self.escala as usize..(y+h)*self.escala as usize {for px in x*self.escala as usize..(x+w)*self.escala as usize {
+                        if (px+py)%6==0 {rellenar(&mut f,px as f32,py as f32,1.,1.,self.p.border_strong);}
+                    }}
+                }
+            }
+            vec![f.into_geometry()]
+        }
+    }
+    lienzo(Vista{p,espalda,escala,textura:textura.map(ToOwned::to_owned),delgada,exterior},16.*escala,32.*escala)
+}
+
+fn pixeles_skin_local(bytes:&[u8],espalda:bool,delgada:bool,exterior:bool)->Vec<Vec<Option<Color>>> {
+    let mut grid=pixeles_skin(bytes,espalda,delgada,[exterior;4]);
+    if espalda {
+        let brazo=if delgada {3}else{4};
+        for fila in &mut grid[8..20] {for x in 0..brazo {fila.swap(4-brazo+x,12+x);}}
+        for fila in &mut grid[20..32] {for x in 0..4 {fila.swap(4+x,8+x);}}
+    }
+    grid
+}
+
+/// Cuerpo completo de 16 × 32 píxeles, de frente o de espalda.
 pub fn cuerpo<'a, M: 'a>(espalda: bool, escala: f32) -> Element<'a, M> {
     cuerpo_textura(espalda, escala, None, false)
 }
@@ -353,7 +386,7 @@ fn pixeles_skin(bytes: &[u8], espalda: bool, delgado: bool, capas: [bool;4]) -> 
     }
     grid
 }
-fn cabeza_textura<'a, M:'a>(p:Paleta, bytes:&[u8], lado:f32, marcada:bool)->Element<'a,M> {
+pub fn cabeza_textura<'a, M:'a>(p:Paleta, bytes:&[u8], lado:f32, marcada:bool)->Element<'a,M> {
     let grid=pixeles_skin(bytes,false,false,[true;4]);
     let cells=(0..8).flat_map(|y|(4..12).map(move|x|(y,x))).map(|(y,x)|grid[y][x].unwrap_or(Color::TRANSPARENT)).collect();
     cabeza_con(p,Some(cells),None,lado,if lado==32. {0.} else {4.},marcada.then_some(p.text))
@@ -658,7 +691,7 @@ fn regla<'a, M: 'a>(color: Color, grosor: f32) -> Element<'a, M> {
 fn cabeza_de<'a, M: 'a>(p: Paleta, estado: EstadoSesion, lado: f32) -> Element<'a, M> {
     match estado {
         EstadoSesion::Activa => cabeza_con(p, Some(celdas_cara(Cara::Busto)), None, lado, 0.0, None),
-        EstadoSesion::Invitado => cabeza_vacia(p, lado),
+        EstadoSesion::SinConexion => cabeza_vacia(p, lado),
         _ => cabeza_con(p, Some(celdas_cara(Cara::Barba)), None, lado, 0.0, None),
     }
 }
@@ -703,7 +736,7 @@ pub fn bloque_cuenta<'a, M: Clone + 'a>(
 fn detalle_sesion<'a, M: 'a>(p: Paleta, estado: EstadoSesion, proveedor: &str) -> Element<'a, M> {
     match estado {
         EstadoSesion::Vencida | EstadoSesion::CodigoVencido => insignia_alerta(p, "Volver a entrar"),
-        EstadoSesion::Invitado => mono_sm("Solo sin conexión", p.text_muted),
+        EstadoSesion::SinConexion => mono_sm("Sin conexión", p.text_muted),
         EstadoSesion::SinJuego => mono_sm("Sin Minecraft", p.warning),
         EstadoSesion::Activa => mono_sm(proveedor, p.text_muted),
     }
@@ -721,6 +754,7 @@ pub struct MensajesSelector<M> {
 
 /// Una cuenta visible en el menú; el nombre y la selección proceden de la sesión.
 pub struct CuentaSelector<M> {
+    pub textura: Option<std::sync::Arc<[u8]>>,
     pub estado: EstadoSesion,
     pub nombre: String,
     pub seleccionada: bool,
@@ -745,24 +779,24 @@ pub fn selector_cuenta<'a, M: Clone + 'a>(p: Paleta, estado: EstadoSesion, m: Me
     selector_cuentas(
         p,
         vec![
-            CuentaSelector { estado: EstadoSesion::Activa, nombre: "Mineral_7".into(), seleccionada: actual(EstadoSesion::Activa), al_pulsar: Some(m.activa) },
-            CuentaSelector { estado: EstadoSesion::Vencida, nombre: "Forjador".into(), seleccionada: actual(EstadoSesion::Vencida), al_pulsar: Some(m.vencida) },
-            CuentaSelector { estado: EstadoSesion::Invitado, nombre: "Invitado".into(), seleccionada: actual(EstadoSesion::Invitado), al_pulsar: Some(m.invitado) },
+            CuentaSelector { textura: None, estado: EstadoSesion::Activa, nombre: "Mineral_7".into(), seleccionada: actual(EstadoSesion::Activa), al_pulsar: Some(m.activa) },
+            CuentaSelector { textura: None, estado: EstadoSesion::Vencida, nombre: "Forjador".into(), seleccionada: actual(EstadoSesion::Vencida), al_pulsar: Some(m.vencida) },
+            CuentaSelector { textura: None, estado: EstadoSesion::SinConexion, nombre: "Jugador_1".into(), seleccionada: actual(EstadoSesion::SinConexion), al_pulsar: Some(m.invitado) },
         ],
         vec![
             AccionSelector { icono: Icono::UsuarioMas, etiqueta: "Agregar cuenta".into(), peligro: false, al_pulsar: Some(m.agregar) },
             AccionSelector { icono: Icono::Usuario, etiqueta: "Gestionar cuenta y skin".into(), peligro: false, al_pulsar: Some(m.gestionar) },
-            AccionSelector { icono: Icono::Salir, etiqueta: format!("Cerrar sesión de {}", if estado == EstadoSesion::Invitado { "Invitado" } else { estado.nombre() }), peligro: true, al_pulsar: Some(m.cerrar_sesion) },
+            AccionSelector { icono: Icono::Salir, etiqueta: format!("Cerrar sesión de {}", if estado == EstadoSesion::SinConexion { "Jugador_1" } else { estado.nombre() }), peligro: true, al_pulsar: Some(m.cerrar_sesion) },
         ],
     )
 }
 
 /// Diseño común para cuentas reales y las variantes del modo de demostración.
 pub fn selector_cuentas<'a, M: Clone + 'a>(p: Paleta, cuentas: Vec<CuentaSelector<M>>, acciones: Vec<AccionSelector<M>>) -> Element<'a, M> {
-    let fila_cuenta = |e: EstadoSesion, nombre: &str, elegida: bool, msg: Option<M>| -> Element<'a, M> {
+    let fila_cuenta = |e: EstadoSesion, nombre: &str, textura:Option<&[u8]>, elegida: bool, msg: Option<M>| -> Element<'a, M> {
         let construir = |invertida: bool| -> Element<'a, M> {
             let mut fila = row![
-                cabeza_de(p, e, 32.0),
+                if let Some(rgba)=textura {cabeza_textura(p,rgba,32.,false)} else {cabeza_de(p, e, 32.0)},
                 column![txt::<M>(nombre.to_owned(), fuentes::CUERPO_NEGRITA, (14.0, 22.0), if invertida { p.bg } else { p.text }), detalle_para(p, e, invertida)]
             ]
             .spacing(espacio::S3)
@@ -824,7 +858,7 @@ pub fn selector_cuentas<'a, M: Clone + 'a>(p: Paleta, cuentas: Vec<CuentaSelecto
     };
     let mut col = column![];
     for cuenta in cuentas {
-        col = col.push(fila_cuenta(cuenta.estado, &cuenta.nombre, cuenta.seleccionada, cuenta.al_pulsar));
+        col = col.push(fila_cuenta(cuenta.estado, &cuenta.nombre, cuenta.textura.as_deref(), cuenta.seleccionada, cuenta.al_pulsar));
     }
     col = col.push(container(regla(p.border, borde::FINO)).padding(Padding::from([4.0, 0.0])));
     for a in acciones {
@@ -848,7 +882,7 @@ fn detalle_para<'a, M: 'a>(p: Paleta, e: EstadoSesion, invertida: bool) -> Eleme
     let tinta = if invertida { p.bg } else { p.text_muted };
     match e {
         EstadoSesion::Vencida => insignia_alerta(p, "Volver a entrar"),
-        EstadoSesion::Invitado => mono_sm("Solo sin conexión", tinta),
+        EstadoSesion::SinConexion => mono_sm("Sin conexión", tinta),
         _ => mono_sm("Microsoft", tinta),
     }
 }
@@ -962,9 +996,9 @@ fn tarjeta_estado<'a, M: 'a>(p: Paleta, titulo: &str, cuerpo_: &str, acciones: V
 
 /// Pantalla de cuenta en sus cuatro variantes de sesión.
 pub fn pantalla_cuenta<'a, M: Clone + 'a>(p: Paleta, d: DatosCuenta<'a>, m: MensajesCuenta<'a, M>) -> Element<'a, M> {
-    let sin_skin = matches!(d.estado, EstadoSesion::Invitado | EstadoSesion::SinJuego);
+    let sin_skin = matches!(d.estado, EstadoSesion::SinConexion | EstadoSesion::SinJuego);
     let detalle = match d.estado {
-        EstadoSesion::Invitado => "Sin conexión · sin cuenta de Microsoft".to_owned(),
+        EstadoSesion::SinConexion => "Sin conexión · sin cuenta de Microsoft".to_owned(),
         _ => format!("{} · Microsoft", d.correo),
     };
     let mut pagina = column![encabezado(p, "Cuenta", &detalle, Lamina::ApoloBelvedere)].spacing(espacio::S8);
@@ -1017,22 +1051,22 @@ pub fn pantalla_cuenta<'a, M: Clone + 'a>(p: Paleta, d: DatosCuenta<'a>, m: Mens
     };
 
     let derecha: Element<M> = match d.estado {
-        EstadoSesion::Invitado => tarjeta_estado(
+        EstadoSesion::SinConexion => tarjeta_estado(
             p,
-            "Estás jugando como invitado",
-            "Como invitado solo puedes jugar sin conexión, y no hay nombre ni skin que cambiar. Inicia sesión con tu cuenta de Microsoft para entrar a servidores y usar tu skin.",
-            vec![boton_icono(p, Some(Icono::Entrar), "Iniciar sesión", Tipo::Primario, medida::CONTROL_SM, Some(m.iniciar_sesion.clone()))],
+            "Cuenta sin conexión",
+            "Elige un nombre para jugar en mundos locales y servidores que admitan cuentas sin conexión.",
+            vec![boton_icono(p, Some(Icono::Usuario), "Usar cuenta sin conexión", Tipo::Primario, medida::CONTROL_SM, Some(m.jugar_invitado.clone())), boton_icono(p, Some(Icono::Entrar), "Iniciar sesión", Tipo::Normal, medida::CONTROL_SM, Some(m.iniciar_sesion.clone()))],
         ),
         EstadoSesion::SinJuego => tarjeta_estado(
             p,
             "Esta cuenta no tiene Minecraft",
             &format!(
-                "Entraste como {}, pero la cuenta no tiene el juego. Puedes comprarlo o jugar como invitado sin conexión.",
+                "Entraste como {}, pero la cuenta no tiene el juego. Puedes comprarlo o usar una cuenta sin conexión.",
                 d.correo
             ),
             vec![
                 boton_icono(p, Some(Icono::Externo), "Comprar Minecraft", Tipo::Normal, medida::CONTROL_SM, Some(m.comprar.clone())),
-                boton_icono(p, None, "Jugar como invitado", Tipo::Fantasma, medida::CONTROL_SM, Some(m.jugar_invitado.clone())),
+                boton_icono(p, None, "Usar cuenta sin conexión", Tipo::Fantasma, medida::CONTROL_SM, Some(m.jugar_invitado.clone())),
             ],
         ),
         _ => {
@@ -1307,6 +1341,18 @@ pub fn codigo<'a, M: 'a>(p: Paleta, codigo: &str, vencido: bool) -> Element<'a, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn espalda_local_invierte_los_lados_de_brazos_y_piernas() {
+        let mut rgba=vec![0;64*64*4];
+        for (x,y,color) in [(52,20,[255,0,0,255]),(44,52,[0,255,0,255]),(12,20,[0,0,255,255]),(28,52,[255,255,0,255])] {
+            let i=(y*64+x)*4;rgba[i..i+4].copy_from_slice(&color);
+        }
+        let espalda=pixeles_skin_local(&rgba,true,false,false);
+        assert_eq!(espalda[8][12],Some(Color::from_rgb8(255,0,0)));
+        assert_eq!(espalda[8][0],Some(Color::from_rgb8(0,255,0)));
+        assert_eq!(espalda[20][8],Some(Color::from_rgb8(0,0,255)));
+        assert_eq!(espalda[20][4],Some(Color::from_rgb8(255,255,0)));
+    }
     #[test]
     fn textura_real_muestra_frente_espalda_modelo_y_capas_sin_reemplazar_el_diseno() {
         let mut rgba=vec![0;64*64*4];

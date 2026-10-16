@@ -69,11 +69,11 @@ impl Sesion {
     /// Estado pedido con `ICARO_SESION`, para abrir la maqueta en una variante.
     pub fn desde_entorno() -> Self {
         let mut s = Self::nueva(match std::env::var("ICARO_SESION").ok().as_deref() {
-            Some("invitado") => EstadoSesion::Invitado,
+            Some("invitado") => EstadoSesion::SinConexion,
             Some("vencida") if std::env::var("ICARO_DEMO").as_deref() == Ok("1") => EstadoSesion::Vencida,
             Some("sinjuego") if std::env::var("ICARO_DEMO").as_deref() == Ok("1") => EstadoSesion::SinJuego,
             _ if std::env::var("ICARO_DEMO").as_deref() == Ok("1") => EstadoSesion::Activa,
-            _ => EstadoSesion::Invitado,
+            _ => EstadoSesion::SinConexion,
         });
         s.menu = std::env::var_os("ICARO_MENU_CUENTA").is_some();
         s.banner_jugar = std::env::var_os("ICARO_BANNER_JUGAR").is_some();
@@ -153,7 +153,8 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 return crate::servicios::actualizar(app, crate::servicios::Accion::Login),
             Accion::ElegirActiva if app.servicios.session.is_none() =>
                 return crate::servicios::actualizar(app, crate::servicios::Accion::Login),
-            Accion::CerrarSesion | Accion::ElegirInvitado | Accion::JugarComoInvitado => {
+            Accion::ElegirInvitado | Accion::JugarComoInvitado => return crate::cuenta_sin_conexion::actualizar(app,crate::cuenta_sin_conexion::Accion::Abrir),
+            Accion::CerrarSesion => {
                 app.pantalla = Some(pantallas::Pantalla::Cuenta);
                 return crate::servicios::actualizar(app, crate::servicios::Accion::Logout);
             }
@@ -193,7 +194,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             pant(app, pantallas::Pantalla::Codigo);
         }
         Accion::ElegirInvitado | Accion::JugarComoInvitado => {
-            app.sesion.estado = EstadoSesion::Invitado;
+            app.sesion.estado = EstadoSesion::SinConexion;
             app.sesion.menu = false;
             app.sesion.banner_jugar = false;
             app.pantalla = None;
@@ -208,7 +209,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         Accion::Gestionar => pant(app, pantallas::Pantalla::Cuenta),
         Accion::CerrarSesion => {
             let nombre = app.sesion.estado.nombre();
-            app.sesion.estado = EstadoSesion::Invitado;
+            app.sesion.estado = EstadoSesion::SinConexion;
             app.sesion.menu = false;
             app.pantalla = Some(pantallas::Pantalla::Cuenta);
             app.avisar(format!("Cerraste la sesión de {nombre}. Sigues como invitado."));
@@ -354,7 +355,7 @@ pub fn vista_estudio(app: &App) -> Element<'_, Mensaje> {
 /// Menú de cuentas anclado al bloque de la barra lateral, con un fondo
 /// transparente que lo cierra al pulsar fuera.
 pub fn con_selector<'a>(app: &'a App, ventana: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
-    if !app.servicios.demo { return crate::servicios::selector(app, ventana); }
+    if !app.servicios.demo || app.servicios.local.abierta { return crate::servicios::selector(app, ventana); }
     if !app.sesion.menu {
         return ventana;
     }

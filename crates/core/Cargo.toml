@@ -8,11 +8,14 @@ license.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha1.workspace = true
+sha1 = { workspace = true, features = ["oid"] }
 thiserror.workspace = true
 base64 = "0.22"
 getrandom = "0.3"
 sha2 = "0.10"
+md-5 = "0.10"
+rsa = { version = "0.9", features = ["sha1"] }
+rand = "0.8"
 regex = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 roxmltree = "0.20"
