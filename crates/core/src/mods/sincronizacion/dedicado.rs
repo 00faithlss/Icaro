@@ -3,6 +3,23 @@
 use super::*;
 use std::io::Read;
 
+/// Inventario de cada carpeta de mods servida. El servicio es de larga duración:
+/// tras la primera lectura, el sondeo de diez segundos solo relee lo que cambia.
+static INVENTARIOS: std::sync::Mutex<BTreeMap<PathBuf, super::inventario::Inventario>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// SHA-512 de `mods/<archivo>` si sus metadatos siguen siendo los ya verificados.
+/// Permite servirlo por bloques sin releerlo entero en cada petición.
+pub(super) fn sha_vigente(mods: &Path, archivo: &str) -> Option<String> {
+    let meta = fs::symlink_metadata(mods.join(archivo)).ok()?;
+    if enlace(&meta) || !meta.is_file() {
+        return None;
+    }
+    let estado = estado_archivo(archivo.to_owned(), &meta);
+    let inventarios = INVENTARIOS.lock().ok()?;
+    inventarios.get(mods)?.sha_vigente(&estado).map(str::to_owned)
+}
+
 #[derive(Debug, Clone)]
 pub struct ServidorDedicado {
     pub carpeta: PathBuf,
@@ -42,7 +59,13 @@ impl ServidorDedicado {
     }
     pub fn huella(&self) -> Result<Vec<(String, String)>, String> {
         self.validar()?;
-        let archivos = fingerprint(&self.carpeta.join("mods"))?;
+        let dir = self.carpeta.join("mods");
+        let estado = estado(&dir)?;
+        let archivos = {
+            let mut inventarios = INVENTARIOS.lock().map_err(|_| "No se pudo leer el inventario de mods.")?;
+            let inventario = inventarios.entry(dir.clone()).or_default();
+            inventario.leer(&dir, &estado, &CancellationToken::new())?.huella
+        };
         if archivos
             .iter()
             .any(|(n, _)| n.to_ascii_lowercase().ends_with(".jar") && n.contains(['/', '\\']))

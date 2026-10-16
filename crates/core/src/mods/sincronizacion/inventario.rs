@@ -150,6 +150,11 @@ impl Inventario {
         Ok(Lectura { huella, releidos, reutilizados })
     }
 
+    /// SHA-512 guardado si los metadatos actuales del archivo siguen coincidiendo.
+    pub(super) fn sha_vigente(&self, estado: &EstadoArchivo) -> Option<&str> {
+        self.vigente(estado, ahora()).map(|e| e.sha512.as_str())
+    }
+
     /// Identidad Fabric guardada para un archivo cuyo hash coincide con el leído.
     pub(super) fn identidad(&self, ruta: &str, sha512: &str) -> Option<Option<String>> {
         self.archivos
