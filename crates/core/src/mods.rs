@@ -243,6 +243,29 @@ pub trait Fuente: Sync {
     fn solo_cliente(&self, _project: &str) -> impl std::future::Future<Output = Result<bool, Error>> + Send {
         async { Ok(false) }
     }
+    /// Proyectos exclusivos de cliente entre `projects`. Las fuentes con
+    /// consultas por lote deben sobrescribirlo para no pedir uno a uno.
+    fn solo_cliente_lote(&self, projects: &[String]) -> impl std::future::Future<Output = Result<BTreeSet<String>, Error>> + Send {
+        async move {
+            let mut result = BTreeSet::new();
+            for p in projects {
+                if self.solo_cliente(p).await? {
+                    result.insert(p.clone());
+                }
+            }
+            Ok(result)
+        }
+    }
+    /// Nombre visible de cada proyecto, consultado por lotes cuando la fuente lo permite.
+    fn nombres(&self, projects: &[String]) -> impl std::future::Future<Output = Result<BTreeMap<String, String>, Error>> + Send {
+        async move {
+            let mut result = BTreeMap::new();
+            for p in projects {
+                result.insert(p.clone(), self.nombre(p).await?);
+            }
+            Ok(result)
+        }
+    }
     fn version(&self, id: &str)
         -> impl std::future::Future<Output = Result<Version, Error>> + Send;
     fn versiones(
@@ -275,6 +298,29 @@ impl Fuente for Catalog {
     async fn solo_cliente(&self, project: &str) -> Result<bool, Error> {
         let p = self.project(project).await?;
         Ok(p.server_side == "unsupported" && p.client_side != "unsupported")
+    }
+    async fn solo_cliente_lote(&self, projects: &[String]) -> Result<BTreeSet<String>, Error> {
+        let mut result = BTreeSet::new();
+        for lote in projects.chunks(512) {
+            let fichas = self.projects_by_ids(lote).await?;
+            for id in lote {
+                let p = fichas.get(id).ok_or(Error::Datos)?;
+                if p.server_side == "unsupported" && p.client_side != "unsupported" {
+                    result.insert(id.clone());
+                }
+            }
+        }
+        Ok(result)
+    }
+    async fn nombres(&self, projects: &[String]) -> Result<BTreeMap<String, String>, Error> {
+        let mut result = BTreeMap::new();
+        for lote in projects.chunks(512) {
+            let fichas = self.projects_by_ids(lote).await?;
+            for id in lote {
+                result.insert(id.clone(), fichas.get(id).ok_or(Error::Datos)?.title.clone());
+            }
+        }
+        Ok(result)
     }
     async fn version(&self, id: &str) -> Result<Version, Error> {
         Ok(self.version(id).await?)
@@ -1298,6 +1344,15 @@ pub async fn instalar(
         }
         let mut occupied: BTreeSet<String> =
             installed.iter().map(|m| m.archivo.to_lowercase()).collect();
+        // Una consulta por lote en lugar de una ficha por cada mod descargado.
+        let pendientes: Vec<_> = plan
+            .iter()
+            .filter(|v| !installed.iter().any(|m| m.project_id == v.project_id && m.version_id == v.id))
+            .map(|v| v.project_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let nombres = source.nombres(&pendientes).await?;
         for v in plan {
             if let Some(m) = installed
                 .iter_mut()
@@ -1341,7 +1396,7 @@ pub async fn instalar(
             {
                 return Err(Error::Hash);
             }
-            let name = source.nombre(&v.project_id).await?;
+            let name = nombres.get(&v.project_id).cloned().ok_or(Error::Datos)?;
             if let Some(i) = old {
                 occupied.remove(&installed[i].archivo.to_lowercase());
                 fs::remove_file(ruta_mod(&stage, &installed[i])).map_err(|_| Error::Disco)?;

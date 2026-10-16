@@ -793,10 +793,9 @@ async fn construir_plan(
         .difference(&wanted)
         .cloned()
         .collect::<BTreeSet<_>>();
-    for project in quitar.clone() {
-        if source.solo_cliente(&project).await.map_err(err)? {
-            quitar.remove(&project);
-        }
+    let por_quitar: Vec<_> = quitar.iter().cloned().collect();
+    for project in source.solo_cliente_lote(&por_quitar).await.map_err(err)? {
+        quitar.remove(&project);
     }
     let mut changes = vec![];
     let mut versions = vec![];
@@ -823,6 +822,8 @@ async fn construir_plan(
     });
     let ids = index.mods.iter().map(|m| m.version.clone()).collect::<Vec<_>>();
     let verificadas = source.versiones_exactas(&ids).await.map_err(err)?;
+    // Índices de cambios de Modrinth cuyo nombre se consulta en un solo lote.
+    let mut sin_nombre = vec![];
     for entry in &index.mods {
         let mut v = verificadas.get(&entry.version).cloned().ok_or("Modrinth no confirmó una versión del anfitrión.")?;
         if v.id != entry.version
@@ -856,6 +857,7 @@ async fn construir_plan(
                     .find(|m| m.sha512.eq_ignore_ascii_case(&entry.sha512))
             });
         if old.is_none_or(|m| !m.activo || !m.sha512.eq_ignore_ascii_case(&entry.sha512)) {
+            sin_nombre.push(changes.len());
             changes.push(Cambio {
                 proyecto: entry.proyecto.clone(),
                 tipo: if old.is_some() {
@@ -863,7 +865,8 @@ async fn construir_plan(
                 } else {
                     Tipo::Agregar
                 },
-                nombre: source.nombre(&entry.proyecto).await.map_err(err)?,
+                // Se completa después con una sola consulta por lote.
+                nombre: String::new(),
                 antes: old.map(|m| m.version.clone()).unwrap_or_default(),
                 despues: v.version_number.clone(),
                 bytes: if old.is_some_and(|m| m.sha512.eq_ignore_ascii_case(&entry.sha512)) {
@@ -874,6 +877,17 @@ async fn construir_plan(
             });
         }
         versions.push(v);
+    }
+    if !sin_nombre.is_empty() {
+        let ids: Vec<_> = sin_nombre.iter().map(|&i| changes[i].proyecto.clone()).collect();
+        let nombres = source.nombres(&ids).await.map_err(err)?;
+        for &i in &sin_nombre {
+            let c = &mut changes[i];
+            c.nombre = nombres
+                .get(&c.proyecto)
+                .cloned()
+                .ok_or("Modrinth no devolvió el nombre de un proyecto del anfitrión.")?;
+        }
     }
     // Dependencias obligatorias también deben estar fijadas en el índice, nunca elegir la última.
     let resolved = resolver(

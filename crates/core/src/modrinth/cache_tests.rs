@@ -221,3 +221,74 @@ async fn hash_no_confirmado_y_json_invalido_no_contaminan_la_cache() {
     api.catalog.project("p1").await.unwrap();
     assert_eq!(api.count(),4);
 }
+
+/// Servidor concurrente: la ficha `lento` tarda en responder y se cuentan las peticiones por ruta.
+async fn servidor_concurrente() -> (Catalog, Arc<Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let rutas = Arc::new(Mutex::new(vec![]));
+    let recibidas = rutas.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let recibidas = recibidas.clone();
+            tokio::spawn(async move {
+                let mut request = vec![];
+                while !request.windows(4).any(|s| s == b"\r\n\r\n") {
+                    let mut chunk = [0; 4096];
+                    let n = stream.read(&mut chunk).await.unwrap();
+                    if n == 0 { return; }
+                    request.extend_from_slice(&chunk[..n]);
+                }
+                let linea = String::from_utf8_lossy(&request).lines().next().unwrap().to_owned();
+                recibidas.lock().unwrap().push(linea.clone());
+                let id = linea.split_whitespace().nth(1).unwrap().rsplit('/').next().unwrap().to_owned();
+                if id == "lento" || id == "repetido" {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                }
+                let body = project(&id).to_string();
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    let mut catalog = Catalog::new().unwrap().with_metadata_cache();
+    catalog.client = Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+    catalog.api = format!("http://{addr}/v2/");
+    (catalog, rutas, task)
+}
+#[tokio::test]
+async fn una_ficha_lenta_no_bloquea_aciertos_de_cache_y_no_se_pide_dos_veces() {
+    let (catalog, rutas, task) = servidor_concurrente().await;
+    catalog.project("rapido").await.unwrap();
+    let lenta = { let c = catalog.clone(); tokio::spawn(async move { c.project("lento").await }) };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Mientras la red espera la ficha lenta, la caché sigue respondiendo al instante.
+    let inicio = Instant::now();
+    assert_eq!(catalog.project("rapido").await.unwrap().id, "rapido");
+    assert!(inicio.elapsed() < Duration::from_millis(400), "{:?}", inicio.elapsed());
+    lenta.await.unwrap().unwrap();
+    // Dos consultas simultáneas del mismo recurso producen una sola petición.
+    let (a, b) = tokio::join!(catalog.project("repetido"), catalog.project("repetido"));
+    assert_eq!((a.unwrap().id, b.unwrap().id), ("repetido".into(), "repetido".into()));
+    assert_eq!(rutas.lock().unwrap().iter().filter(|r| r.contains("/repetido")).count(), 1);
+    task.abort();
+}
+#[tokio::test]
+async fn nombres_y_exclusivos_de_cliente_se_consultan_por_lotes() {
+    use crate::mods::Fuente;
+    // Los lotes pendientes se piden en orden lexicográfico, igual que aquí.
+    let ids: Vec<_> = (1..=60).map(|n| format!("p{n}")).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let fichas = |lote: &[String]| Value::Array(lote.iter().map(|id| {
+        let mut p = project(id);
+        if id == "p7" { p["client_side"] = json!("required"); p["server_side"] = json!("unsupported"); }
+        p
+    }).collect());
+    let api = Api::new(ids.chunks(50).map(|lote| (200, "", fichas(lote))).collect()).await;
+    let nombres = api.catalog.nombres(&ids).await.unwrap();
+    assert_eq!((nombres.len(), nombres["p60"].as_str()), (60, "p60"));
+    assert_eq!(api.count(), 2);
+    // La segunda consulta usa las fichas guardadas por la primera.
+    assert_eq!(api.catalog.solo_cliente_lote(&ids).await.unwrap(), ["p7".to_owned()].into());
+    assert_eq!(api.count(), 2);
+}

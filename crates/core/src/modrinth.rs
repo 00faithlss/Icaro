@@ -346,6 +346,9 @@ pub struct Catalog {
     client: Client,
     cooldown: Arc<Mutex<Cooldown>>,
     metadata: Option<Arc<tokio::sync::Mutex<cache::Cache>>>,
+    /// Un turno por recurso: evita pedir dos veces lo mismo sin bloquear
+    /// recursos distintos ni los aciertos de caché durante la red.
+    en_curso: Arc<Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     api: String,
     metadata_path: Option<PathBuf>,
 }
@@ -384,12 +387,14 @@ impl Catalog {
         if ids.len() > 512 { return Err(Error::Response("las versiones de Modrinth")); }
         let mut result = std::collections::BTreeMap::new();
         let mut missing = std::collections::BTreeSet::new();
-        let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
-        for id in ids {
-            let key = format!("GET {}", self.version_url(id)?);
-            if let Some(v) = cache.as_mut().and_then(|c| c.get::<Version>(&key)).filter(|v| &v.id == id) {
-                result.insert(id.clone(), v);
-            } else { missing.insert(id.clone()); }
+        {
+            let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
+            for id in ids {
+                let key = format!("GET {}", self.version_url(id)?);
+                if let Some(v) = cache.as_mut().and_then(|c| c.get::<Version>(&key)).filter(|v| &v.id == id) {
+                    result.insert(id.clone(), v);
+                } else { missing.insert(id.clone()); }
+            }
         }
         let missing: Vec<_> = missing.into_iter().collect();
         for batch in missing.chunks(50) {
@@ -400,6 +405,7 @@ impl Catalog {
             if versions.len() != batch.len() || fetched.len() != batch.len() || batch.iter().any(|id| !fetched.contains_key(id)) {
                 return Err(Error::Response("las versiones de Modrinth"));
             }
+            let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
             for (id, version) in fetched {
                 if let Some(cache) = &mut cache {
                     cache.insert(format!("GET {}", self.version_url(&id)?), &version, cache::TTL)?;
@@ -420,15 +426,25 @@ impl Catalog {
         url.set_path(original.path());
         Ok(url)
     }
+    async fn turno(&self, clave: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let candado = {
+            let mut mapa = self.en_curso.lock().unwrap_or_else(|e| e.into_inner());
+            // Un turno que solo conserva el mapa ya no lo usa nadie.
+            mapa.retain(|_, c| Arc::strong_count(c) > 1);
+            mapa.entry(clave.to_owned()).or_default().clone()
+        };
+        candado.lock_owned().await
+    }
     async fn metadata_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, Error> {
         let Some(cache) = &self.metadata else { return self.json(self.client.get(url)).await; };
-        // Serializar las consultas evita duplicados entre clones y respeta el cooldown común.
-        let mut cache = cache.lock().await;
         let key = format!("GET {url}");
-        if let Some(value) = cache.get(&key) { return Ok(value); }
+        // Peticiones simultáneas del mismo recurso esperan la primera respuesta;
+        // la caché solo se bloquea para leer y escribir, nunca durante la red.
+        let _turno = self.turno(&key).await;
+        if let Some(value) = cache.lock().await.get(&key) { return Ok(value); }
         let value: serde_json::Value = self.json(self.client.get(url)).await?;
         let decoded = serde_json::from_value(value.clone()).map_err(|_| Error::Response("Modrinth"))?;
-        cache.insert(key, &value, cache::TTL)?;
+        cache.lock().await.insert(key, &value, cache::TTL)?;
         Ok(decoded)
     }
 
@@ -452,23 +468,26 @@ impl Catalog {
         if hashes.is_empty() { return Ok(Default::default()); }
         {
             if let Some(cache) = &self.metadata {
-                let mut cache = cache.lock().await;
                 let mut result = std::collections::BTreeMap::new();
                 let mut missing = std::collections::BTreeSet::new();
                 let key = |hash: &str| match target {
                     Some((mc,loader)) => format!("update:{mc}:{loader}:{hash}"),
                     None => format!("hash:{hash}"),
                 };
-                for hash in hashes {
-                    match cache.get::<Option<Version>>(&key(hash)) {
-                        Some(Some(v)) => { result.insert(hash.clone(), v); }
-                        Some(None) => {}
-                        None => { missing.insert(hash.clone()); }
+                {
+                    let mut cache = cache.lock().await;
+                    for hash in hashes {
+                        match cache.get::<Option<Version>>(&key(hash)) {
+                            Some(Some(v)) => { result.insert(hash.clone(), v); }
+                            Some(None) => {}
+                            None => { missing.insert(hash.clone()); }
+                        }
                     }
                 }
                 if !missing.is_empty() {
                     let missing: Vec<_> = missing.into_iter().collect();
                     let fetched = self.request_hashes(&missing, target).await?;
+                    let mut cache = cache.lock().await;
                     for hash in missing {
                         let value = fetched.get(&hash);
                         let ttl = if target.is_some() { Duration::from_secs(300) }
@@ -522,6 +541,7 @@ impl Catalog {
             client: http::client()?,
             cooldown: Arc::new(Mutex::new(Cooldown::default())),
             metadata: None,
+            en_curso: Arc::default(),
             api: API.into(),
             metadata_path: None,
         })
@@ -615,10 +635,12 @@ impl Catalog {
     pub async fn projects_by_ids(&self, ids: &[String]) -> Result<std::collections::BTreeMap<String, Project>, Error> {
         if ids.len()>512 {return Err(Error::Response("los proyectos de Modrinth"));}
         let mut result=std::collections::BTreeMap::new();let mut missing=std::collections::BTreeSet::new();
-        let mut cache=if let Some(c)=&self.metadata {Some(c.lock().await)} else {None};
-        for id in ids {
-            let key=format!("GET {}",self.project_url(id)?);
-            if let Some(p)=cache.as_mut().and_then(|c|c.get::<Project>(&key)).filter(|p|p.id==*id) {result.insert(id.clone(),p);} else {missing.insert(id.clone());}
+        {
+            let mut cache=if let Some(c)=&self.metadata {Some(c.lock().await)} else {None};
+            for id in ids {
+                let key=format!("GET {}",self.project_url(id)?);
+                if let Some(p)=cache.as_mut().and_then(|c|c.get::<Project>(&key)).filter(|p|p.id==*id) {result.insert(id.clone(),p);} else {missing.insert(id.clone());}
+            }
         }
         let missing:Vec<_>=missing.into_iter().collect();
         for batch in missing.chunks(50) {
@@ -630,6 +652,7 @@ impl Catalog {
                 let p:Project=serde_json::from_value(value.clone()).map_err(|_|Error::Response("los proyectos de Modrinth"))?;
                 if !batch.contains(&p.id)||fetched.insert(p.id.clone(),(p,value)).is_some() {return Err(Error::Response("los proyectos de Modrinth"));}
             }
+            let mut cache=if let Some(c)=&self.metadata {Some(c.lock().await)} else {None};
             for (id,(p,value)) in fetched {
                 if let Some(c)=&mut cache {c.insert(format!("GET {}",self.project_url(&id)?),&value,cache::TTL)?;}
                 result.insert(id,p);
