@@ -3,6 +3,7 @@
 ## Sin publicar
 
 - Acerca de muestra la versión compilada del workspace en lugar del texto fijo `0.1.0`.
+- Acerca de añade **Código fuente en GitHub**, con icono de enlace externo, que abre el repositorio declarado en `Cargo.toml`.
 - Amplía la guía de colaboradores con el estado del hotfix, los pendientes y las prioridades de la investigación de sincronización.
 - La sincronización calcula los hashes de `mods` una vez por revisión en lugar de dos, y al aplicar solo vuelve a leerlos si cambiaron los metadatos de algún archivo. Pulsar Jugar con el conjunto al día pasa de tres lecturas completas a una.
 - La lectura local de mods se ejecuta fuera del executor asíncrono y se detiene al cancelar. El límite de 90 segundos de la revisión ya no incluye el disco, por lo que una carpeta grande no se presenta como un fallo de Modrinth.

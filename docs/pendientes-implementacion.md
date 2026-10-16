@@ -1,6 +1,6 @@
 # Implementación pendiente
 
-Actualizado el **13-10-2026**. Este documento describe el trabajo que falta; no presenta estas funciones como disponibles. El [roadmap del System Design](roadmap-system-design.md) detalla los componentes y sus diferencias visuales.
+Actualizado el **16-10-2026**. Este documento describe el trabajo que falta; no presenta estas funciones como disponibles. El [roadmap del System Design](roadmap-system-design.md) detalla los componentes y sus diferencias visuales.
 
 ## 1. Instalación y ejecución de loaders oficiales
 
@@ -64,7 +64,7 @@ El [roadmap general](../README.md#servidores-zerotier-y-sincronización) cuenta 
 
 **ZeroTier:** detección y solicitud de pertenencia por ID conectadas a la CLI oficial, con autorización, IP y aviso al aceptar. La CLI necesita sus permisos habituales; faltan instalación/elevación automática y salida desde la interfaz. Crear una red abre Central. Miembros y su administración necesitan una fuente del controlador; los peers locales no se presentan como amigos.
 
-**Sincronización:** servicio explícito en el PC del anfitrión que comparte el índice de una instancia cliente, con versiones exactas de Modrinth. Consulta previa a Jugar, revisión de diferencias, hashes/tamaño, conservación de archivos locales y preparación con respaldo/cancelación conectadas; prueba con mods reales por HTTP local. Faltan integración visual del publicador con diseño aprobado, proveedores adicionales y prueba entre equipos ZeroTier.
+**Sincronización:** servicio explícito en el PC del anfitrión que comparte el índice de una instancia cliente, con versiones exactas de Modrinth. Consulta previa a Jugar, revisión de diferencias, hashes/tamaño, conservación de archivos locales y preparación con respaldo/cancelación conectadas; prueba con mods reales por HTTP local. Desde la P0 de rendimiento, la revisión calcula los hashes una vez y fuera del executor, la aplicación mueve solo los archivos afectados con un diario que se deshace tras un fallo o cierre, y `logs/sincronizacion.log` registra cada fase. En un banco de 500 MiB en debug, revisión, aplicación y Jugar sin cambios pasaron de 92 s, 93 s y 137 s a 2,3 s, 0,03 s y 2,4 s; el usuario confirmó la mejora con una instancia por actualizar y otra nueva. Quedan el inventario incremental, el presupuesto de la API y el host incremental (P1/P2 de la [investigación](investigaciones/rendimiento-sincronizacion-2026-10-15.md)). Faltan integración visual del publicador con diseño aprobado, proveedores adicionales y prueba entre equipos ZeroTier.
 
 **Criterio de finalización:** desde equipos reales, guardar un servidor, conectar directamente o mediante una red ZeroTier autorizada, revisar y sincronizar mods, jugar y reconectar. Comprobar en Windows y Arch Linux los errores de servicio, autorización pendiente, manifiesto incompatible y descarga interrumpida sin perder los archivos anteriores.
 
@@ -85,6 +85,8 @@ El [roadmap general](../README.md#servidores-zerotier-y-sincronización) cuenta 
 Las tres casillas del roadmap general agrupan creación, empaquetado y validación. El workflow prepara assets portables, setup y latest.json; la actualización instalada usa el instalador completo, pendiente de validar desde una release remota. No se habilitará actualización instalada como verificada antes de probarla. Ver [instalador de Windows](instalador-windows.md).
 
 ## Correcciones recientes
+
+Ajustes → Acerca de muestra la versión compilada del workspace y un enlace al repositorio de GitHub. La sincronización ya no copia la carpeta `mods` completa y deja un registro rotativo propio para diagnosticar fallos.
 
 La creación/preparación de instancias mantiene estable el estado del botón frente a eventos intercalados de descarga y verificación. La trama de Preparando es estática y no cambia cada fotograma. Ya se incorporaron la exportación de instancia, los seis formatos de lista de mods, el editor de iconos con vista previa inmediata, los avisos, apariencia, verificación de archivos y la confirmación de eliminación con bloques y grietas en toda la tarjeta; sus límites siguen registrados en el roadmap del diseño.
 
