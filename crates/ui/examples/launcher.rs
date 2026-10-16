@@ -3653,7 +3653,7 @@ fn main() -> iced::Result {
 }
 
 fn iniciar_app(seccion: Seccion, piedra: bool, menu: Option<usize>, con_dialogo: bool, mut servicios: servicios::Estado) -> (App, Task<Mensaje>) {
-    if !servicios.demo { servicios.instancias.cargar(); let _=icaro_core::almacenamiento::registrar(&estado::directorio(false),"Inicio del launcher"); }
+    if !servicios.demo { servicios.instancias.cargar(); let _=icaro_core::almacenamiento::registrar(&estado::directorio(false),"Inicio del launcher"); icaro_core::mods::sincronizacion::activar_registro(&estado::directorio(false)); }
     let mut guardado = estado::Guardado::cargar(servicios.demo);
     if let Some(g)=&mut guardado {g.apariencia.normalizar();}
     let (mut app, inicio) = iniciar_con_guardado(seccion, piedra, menu, con_dialogo, servicios, guardado);

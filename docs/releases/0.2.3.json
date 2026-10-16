@@ -1,0 +1,12 @@
+{
+  "version": "0.2.3",
+  "notas": [
+    {"tipo":"mejora","texto":"La sincronización revisa los mods leyendo sus archivos una sola vez y, al aplicar, ya no copia toda la carpeta: descarga solo lo nuevo y mueve únicamente los archivos afectados. Jugar con el conjunto al día es mucho más rápido."},
+    {"tipo":"mejora","texto":"La lectura de mods no bloquea el resto del launcher, se detiene al cancelar y la barra de progreso cuenta solo los cambios pendientes."},
+    {"tipo":"correccion","texto":"Una carpeta de mods grande ya no aparece como un fallo de Modrinth por tiempo de espera."},
+    {"tipo":"correccion","texto":"Si la sincronización falla o el launcher se cierra a mitad, los mods se restauran automáticamente sin sobrescribir archivos ajenos."},
+    {"tipo":"correccion","texto":"Acerca de muestra la versión real del launcher."},
+    {"tipo":"nuevo","texto":"Añade un registro de sincronización en logs/sincronizacion.log para diagnosticar problemas, sin datos de la cuenta."},
+    {"tipo":"nuevo","texto":"Acerca de incluye un enlace al código fuente en GitHub."}
+  ]
+}
