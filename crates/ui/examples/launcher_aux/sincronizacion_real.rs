@@ -183,7 +183,10 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     let result = tokio::select! {
                         _ = cancel.cancelled() => Err("Consulta cancelada.".to_owned()),
                         r = tokio::time::timeout(std::time::Duration::from_secs(90), sync::preparar_desde(&catalog, &store, &instance, index, addr.to_string(), local)) => {
-                            r.map_err(|_| "Modrinth no respondió a tiempo. Inténtalo de nuevo.".to_owned()).and_then(|r| r)
+                            r.map_err(|_| {
+                                sync::registrar_evento("error fase=plan-limite-90s", &instance.id, "Modrinth no respondió a tiempo");
+                                "Modrinth no respondió a tiempo. Inténtalo de nuevo.".to_owned()
+                            }).and_then(|r| r)
                         }
                     };
                     // Una pausa del proveedor no invalida las respuestas correctas ya obtenidas.
@@ -262,6 +265,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                         let catalog = source.map_err(|e| e.to_string())?;
                         let latest = sync::consultar(addr, cancel.clone()).await?;
                         if latest.revision()? != plan.revision_origen() {
+                            sync::registrar_evento("error fase=anfitrion-cambio", &instance.id, "la revisión del anfitrión cambió desde el plan");
                             return Err("Los mods del anfitrión cambiaron. Comprueba de nuevo antes de sincronizar.".into());
                         }
                         sync::aplicar(

@@ -9,6 +9,7 @@
 - Las compilaciones de desarrollo optimizan `sha2` y `sha1`; las mediciones de sincronización en debug dejan de estar dominadas por el hashing sin optimizar.
 - Aplicar una sincronización ya no copia toda la carpeta `mods`: descarga y verifica solo lo nuevo, y mueve únicamente los archivos afectados mediante un diario que se deshace si falla o si el launcher se cierra a mitad. Los mods personales no se copian ni se recrean.
 - La barra de progreso de la sincronización cuenta los cambios del plan en lugar de todos los mods del índice.
+- Añade `logs/sincronizacion.log`, con rotación, para diagnosticar sincronizaciones: índice del anfitrión, revisión, plan, descargas, commit, rollback, recuperación y errores con su fase y duración. No incluye rutas absolutas ni datos de la cuenta.
 
 ## [0.2.2] - 2026-10-15
 

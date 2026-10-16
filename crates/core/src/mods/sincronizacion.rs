@@ -272,6 +272,34 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 const CANCELADA: &str = "Revisión de mods cancelada. No se modificó la instancia.";
 
+static BITACORA: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static ESCRITURA: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Activa `logs/sincronizacion.log` en la carpeta de datos del launcher. Sin
+/// activarlo (pruebas, modo demo) la sincronización no escribe registros.
+pub fn activar_registro(root: &Path) {
+    let _ = BITACORA.set(root.to_path_buf());
+}
+/// Una línea `evento clave=valor`. Un fallo al escribir nunca interrumpe la sincronización.
+fn registrar(mensaje: impl AsRef<str>) {
+    if let Some(root) = BITACORA.get() {
+        let _guardia = ESCRITURA.lock();
+        let _ = crate::almacenamiento::registrar_en(root, "sincronizacion", mensaje.as_ref());
+    }
+}
+/// Evento que solo conoce la interfaz, como un límite de tiempo o un índice
+/// del anfitrión que cambió entre la revisión y la aplicación.
+pub fn registrar_evento(evento: &str, instancia: &str, mensaje: &str) {
+    registrar(format!("{evento} instancia={instancia} mensaje={mensaje}"));
+}
+/// Los primeros 12 caracteres bastan para distinguir revisiones en el registro.
+fn corta(revision: &str) -> &str {
+    revision.get(..12).unwrap_or(revision)
+}
+fn ms(inicio: std::time::Instant) -> u128 {
+    inicio.elapsed().as_millis()
+}
+
 /// Ejecuta lecturas y hashes fuera del executor asíncrono. Si el futuro se
 /// descarta por cancelación o límite de tiempo, el token detiene el trabajo
 /// entre archivos en lugar de dejarlo leyendo toda la carpeta.
@@ -433,9 +461,21 @@ pub struct AnalisisLocal {
 /// Calcula una vez los hashes de `mods` fuera del executor. Separarlo de
 /// [`preparar_desde`] permite limitar el tiempo de la red sin contar el disco.
 pub async fn analizar(store: &Almacen, instance: &Instancia) -> Result<AnalisisLocal, String> {
+    let inicio = std::time::Instant::now();
+    let id = instance.id.clone();
     let store = store.clone();
     let instance = instance.clone();
-    bloqueante(move |cancel| analizar_bloqueante(&store, &instance, &cancel)).await
+    let resultado = bloqueante(move |cancel| analizar_bloqueante(&store, &instance, &cancel)).await;
+    match &resultado {
+        Ok(local) => registrar(format!(
+            "revision-local instancia={id} archivos={} bytes={} ms={}",
+            local.estado.len(),
+            local.estado.iter().map(|e| e.bytes).sum::<u64>(),
+            ms(inicio)
+        )),
+        Err(e) => registrar(format!("error fase=revision-local instancia={id} ms={} mensaje={e}", ms(inicio))),
+    }
+    resultado
 }
 fn analizar_bloqueante(
     store: &Almacen,
@@ -621,6 +661,36 @@ pub async fn preparar(
 /// Construye el plan con un análisis local ya calculado. Solo vuelve a leer
 /// metadatos al final; los hashes no se recalculan.
 pub async fn preparar_desde(
+    source: &impl Fuente,
+    store: &Almacen,
+    instance: &Instancia,
+    index: Indice,
+    origen: String,
+    local: AnalisisLocal,
+) -> Result<Plan, String> {
+    let inicio = std::time::Instant::now();
+    let resultado = construir_plan(source, store, instance, index, origen.clone(), local).await;
+    match &resultado {
+        Ok(plan) => {
+            let cuenta = |tipo: Tipo| plan.cambios.iter().filter(|c| c.tipo == tipo).count();
+            registrar(format!(
+                "plan instancia={} origen={origen} revision={} agregar={} actualizar={} quitar={} conflictos={} reemplazos={} descarga_bytes={} ms={}",
+                instance.id,
+                corta(&plan.revision_origen),
+                cuenta(Tipo::Agregar),
+                cuenta(Tipo::Actualizar),
+                cuenta(Tipo::Quitar),
+                plan.conflictos.len(),
+                plan.reemplazos.len(),
+                plan.cambios.iter().map(|c| c.bytes).sum::<u64>(),
+                ms(inicio)
+            ));
+        }
+        Err(e) => registrar(format!("error fase=plan instancia={} origen={origen} ms={} mensaje={e}", instance.id, ms(inicio))),
+    }
+    resultado
+}
+async fn construir_plan(
     source: &impl Fuente,
     store: &Almacen,
     instance: &Instancia,
@@ -1141,6 +1211,31 @@ pub async fn aplicar(
     cancel: CancellationToken,
     progress: impl Fn(&str, bool) + Send,
 ) -> Result<(), String> {
+    let inicio = std::time::Instant::now();
+    registrar(format!(
+        "aplicar-inicio instancia={} origen={} revision={} cambios={}",
+        instance.id, plan.origen, corta(&plan.revision_origen), plan.cambios.len()
+    ));
+    let resultado = aplicar_transaccion(source, store, instance, plan, cancel.clone(), progress).await;
+    match &resultado {
+        Ok(()) => registrar(format!("aplicar-fin instancia={} resultado=ok ms={}", instance.id, ms(inicio))),
+        Err(e) => registrar(format!(
+            "error fase=aplicar instancia={} cancelada={} ms={} mensaje={e}",
+            instance.id,
+            cancel.is_cancelled(),
+            ms(inicio)
+        )),
+    }
+    resultado
+}
+async fn aplicar_transaccion(
+    source: &impl Fuente,
+    store: &Almacen,
+    instance: &Instancia,
+    plan: &Plan,
+    cancel: CancellationToken,
+    progress: impl Fn(&str, bool) + Send,
+) -> Result<(), String> {
     let game = store.juego(&instance.id).map_err(err)?;
     if !plan.puede_aplicar() {
         return Err("Hay mods locales distintos de los del anfitrión. Revisa los conflictos y autoriza su respaldo antes de sincronizar.".into());
@@ -1183,6 +1278,7 @@ pub async fn aplicar(
             if cancel.is_cancelled() {
                 return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
             }
+            registrar(format!("al-dia instancia={} sin_movimientos=true", instance.id));
             return Ok(());
         }
     }
@@ -1290,6 +1386,7 @@ pub async fn aplicar(
         // Solo se descarga lo que falta; la carpeta activa no cambia hasta el commit.
         for (indice, descarga) in &descargas {
             let id = descarga.id();
+            let inicio_descarga = std::time::Instant::now();
             progress(&id, false);
             if cancel.is_cancelled() {
                 return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
@@ -1305,6 +1402,16 @@ pub async fn aplicar(
                 }
             };
             let destino = tx.join("nuevos").join(indice.to_string());
+            let (archivo, fuente) = match descarga {
+                Descarga::Modrinth(_, file) => (file.filename.clone(), "modrinth"),
+                Descarga::Propio(local) => (local.archivo.clone(), "anfitrion"),
+            };
+            registrar(format!(
+                "descarga instancia={} id={id} archivo={archivo} fuente={fuente} bytes={} ms={}",
+                instance.id,
+                bytes.len(),
+                ms(inicio_descarga)
+            ));
             bloqueante(move |_| {
                 if bytes.len() as u64 != tamano || hash(&bytes) != sha {
                     return Err("El mod descargado no coincide con su tamaño o SHA-512.".into());
@@ -1384,6 +1491,7 @@ pub async fn aplicar(
         let (juego, carpeta, esperado, verificada) = (game.clone(), dir.clone(), plan.estado.clone(), plan.huella.clone());
         let tx_commit = tx_nombre.clone();
         let respaldo = format!(".icaro-mods-conflictos-{id_tx}");
+        let (instancia, inicio_commit, total_ops) = (instance.id.clone(), std::time::Instant::now(), ops.len());
         bloqueante(move |token| {
             if !sin_cambios(&carpeta, &esperado, &verificada, &token)? {
                 return Err("Los mods cambiaron o se canceló la sincronización. El conjunto anterior se conserva.".into());
@@ -1398,7 +1506,9 @@ pub async fn aplicar(
                 fs::create_dir(juego.join(&respaldo)).map_err(err)?;
             }
             fs::create_dir(juego.join(&tx_commit).join("retirados")).map_err(err)?;
-            ejecutar(&juego, &tx_commit, &movimientos)
+            ejecutar(&juego, &tx_commit, &movimientos)?;
+            registrar(format!("commit instancia={instancia} tx={tx_commit} movimientos={total_ops} ms={}", ms(inicio_commit)));
+            Ok(())
         })
         .await?;
         // Los cambios sin descarga (retiradas, activaciones) terminan con el commit.
@@ -1600,7 +1710,13 @@ fn ejecutar(game: &Path, tx_nombre: &str, movimientos: &[Movimiento]) -> Result<
     })();
     if let Err(e) = resultado {
         // Solo se deshace lo que este proceso movió; lo pendiente sigue intacto.
-        return match deshacer(game, &movimientos[..hechos]) {
+        let deshecho = deshacer(game, &movimientos[..hechos]);
+        registrar(format!(
+            "rollback tx={tx_nombre} hechos={hechos} total={} resultado={} causa={e}",
+            movimientos.len(),
+            if deshecho.is_ok() { "deshecho" } else { "pendiente-recuperacion" }
+        ));
+        return match deshecho {
             Ok(()) => {
                 let _ = fs::remove_file(tx.join(DIARIO));
                 Err(format!("No se pudo publicar la sincronización. El conjunto anterior se conserva. {e}"))
@@ -1643,11 +1759,27 @@ pub(super) fn recuperar_transacciones(game: &Path) -> Result<(), Error> {
         }
         let tx = entrada.path();
         regular(&tx, true)?;
+        let instancia = game
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if tx.join(DIARIO).exists() {
             let diario = leer_diario(&tx)?;
             if !diario.confirmada {
-                deshacer(game, &diario.movimientos)?;
+                if let Err(e) = deshacer(game, &diario.movimientos) {
+                    registrar(format!("error fase=recuperacion carpeta={instancia} tx={nombre} mensaje={e}"));
+                    return Err(e);
+                }
+                registrar(format!(
+                    "recuperacion carpeta={instancia} tx={nombre} accion=deshecha movimientos={}",
+                    diario.movimientos.len()
+                ));
+            } else {
+                registrar(format!("recuperacion carpeta={instancia} tx={nombre} accion=limpieza-confirmada"));
             }
+        } else {
+            registrar(format!("recuperacion carpeta={instancia} tx={nombre} accion=descartar-descargas"));
         }
         borrar_preparacion(game, &tx)?;
     }
@@ -1683,6 +1815,21 @@ pub fn endpoint(address: &str) -> Result<SocketAddr, String> {
     ))
 }
 pub async fn consultar(addr: SocketAddr, cancel: CancellationToken) -> Result<Indice, String> {
+    let inicio = std::time::Instant::now();
+    let resultado = consultar_indice(addr, cancel).await;
+    match &resultado {
+        Ok(indice) => registrar(format!(
+            "indice anfitrion={addr} mods={} archivos_propios={} avisos={} ms={}",
+            indice.mods.len(),
+            indice.archivos.len(),
+            indice.avisos.len(),
+            ms(inicio)
+        )),
+        Err(e) => registrar(format!("error fase=indice anfitrion={addr} ms={} mensaje={e}", ms(inicio))),
+    }
+    resultado
+}
+async fn consultar_indice(addr: SocketAddr, cancel: CancellationToken) -> Result<Indice, String> {
     if addr.port() < 2 {
         return Err("Puerto de sincronización inválido.".into());
     }
@@ -2395,6 +2542,45 @@ mod tests {
         assert_eq!(fs::read(mods.join("a.jar")).unwrap(), b"anterior");
         assert_eq!(fs::read(mods.join("ocupado.jar")).unwrap(), b"ajeno");
         assert!(!tx.join(DIARIO).exists());
+    }
+    #[tokio::test]
+    async fn el_registro_describe_plan_descargas_commit_errores_y_recuperacion() {
+        // El registro es global: las demás pruebas pueden escribir aquí, por eso
+        // se filtran las líneas por la instancia de esta prueba.
+        let raiz = std::env::temp_dir().join(format!("icaro-sync-registro-{}", std::process::id()));
+        activar_registro(&raiz);
+        let (_temp, store, i) = store();
+        let mut f = fake();
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
+        f.bad = true;
+        assert!(aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.is_err());
+        let juego = store.juego(&i.id).unwrap();
+        let tx = transaccion(&juego, false, &[("mods/perdido.jar", ".icaro-mods-tx-prueba/retirados/0")]);
+        fs::write(tx.join("retirados/0"), b"anterior").unwrap();
+        inventario(&store, &i.id).unwrap();
+        let carpeta = juego.parent().unwrap().file_name().unwrap().to_string_lossy().into_owned();
+        let registro = fs::read_to_string(raiz.join("logs/sincronizacion.log")).unwrap();
+        let propias: Vec<_> = registro
+            .lines()
+            .filter(|l| l.contains(&format!("instancia={} ", i.id)) || l.contains(&format!("carpeta={carpeta} ")))
+            .collect();
+        for esperado in [
+            "revision-local instancia=",
+            "plan instancia=",
+            "agregar=1",
+            "aplicar-inicio instancia=",
+            "descarga instancia=",
+            "fuente=modrinth",
+            "commit instancia=",
+            "aplicar-fin instancia=",
+            "error fase=aplicar instancia=",
+            "accion=deshecha movimientos=1",
+        ] {
+            assert!(propias.iter().any(|l| l.contains(esperado)), "falta {esperado}:\n{}", propias.join("\n"));
+        }
+        assert!(propias.iter().all(|l| !l.contains(&*raiz.to_string_lossy())), "el registro no debe incluir rutas absolutas");
     }
     #[test]
     fn el_diario_solo_acepta_rutas_de_la_transaccion() {
