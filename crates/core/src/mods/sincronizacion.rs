@@ -1299,7 +1299,10 @@ fn direccion_archivos(origen: &str) -> Result<SocketAddr, String> {
     }
     Ok(addr)
 }
-async fn descargar_propio(origen: &str, file: &ArchivoPropio) -> Result<Vec<u8>, String> {
+/// Descarga un archivo propio del anfitrión directamente a `destino`,
+/// verificando tamaño y SHA-512 mientras llegan los bloques.
+async fn descargar_propio_a(origen: &str, file: &ArchivoPropio, destino: &Path) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
     let addr = direccion_archivos(origen)?;
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -1308,36 +1311,69 @@ async fn descargar_propio(origen: &str, file: &ArchivoPropio) -> Result<Vec<u8>,
         .build()
         .map_err(err)?;
     let mut response = client
-        .get(format!(
-            "http://{addr}/icaro/v1/files/{}",
-            file.sha512.to_lowercase()
-        ))
+        .get(format!("http://{addr}/icaro/v1/files/{}", file.sha512.to_lowercase()))
         .send()
         .await
         .map_err(|_| format!("No se pudo descargar {} del anfitrión.", file.archivo))?;
     if !response.status().is_success() {
-        return Err(
-            "El archivo del anfitrión cambió o no está disponible. Comprueba de nuevo.".into(),
-        );
+        return Err("El archivo del anfitrión cambió o no está disponible. Comprueba de nuevo.".into());
     }
-    if response
-        .content_length()
-        .is_some_and(|n| n != file.bytes || n > MAX_FILE)
-    {
+    if response.content_length().is_some_and(|n| n != file.bytes || n > MAX_FILE) {
         return Err("Tamaño de archivo del anfitrión inválido.".into());
     }
-    let mut bytes = vec![];
-    while let Some(chunk) = response.chunk().await.map_err(err)? {
-        if bytes.len() as u64 + chunk.len() as u64 > file.bytes {
+    let mut salida = tokio::fs::File::create(destino).await.map_err(err)?;
+    let (mut hasher, mut total) = (Sha512::new(), 0u64);
+    while let Some(bloque) = response.chunk().await.map_err(err)? {
+        total = total.saturating_add(bloque.len() as u64);
+        if total > file.bytes {
             return Err("El archivo supera el tamaño publicado.".into());
         }
-        bytes.extend_from_slice(&chunk);
+        hasher.update(&bloque);
+        salida.write_all(&bloque).await.map_err(err)?;
     }
-    if bytes.len() as u64 != file.bytes || hash(&bytes) != file.sha512.to_lowercase() {
+    salida.sync_all().await.map_err(err)?;
+    let sha: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    if total != file.bytes || sha != file.sha512.to_lowercase() {
         return Err("El archivo del anfitrión no coincide con su tamaño o SHA-512.".into());
     }
-    Ok(bytes)
+    Ok(())
 }
+
+type Trabajo<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>;
+
+/// Ejecuta hasta `limite` descargas a la vez. Avisa el inicio y el final de cada
+/// una por su identificador y se detiene con el primer error, descartando el resto.
+async fn en_paralelo<'a>(
+    trabajos: Vec<(String, Trabajo<'a>)>,
+    limite: usize,
+    progress: &(impl Fn(&str, bool) + Send),
+) -> Result<(), String> {
+    let mut pendientes = trabajos.into_iter();
+    let mut activos: Vec<Trabajo<'a>> = vec![];
+    loop {
+        while activos.len() < limite.max(1) {
+            let Some((id, trabajo)) = pendientes.next() else { break };
+            progress(&id, false);
+            activos.push(trabajo);
+        }
+        if activos.is_empty() {
+            return Ok(());
+        }
+        let terminado = std::future::poll_fn(|cx| {
+            for i in 0..activos.len() {
+                if let std::task::Poll::Ready(resultado) = activos[i].as_mut().poll(cx) {
+                    // El trabajo terminó: se descarta su futuro ya completado.
+                    drop(activos.swap_remove(i));
+                    return std::task::Poll::Ready(resultado);
+                }
+            }
+            std::task::Poll::Pending
+        })
+        .await?;
+        progress(&terminado, true);
+    }
+}
+
 pub async fn aplicar(
     source: &impl Fuente,
     store: &Almacen,
@@ -1531,42 +1567,43 @@ async fn aplicar_transaccion(
             records.retain(|m| !m.archivo.eq_ignore_ascii_case(&local.archivo));
         }
         // Solo se descarga lo que falta; la carpeta activa no cambia hasta el commit.
+        // Cada archivo va directo a disco con su hash calculado por bloques: hasta
+        // cuatro a la vez desde Modrinth y dos desde el anfitrión.
+        if cancel.is_cancelled() {
+            return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
+        }
+        let mut de_modrinth: Vec<(String, Trabajo<'_>)> = vec![];
+        let mut del_anfitrion: Vec<(String, Trabajo<'_>)> = vec![];
         for (indice, descarga) in &descargas {
-            let id = descarga.id();
-            let inicio_descarga = std::time::Instant::now();
-            progress(&id, false);
-            if cancel.is_cancelled() {
-                return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
-            }
-            let (bytes, tamano, sha) = match descarga {
+            let (id, destino, instancia) = (descarga.id(), tx.join("nuevos").join(indice.to_string()), instance.id.clone());
+            match descarga {
                 Descarga::Modrinth(_, file) => {
-                    let bytes = tokio::select! { _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()), r = source.archivo(file) => r.map_err(err)? };
-                    (bytes, file.size, file.hashes.sha512.to_lowercase())
+                    let id_registro = id.clone();
+                    de_modrinth.push((id, Box::pin(async move {
+                        let inicio = std::time::Instant::now();
+                        source.descargar_a(file, &destino).await.map_err(err)?;
+                        registrar(format!("descarga instancia={instancia} id={id_registro} archivo={} fuente=modrinth bytes={} ms={}", file.filename, file.size, ms(inicio)));
+                        Ok(id_registro)
+                    })));
                 }
                 Descarga::Propio(local) => {
-                    let bytes = tokio::select! { _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()), r = descargar_propio(&plan.origen, local) => r? };
-                    (bytes, local.bytes, local.sha512.to_lowercase())
+                    let (id_registro, origen) = (id.clone(), plan.origen.clone());
+                    del_anfitrion.push((id, Box::pin(async move {
+                        let inicio = std::time::Instant::now();
+                        descargar_propio_a(&origen, local, &destino).await?;
+                        registrar(format!("descarga instancia={instancia} id={id_registro} archivo={} fuente=anfitrion bytes={} ms={}", local.archivo, local.bytes, ms(inicio)));
+                        Ok(id_registro)
+                    })));
                 }
-            };
-            let destino = tx.join("nuevos").join(indice.to_string());
-            let (archivo, fuente) = match descarga {
-                Descarga::Modrinth(_, file) => (file.filename.clone(), "modrinth"),
-                Descarga::Propio(local) => (local.archivo.clone(), "anfitrion"),
-            };
-            registrar(format!(
-                "descarga instancia={} id={id} archivo={archivo} fuente={fuente} bytes={} ms={}",
-                instance.id,
-                bytes.len(),
-                ms(inicio_descarga)
-            ));
-            bloqueante(move |_| {
-                if bytes.len() as u64 != tamano || hash(&bytes) != sha {
-                    return Err("El mod descargado no coincide con su tamaño o SHA-512.".into());
-                }
-                guardar_archivo(&destino, &bytes).map_err(err)
-            })
-            .await?;
-            progress(&id, true);
+            }
+        }
+        let descargar = async {
+            en_paralelo(de_modrinth, 4, &progress).await?;
+            en_paralelo(del_anfitrion, 2, &progress).await
+        };
+        tokio::select! {
+            _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()),
+            r = descargar => r?,
         }
         records.retain(|m| !m.project_id.is_empty());
         let meta = serde_json::to_vec_pretty(&records).map_err(err)?;
@@ -2786,6 +2823,33 @@ mod tests {
         envejecer(std::ffi::OsStr::new("example-1.jar"));
         let error = analizar(&store, &i).await.unwrap_err();
         assert!(error.contains("fue modificado"), "{error}");
+    }
+    #[tokio::test]
+    async fn las_descargas_respetan_el_limite_y_se_detienen_con_el_primer_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (activas, maximo) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let trabajo = |n: usize, falla: bool| -> (String, Trabajo<'_>) {
+            let (activas, maximo) = (&activas, &maximo);
+            (n.to_string(), Box::pin(async move {
+                let ahora = activas.fetch_add(1, Ordering::SeqCst) + 1;
+                maximo.fetch_max(ahora, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                activas.fetch_sub(1, Ordering::SeqCst);
+                if falla { Err(format!("falló {n}")) } else { Ok(n.to_string()) }
+            }))
+        };
+        let avisos = std::sync::Mutex::new(vec![]);
+        let aviso = |id: &str, hecho: bool| avisos.lock().unwrap().push((id.to_owned(), hecho));
+        en_paralelo((0..10).map(|n| trabajo(n, false)).collect(), 4, &aviso).await.unwrap();
+        assert_eq!(maximo.load(Ordering::SeqCst), 4);
+        let terminados = avisos.lock().unwrap().iter().filter(|(_, hecho)| *hecho).count();
+        assert_eq!(terminados, 10);
+
+        // Con un error, el resto no llega a empezar.
+        avisos.lock().unwrap().clear();
+        let trabajos = (0..10).map(|n| trabajo(n, n == 1)).collect();
+        assert_eq!(en_paralelo(trabajos, 2, &aviso).await.unwrap_err(), "falló 1");
+        assert!(avisos.lock().unwrap().iter().all(|(id, _)| id.parse::<usize>().unwrap() < 3));
     }
     /// Fuente que falla ante cualquier consulta: prueba que no se usó la red.
     struct SinRed;

@@ -539,6 +539,43 @@ impl Catalog {
         }
         http::body_bytes(response, "el archivo del mod", file.size as usize).await
     }
+    /// Descarga a `destino` por bloques, sin cargar el JAR en memoria. Devuelve
+    /// el SHA-512 calculado mientras llegaban los datos; el llamador lo compara.
+    pub async fn download_mod_to(&self, file: &File, destino: &std::path::Path) -> Result<String, Error> {
+        use sha2::{Digest, Sha512};
+        use tokio::io::AsyncWriteExt;
+        let url = image_url(&file.url)?;
+        if !url.path().starts_with("/data/") || file.size == 0 || file.size > 128 * 1024 * 1024 {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        let mut response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| Error::Network("el archivo del mod"))?;
+        if !response.status().is_success() {
+            return Err(Error::Status { service: "el archivo del mod", status: response.status().as_u16() });
+        }
+        if response.content_length().is_some_and(|n| n != file.size) {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        let mut salida = tokio::fs::File::create(destino).await.map_err(|_| Error::Response("el archivo del mod"))?;
+        let (mut hasher, mut total) = (Sha512::new(), 0u64);
+        while let Some(bloque) = response.chunk().await.map_err(|_| Error::Network("el archivo del mod"))? {
+            total = total.saturating_add(bloque.len() as u64);
+            if total > file.size {
+                return Err(Error::Response("el archivo del mod"));
+            }
+            hasher.update(&bloque);
+            salida.write_all(&bloque).await.map_err(|_| Error::Response("el archivo del mod"))?;
+        }
+        salida.sync_all().await.map_err(|_| Error::Response("el archivo del mod"))?;
+        if total != file.size {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    }
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             client: http::client()?,

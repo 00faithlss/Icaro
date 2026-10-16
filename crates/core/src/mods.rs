@@ -282,6 +282,21 @@ pub trait Fuente: Sync {
         &self,
         file: &ModFile,
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Error>> + Send;
+    /// Descarga y verifica tamaño y SHA-512 directamente en `destino`. Por
+    /// defecto usa [`Fuente::archivo`]; las fuentes de red lo hacen por bloques.
+    fn descargar_a(
+        &self,
+        file: &ModFile,
+        destino: &Path,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let bytes = self.archivo(file).await?;
+            if bytes.len() as u64 != file.size || hash(&bytes) != file.hashes.sha512.to_lowercase() {
+                return Err(Error::Hash);
+            }
+            guardar_archivo(destino, &bytes)
+        }
+    }
 }
 impl Fuente for Catalog {
     async fn actualizaciones_por_hash(&self, hashes:&[String], mc:&str, loader:&str) -> Result<Option<BTreeMap<String, Version>>, Error> {
@@ -333,6 +348,13 @@ impl Fuente for Catalog {
     }
     async fn archivo(&self, f: &ModFile) -> Result<Vec<u8>, Error> {
         Ok(self.download_mod(f).await?)
+    }
+    async fn descargar_a(&self, f: &ModFile, destino: &Path) -> Result<(), Error> {
+        if self.download_mod_to(f, destino).await? != f.hashes.sha512.to_lowercase() {
+            let _ = fs::remove_file(destino);
+            return Err(Error::Hash);
+        }
+        Ok(())
     }
 }
 pub fn compatible(v: &Version, mc: &str, loader: &str) -> bool {

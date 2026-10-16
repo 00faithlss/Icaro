@@ -6,6 +6,7 @@
 - La sincronización y el instalador de mods piden los nombres de proyecto y los mods exclusivos de cliente por lotes de 50, en lugar de una ficha por mod. La caché de Modrinth ya no queda bloqueada mientras espera la red: una consulta lenta no retiene los aciertos de caché ni otros recursos, y dos peticiones simultáneas del mismo recurso siguen produciendo una sola.
 - Las peticiones a la API de Modrinth siguen un presupuesto preventivo (4 por segundo, ráfagas de 8) y esperan al reinicio de la ventana cuando las cabeceras indican que quedan menos de 10, en lugar de frenar solo tras recibir un 429. La espera creciente ante un 429 añade hasta un 10 % aleatorio.
 - Si el anfitrión y la carpeta `mods` no cambiaron desde la última sincronización correcta, Jugar confirma el plan sin consultar Modrinth. El registro `minecraft/.icaro-sync-verificado.json` caduca a las 24 horas.
+- Las descargas de la sincronización van directamente a disco con el SHA-512 calculado por bloques, sin cargar cada JAR en memoria, y se hacen en paralelo: hasta cuatro desde Modrinth y dos desde el anfitrión.
 
 ## [0.2.3] - 2026-10-16
 
