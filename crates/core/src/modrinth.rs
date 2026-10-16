@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 mod cache;
 #[cfg(test)]
 mod cache_tests;
+pub(crate) mod presupuesto;
 
 const API: &str = "https://api.modrinth.com/v2/";
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
@@ -346,6 +347,11 @@ pub struct Catalog {
     client: Client,
     cooldown: Arc<Mutex<Cooldown>>,
     metadata: Option<Arc<tokio::sync::Mutex<cache::Cache>>>,
+    /// Un turno por recurso: evita pedir dos veces lo mismo sin bloquear
+    /// recursos distintos ni los aciertos de caché durante la red.
+    en_curso: Arc<Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Compartido por tienda, sincronización e instalación: todas consumen la misma cuota.
+    presupuesto: Arc<Mutex<presupuesto::Presupuesto>>,
     api: String,
     metadata_path: Option<PathBuf>,
 }
@@ -384,12 +390,14 @@ impl Catalog {
         if ids.len() > 512 { return Err(Error::Response("las versiones de Modrinth")); }
         let mut result = std::collections::BTreeMap::new();
         let mut missing = std::collections::BTreeSet::new();
-        let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
-        for id in ids {
-            let key = format!("GET {}", self.version_url(id)?);
-            if let Some(v) = cache.as_mut().and_then(|c| c.get::<Version>(&key)).filter(|v| &v.id == id) {
-                result.insert(id.clone(), v);
-            } else { missing.insert(id.clone()); }
+        {
+            let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
+            for id in ids {
+                let key = format!("GET {}", self.version_url(id)?);
+                if let Some(v) = cache.as_mut().and_then(|c| c.get::<Version>(&key)).filter(|v| &v.id == id) {
+                    result.insert(id.clone(), v);
+                } else { missing.insert(id.clone()); }
+            }
         }
         let missing: Vec<_> = missing.into_iter().collect();
         for batch in missing.chunks(50) {
@@ -400,6 +408,7 @@ impl Catalog {
             if versions.len() != batch.len() || fetched.len() != batch.len() || batch.iter().any(|id| !fetched.contains_key(id)) {
                 return Err(Error::Response("las versiones de Modrinth"));
             }
+            let mut cache = if let Some(cache) = &self.metadata { Some(cache.lock().await) } else { None };
             for (id, version) in fetched {
                 if let Some(cache) = &mut cache {
                     cache.insert(format!("GET {}", self.version_url(&id)?), &version, cache::TTL)?;
@@ -420,15 +429,25 @@ impl Catalog {
         url.set_path(original.path());
         Ok(url)
     }
+    async fn turno(&self, clave: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let candado = {
+            let mut mapa = self.en_curso.lock().unwrap_or_else(|e| e.into_inner());
+            // Un turno que solo conserva el mapa ya no lo usa nadie.
+            mapa.retain(|_, c| Arc::strong_count(c) > 1);
+            mapa.entry(clave.to_owned()).or_default().clone()
+        };
+        candado.lock_owned().await
+    }
     async fn metadata_json<T: serde::de::DeserializeOwned>(&self, url: Url) -> Result<T, Error> {
         let Some(cache) = &self.metadata else { return self.json(self.client.get(url)).await; };
-        // Serializar las consultas evita duplicados entre clones y respeta el cooldown común.
-        let mut cache = cache.lock().await;
         let key = format!("GET {url}");
-        if let Some(value) = cache.get(&key) { return Ok(value); }
+        // Peticiones simultáneas del mismo recurso esperan la primera respuesta;
+        // la caché solo se bloquea para leer y escribir, nunca durante la red.
+        let _turno = self.turno(&key).await;
+        if let Some(value) = cache.lock().await.get(&key) { return Ok(value); }
         let value: serde_json::Value = self.json(self.client.get(url)).await?;
         let decoded = serde_json::from_value(value.clone()).map_err(|_| Error::Response("Modrinth"))?;
-        cache.insert(key, &value, cache::TTL)?;
+        cache.lock().await.insert(key, &value, cache::TTL)?;
         Ok(decoded)
     }
 
@@ -452,23 +471,26 @@ impl Catalog {
         if hashes.is_empty() { return Ok(Default::default()); }
         {
             if let Some(cache) = &self.metadata {
-                let mut cache = cache.lock().await;
                 let mut result = std::collections::BTreeMap::new();
                 let mut missing = std::collections::BTreeSet::new();
                 let key = |hash: &str| match target {
                     Some((mc,loader)) => format!("update:{mc}:{loader}:{hash}"),
                     None => format!("hash:{hash}"),
                 };
-                for hash in hashes {
-                    match cache.get::<Option<Version>>(&key(hash)) {
-                        Some(Some(v)) => { result.insert(hash.clone(), v); }
-                        Some(None) => {}
-                        None => { missing.insert(hash.clone()); }
+                {
+                    let mut cache = cache.lock().await;
+                    for hash in hashes {
+                        match cache.get::<Option<Version>>(&key(hash)) {
+                            Some(Some(v)) => { result.insert(hash.clone(), v); }
+                            Some(None) => {}
+                            None => { missing.insert(hash.clone()); }
+                        }
                     }
                 }
                 if !missing.is_empty() {
                     let missing: Vec<_> = missing.into_iter().collect();
                     let fetched = self.request_hashes(&missing, target).await?;
+                    let mut cache = cache.lock().await;
                     for hash in missing {
                         let value = fetched.get(&hash);
                         let ttl = if target.is_some() { Duration::from_secs(300) }
@@ -517,11 +539,50 @@ impl Catalog {
         }
         http::body_bytes(response, "el archivo del mod", file.size as usize).await
     }
+    /// Descarga a `destino` por bloques, sin cargar el JAR en memoria. Devuelve
+    /// el SHA-512 calculado mientras llegaban los datos; el llamador lo compara.
+    pub async fn download_mod_to(&self, file: &File, destino: &std::path::Path) -> Result<String, Error> {
+        use sha2::{Digest, Sha512};
+        use tokio::io::AsyncWriteExt;
+        let url = image_url(&file.url)?;
+        if !url.path().starts_with("/data/") || file.size == 0 || file.size > 128 * 1024 * 1024 {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        let mut response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| Error::Network("el archivo del mod"))?;
+        if !response.status().is_success() {
+            return Err(Error::Status { service: "el archivo del mod", status: response.status().as_u16() });
+        }
+        if response.content_length().is_some_and(|n| n != file.size) {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        let mut salida = tokio::fs::File::create(destino).await.map_err(|_| Error::Response("el archivo del mod"))?;
+        let (mut hasher, mut total) = (Sha512::new(), 0u64);
+        while let Some(bloque) = response.chunk().await.map_err(|_| Error::Network("el archivo del mod"))? {
+            total = total.saturating_add(bloque.len() as u64);
+            if total > file.size {
+                return Err(Error::Response("el archivo del mod"));
+            }
+            hasher.update(&bloque);
+            salida.write_all(&bloque).await.map_err(|_| Error::Response("el archivo del mod"))?;
+        }
+        salida.sync_all().await.map_err(|_| Error::Response("el archivo del mod"))?;
+        if total != file.size {
+            return Err(Error::Response("el archivo del mod"));
+        }
+        Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    }
     pub fn new() -> Result<Self, Error> {
         Ok(Self {
             client: http::client()?,
             cooldown: Arc::new(Mutex::new(Cooldown::default())),
             metadata: None,
+            en_curso: Arc::default(),
+            presupuesto: Arc::new(Mutex::new(presupuesto::Presupuesto::nuevo(Instant::now()))),
             api: API.into(),
             metadata_path: None,
         })
@@ -532,11 +593,19 @@ impl Catalog {
     ) -> Result<T, Error> {
         let remaining = self.retry_after();
         if !remaining.is_zero() { return Err(Error::RateLimited(remaining.as_secs() + 1)); }
-        let result = http::json(request, "Modrinth", BODY_LIMIT).await;
+        // El turno se reserva con el candado tomado y se espera sin él.
+        let espera = self.presupuesto.lock().map_err(|_| Error::Response("Modrinth"))?.reservar(Instant::now());
+        if !espera.is_zero() { tokio::time::sleep(espera).await; }
+        let result = http::json_con_cuota(request, "Modrinth", BODY_LIMIT).await;
+        if let Ok((_, Some(cuota))) = &result {
+            if let Ok(mut presupuesto) = self.presupuesto.lock() { presupuesto.observar(*cuota, Instant::now()); }
+        }
+        let result = result.map(|(valor, _)| valor);
         let mut cooldown = self.cooldown.lock().map_err(|_| Error::Response("Modrinth"))?;
         if let Err(Error::RateLimited(seconds)) = &result {
             let exponential = 60u64.saturating_mul(1u64 << cooldown.failures.min(4)).min(900);
-            let wait = Duration::from_secs((*seconds).clamp(1, 86400).max(exponential));
+            // El jitter solo alarga la espera propia; nunca acorta la que pide Modrinth.
+            let wait = Duration::from_secs((*seconds).clamp(1, 86400)).max(presupuesto::con_jitter(Duration::from_secs(exponential)));
             let until = Instant::now() + wait;
             cooldown.until = Some(cooldown.until.map_or(until, |old| old.max(until)));
             cooldown.failures = cooldown.failures.saturating_add(1);
@@ -615,10 +684,12 @@ impl Catalog {
     pub async fn projects_by_ids(&self, ids: &[String]) -> Result<std::collections::BTreeMap<String, Project>, Error> {
         if ids.len()>512 {return Err(Error::Response("los proyectos de Modrinth"));}
         let mut result=std::collections::BTreeMap::new();let mut missing=std::collections::BTreeSet::new();
-        let mut cache=if let Some(c)=&self.metadata {Some(c.lock().await)} else {None};
-        for id in ids {
-            let key=format!("GET {}",self.project_url(id)?);
-            if let Some(p)=cache.as_mut().and_then(|c|c.get::<Project>(&key)).filter(|p|p.id==*id) {result.insert(id.clone(),p);} else {missing.insert(id.clone());}
+        {
+            let mut cache=if let Some(c)=&self.metadata {Some(c.lock().await)} else {None};
+            for id in ids {
+                let key=format!("GET {}",self.project_url(id)?);
+                if let Some(p)=cache.as_mut().and_then(|c|c.get::<Project>(&key)).filter(|p|p.id==*id) {result.insert(id.clone(),p);} else {missing.insert(id.clone());}
+            }
         }
         let missing:Vec<_>=missing.into_iter().collect();
         for batch in missing.chunks(50) {
@@ -630,6 +701,7 @@ impl Catalog {
                 let p:Project=serde_json::from_value(value.clone()).map_err(|_|Error::Response("los proyectos de Modrinth"))?;
                 if !batch.contains(&p.id)||fetched.insert(p.id.clone(),(p,value)).is_some() {return Err(Error::Response("los proyectos de Modrinth"));}
             }
+            let mut cache=if let Some(c)=&self.metadata {Some(c.lock().await)} else {None};
             for (id,(p,value)) in fetched {
                 if let Some(c)=&mut cache {c.insert(format!("GET {}",self.project_url(&id)?),&value,cache::TTL)?;}
                 result.insert(id,p);

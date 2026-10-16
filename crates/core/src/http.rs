@@ -40,6 +40,16 @@ pub(crate) async fn json<T: DeserializeOwned>(
     service: &'static str,
     limit: usize,
 ) -> Result<T, Error> {
+    Ok(json_con_cuota(request, service, limit).await?.0)
+}
+
+/// Igual que [`json`], pero devuelve también la cuota de `X-Ratelimit-*` si la
+/// respuesta la informa, para ajustar el ritmo antes de agotarla.
+pub(crate) async fn json_con_cuota<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    service: &'static str,
+    limit: usize,
+) -> Result<(T, Option<crate::modrinth::presupuesto::Cuota>), Error> {
     let response = request.send().await.map_err(|_| Error::Network(service))?;
     if response.status().as_u16() == 429 {
         let delay = retry_after(response.headers(), std::time::SystemTime::now());
@@ -51,7 +61,8 @@ pub(crate) async fn json<T: DeserializeOwned>(
             status: response.status().as_u16(),
         });
     }
-    body_json(response, service, limit).await
+    let cuota = crate::modrinth::presupuesto::cuota(response.headers());
+    Ok((body_json(response, service, limit).await?, cuota))
 }
 
 // Retry-After admite segundos o fecha HTTP; Modrinth también envía segundos en reset.
