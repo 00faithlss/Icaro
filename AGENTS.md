@@ -49,8 +49,9 @@ Never commit credentials, tokens, or personal instance data. Preserve user mods,
 
 ## Estado y fuentes de referencia
 
-Base de trabajo: `0.2.2`, línea de mantenimiento `v0.2.x`. Consultar `git status` y las referencias remotas antes de asumir rama, publicación o estado de CI. El hotfix `e8c6614` fue subido y el workflow `38837519199` terminó correctamente; se verificó la release `v0.2.2-build.38837519199` como más reciente el 15-10-2026. Revalidar este estado al publicar de nuevo. La versión visible y el actualizador deben usar `env!("CARGO_PKG_VERSION")`, heredado del workspace; nunca escribir `0.1.0` u otra versión fija en la interfaz.
+Base de trabajo: `0.2.3`, línea de mantenimiento `v0.2.x`. Consultar `git status` y las referencias remotas antes de asumir rama, publicación o estado de CI. La release de 0.2.2 vigente fue `v0.2.2-build.38843293224` (16-10-2026). 0.2.3 se publica al subir `v0.2.x`; el tag fuente `v0.2.3` se crea después de que exista su release `v0.2.3-build.*`, para que el CI del tag la reconozca como repetida. Revalidar con `gh release view` antes de asumir el estado. La versión visible y el actualizador deben usar `env!("CARGO_PKG_VERSION")`, heredado del workspace; nunca escribir `0.1.0` u otra versión fija en la interfaz.
 
+- [Notas de 0.2.3](docs/releases/0.2.3.md): revisión con una sola lectura de hashes, aplicación por archivos afectados con diario recuperable, registro `logs/sincronizacion.log` y enlace al repositorio en Acerca de.
 - [Notas de 0.2.2](docs/releases/0.2.2.md): recuperación del actualizador, bloqueo de ayudantes simultáneos, respaldo de conflictos, identificación de duplicados por ID/hash, importación múltiple de JAR y corrección del resumen de modpacks.
 - [Pendientes funcionales](docs/pendientes-implementacion.md), [roadmap visual](docs/roadmap-system-design.md) e [integración real](docs/integracion-real.md): fuentes de alcance; una pantalla conectada o una prueba local no acreditan todo el recorrido.
 - Conservar ZonaSoltar, iconos, grabados, tipografías, temas Tinta/Piedra y estados del diseño. Comparar las referencias antes de sustituir componentes o assets.

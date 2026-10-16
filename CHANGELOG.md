@@ -1,6 +1,6 @@
 # Changelog
 
-## Sin publicar
+## [0.2.3] - 2026-10-16
 
 - Acerca de muestra la versión compilada del workspace en lugar del texto fijo `0.1.0`.
 - Acerca de añade **Código fuente en GitHub**, con icono de enlace externo, que abre el repositorio declarado en `Cargo.toml`.
@@ -11,6 +11,8 @@
 - Aplicar una sincronización ya no copia toda la carpeta `mods`: descarga y verifica solo lo nuevo, y mueve únicamente los archivos afectados mediante un diario que se deshace si falla o si el launcher se cierra a mitad. Los mods personales no se copian ni se recrean.
 - La barra de progreso de la sincronización cuenta los cambios del plan en lugar de todos los mods del índice.
 - Añade `logs/sincronizacion.log`, con rotación, para diagnosticar sincronizaciones: índice del anfitrión, revisión, plan, descargas, commit, rollback, recuperación y errores con su fase y duración. No incluye rutas absolutas ni datos de la cuenta.
+
+Validación: pruebas del núcleo y de la interfaz y un banco sintético de 500 MiB; el usuario confirmó la mejora en Windows. La validación en HDD y Linux sigue pendiente. Consulta las [notas de 0.2.3](docs/releases/0.2.3.md).
 
 ## [0.2.2] - 2026-10-15
 

@@ -8,6 +8,8 @@ La versión **0.2.0** incorpora la sincronización con servidores dedicados y co
 
 La actualización **0.2.1** añade importación local de MRPACK/ZIP, corrige el scroll del selector y la consola de fondo en Windows, y comparte las consultas de Modrinth entre instalaciones. Consulta las [notas de 0.2.1](docs/releases/0.2.1.md). La línea de mantenimiento es `v0.2.x`.
 
+La versión **0.2.3** acelera la sincronización con servidores: revisa los mods leyéndolos una sola vez, aplica los cambios moviendo solo los archivos afectados con un diario recuperable y registra cada fase en `logs/sincronizacion.log`. Acerca de muestra la versión real y enlaza el repositorio. Consulta las [notas de 0.2.3](docs/releases/0.2.3.md).
+
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
