@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 mod cache;
 #[cfg(test)]
 mod cache_tests;
+pub(crate) mod presupuesto;
 
 const API: &str = "https://api.modrinth.com/v2/";
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
@@ -349,6 +350,8 @@ pub struct Catalog {
     /// Un turno por recurso: evita pedir dos veces lo mismo sin bloquear
     /// recursos distintos ni los aciertos de caché durante la red.
     en_curso: Arc<Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// Compartido por tienda, sincronización e instalación: todas consumen la misma cuota.
+    presupuesto: Arc<Mutex<presupuesto::Presupuesto>>,
     api: String,
     metadata_path: Option<PathBuf>,
 }
@@ -542,6 +545,7 @@ impl Catalog {
             cooldown: Arc::new(Mutex::new(Cooldown::default())),
             metadata: None,
             en_curso: Arc::default(),
+            presupuesto: Arc::new(Mutex::new(presupuesto::Presupuesto::nuevo(Instant::now()))),
             api: API.into(),
             metadata_path: None,
         })
@@ -552,11 +556,19 @@ impl Catalog {
     ) -> Result<T, Error> {
         let remaining = self.retry_after();
         if !remaining.is_zero() { return Err(Error::RateLimited(remaining.as_secs() + 1)); }
-        let result = http::json(request, "Modrinth", BODY_LIMIT).await;
+        // El turno se reserva con el candado tomado y se espera sin él.
+        let espera = self.presupuesto.lock().map_err(|_| Error::Response("Modrinth"))?.reservar(Instant::now());
+        if !espera.is_zero() { tokio::time::sleep(espera).await; }
+        let result = http::json_con_cuota(request, "Modrinth", BODY_LIMIT).await;
+        if let Ok((_, Some(cuota))) = &result {
+            if let Ok(mut presupuesto) = self.presupuesto.lock() { presupuesto.observar(*cuota, Instant::now()); }
+        }
+        let result = result.map(|(valor, _)| valor);
         let mut cooldown = self.cooldown.lock().map_err(|_| Error::Response("Modrinth"))?;
         if let Err(Error::RateLimited(seconds)) = &result {
             let exponential = 60u64.saturating_mul(1u64 << cooldown.failures.min(4)).min(900);
-            let wait = Duration::from_secs((*seconds).clamp(1, 86400).max(exponential));
+            // El jitter solo alarga la espera propia; nunca acorta la que pide Modrinth.
+            let wait = Duration::from_secs((*seconds).clamp(1, 86400)).max(presupuesto::con_jitter(Duration::from_secs(exponential)));
             let until = Instant::now() + wait;
             cooldown.until = Some(cooldown.until.map_or(until, |old| old.max(until)));
             cooldown.failures = cooldown.failures.saturating_add(1);

@@ -4,6 +4,7 @@
 
 - La revisión de sincronización guarda un inventario de `mods` (`.icaro-mods-inventario.json`, junto al bloqueo de la carpeta de juego) y solo relee los archivos nuevos, modificados o con más de 7 días desde su última lectura completa. También reutiliza la identidad Fabric de cada JAR mientras su hash no cambie. En un banco de 500 MiB, Jugar sin cambios pasa de 2,4 s a unos 45 ms; la primera revisión sigue leyendo todo.
 - La sincronización y el instalador de mods piden los nombres de proyecto y los mods exclusivos de cliente por lotes de 50, en lugar de una ficha por mod. La caché de Modrinth ya no queda bloqueada mientras espera la red: una consulta lenta no retiene los aciertos de caché ni otros recursos, y dos peticiones simultáneas del mismo recurso siguen produciendo una sola.
+- Las peticiones a la API de Modrinth siguen un presupuesto preventivo (4 por segundo, ráfagas de 8) y esperan al reinicio de la ventana cuando las cabeceras indican que quedan menos de 10, en lugar de frenar solo tras recibir un 429. La espera creciente ante un 429 añade hasta un 10 % aleatorio.
 
 ## [0.2.3] - 2026-10-16
 

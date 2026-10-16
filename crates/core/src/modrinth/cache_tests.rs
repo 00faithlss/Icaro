@@ -180,7 +180,8 @@ async fn ciento_sesenta_y_tres_hashes_reintentos_429_y_cambio_consultan_solo_lo_
     }
     assert_eq!(api.count(),3);
     api.expire_cooldown();
-    assert_eq!(catalog.project("p2").await.unwrap_err(),Error::RateLimited(120));
+    // Retry-After: 1 queda por debajo de la espera creciente de 120 s más su jitter.
+    assert!(matches!(catalog.project("p2").await.unwrap_err(),Error::RateLimited(s) if (120..=132).contains(&s)));
     assert_eq!(api.count(),4);
     api.expire_cooldown();
     catalog.project("p2").await.unwrap();
@@ -290,5 +291,17 @@ async fn nombres_y_exclusivos_de_cliente_se_consultan_por_lotes() {
     assert_eq!(api.count(), 2);
     // La segunda consulta usa las fichas guardadas por la primera.
     assert_eq!(api.catalog.solo_cliente_lote(&ids).await.unwrap(), ["p7".to_owned()].into());
+    assert_eq!(api.count(), 2);
+}
+#[tokio::test]
+async fn cuota_casi_agotada_espera_al_reinicio_antes_de_pedir_otra_vez() {
+    let api = Api::new(vec![
+        (200, "X-Ratelimit-Limit: 300\r\nX-Ratelimit-Remaining: 3\r\nX-Ratelimit-Reset: 1\r\n", project("p1")),
+        (200, "", project("p2")),
+    ]).await;
+    api.catalog.project("p1").await.unwrap();
+    let inicio = Instant::now();
+    api.catalog.project("p2").await.unwrap();
+    assert!(inicio.elapsed() >= Duration::from_millis(900), "{:?}", inicio.elapsed());
     assert_eq!(api.count(), 2);
 }
