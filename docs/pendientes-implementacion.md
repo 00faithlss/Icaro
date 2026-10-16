@@ -4,19 +4,21 @@ Actualizado el **16-10-2026**. Este documento describe el trabajo que falta; no 
 
 ## 1. Instalación y ejecución de loaders oficiales
 
-**Base de almacenamiento:** Vanilla ya comparte assets, bibliotecas y metadatos, y migra las copias verificadas al preparar una instancia. La configuración por instancia, papelera del sistema, medición de almacenamiento y mantenimiento están conectados. Fabric ya usa estas rutas; sigue pendiente incorporar Quilt, Forge y NeoForge; ver [organización de datos](organizacion-datos.md).
+**Base de almacenamiento:** Vanilla ya comparte assets, bibliotecas y metadatos, y migra las copias verificadas al preparar una instancia. La configuración por instancia, papelera del sistema, medición de almacenamiento y mantenimiento están conectados. Fabric y Quilt ya usan estas rutas; sigue pendiente incorporar Forge y NeoForge; ver [organización de datos](organizacion-datos.md).
 
-**Estado actual:** el asistente y Cambiar versión consultan los catálogos oficiales de Fabric, Quilt, Forge y NeoForge y guardan la versión elegida. Vanilla está validado por el usuario. Fabric 26.3 fue validado por el usuario con un mod real en Windows; usa el perfil oficial para la versión elegida. Quilt, Forge y NeoForge todavía no se instalan ni ejecutan.
+**Estado actual:** el asistente y Cambiar versión consultan los catálogos oficiales de Fabric, Quilt, Forge y NeoForge y guardan la versión elegida. Vanilla está validado por el usuario. Fabric 26.3 fue validado por el usuario con un mod real en Windows; usa el perfil oficial para la versión elegida. Quilt se instala y se ejecuta con su perfil oficial (instalación completa verificada con Minecraft 1.21.1; falta jugarlo en una partida real). Forge y NeoForge todavía no se instalan ni ejecutan.
 
 - [x] Conectar Fabric al perfil oficial, versión fijada, bibliotecas verificadas, argumentos y mínimo de Java.
-- [ ] Conectar la instalación de Quilt, Forge y NeoForge usando sus perfiles, manifiestos, bibliotecas y/o instaladores oficiales, según corresponda. No sustituir el resultado oficial por versiones o perfiles inventados.
+- [x] Conectar la instalación de Quilt con su perfil oficial, bibliotecas verificadas y Java.
+- [ ] Validar Quilt en una partida real y decidir qué hacer con los mods que solo declaran Fabric (Modrinth no los lista para Quilt) y con la identidad de mods que solo traen `quilt.mod.json`.
+- [ ] Conectar la instalación de Forge y NeoForge usando sus perfiles, manifiestos, bibliotecas y/o instaladores oficiales, según corresponda. No sustituir el resultado oficial por versiones o perfiles inventados.
 - [ ] Respetar la versión concreta guardada en la instancia y su compatibilidad con Minecraft; resolver Java y dependencias del perfil resultante.
 - [ ] Preparar la instalación fuera de la carpeta activa, verificar las descargas y publicar el resultado solo al terminar. Conservar la instalación anterior ante error o cancelación.
 - [ ] Integrar el avance con la cola, pausa/cancelación, consola y estados estables del botón; comprobar archivos existentes sin mostrar una instalación ficticia.
 - [ ] Lanzar el perfil instalado con sus argumentos, bibliotecas y nativos reales y con los mods de esa instancia.
 - [ ] Conectar el mismo recorrido a Crear instancia, Instalar/Jugar y Cambiar versión. Probar cada loader con una instancia nueva, una instalación reutilizada y una migración.
 
-Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; Fabric ya tiene fijación de versión, preparación verificada, cola y lanzamiento.
+Las tareas pendientes de este apartado corresponden a Forge y NeoForge; Fabric y Quilt ya tienen fijación de versión, preparación verificada, cola y lanzamiento.
 
 **Criterio de finalización:** instalar y abrir una instancia de cada loader con un mod compatible, reutilizar sus archivos al reiniciar y recuperarse de una descarga fallida sin perder mundos ni mods.
 
@@ -26,7 +28,7 @@ Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; F
 
 - [x] Leer MRPACK desde el catálogo de Modrinth: metadatos, Minecraft, loader, referencias de archivos, hashes y archivos incluidos; presentar una revisión antes de importar.
 - [x] Descargar y verificar los archivos referenciados de MRPACK de Modrinth, aplicar los archivos incluidos y preparar Vanilla o Fabric mediante sus perfiles oficiales.
-- [ ] Extender la instalación de modpacks a Quilt, Forge y NeoForge cuando estén disponibles sus instaladores.
+- [ ] Extender la instalación de modpacks a Quilt, Forge y NeoForge. Quilt ya se instala, pero la importación de MRPACK/ZIP solo admite Vanilla y Fabric.
 - [x] Importar contenido de ZIP de Ícaro y perfiles Vanilla/Fabric compatibles de Prism/MultiMC; detectar el formato y explicar los formatos no admitidos.
 - [x] Conectar la selección de archivo a la importación real de MRPACK y ZIP completos.
 - [x] Conectar ZonaSoltar a la importación real, con clic, arrastre y estados ocupado/cancelado.

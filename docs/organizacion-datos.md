@@ -124,4 +124,4 @@ Migración local del 13-10-2026: se trasladaron 15 elementos de las papeleras in
 
 La carpeta privada de cada instancia se llama `.icaro`. Al cargar las instancias o prepararlas, se migra `.icaro-minecraft` mediante renombre y se actualizan sus referencias en `instalado.json`, preservando campos adicionales, nativos y archivos del juego. Si existen ambos nombres, la migración se detiene con un error para conservar ambos perfiles. `instance.json` sigue siendo la configuración de la instancia: cambiar su extensión a `.cfg` no aporta rendimiento ni compatibilidad por sí solo.
 
-Fabric comparte las mismas rutas de assets y bibliotecas; sus metadatos están en `meta/fabric/<minecraft>/<loader>`. Quilt, Forge y NeoForge todavía requieren sus instaladores.
+Fabric y Quilt comparten las mismas rutas de assets y bibliotecas; sus metadatos están en `meta/fabric/<minecraft>/<loader>` y `meta/quilt/<minecraft>/<loader>`. Forge y NeoForge todavía requieren sus instaladores.
