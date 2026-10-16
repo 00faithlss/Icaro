@@ -28,6 +28,7 @@ pub fn iniciar(piedra: bool) -> (App, Task<Mensaje>) {
         "java-instancia" => { a.editor = Some(1); a.editor_inst = 0; },
         "almacenamiento" => { a.seccion=Seccion::Ajustes;a.ajuste=3;a.almacenamiento.informe=Some(icaro_core::almacenamiento::Informe{categorias:vec![("Assets".into(),484486173),("Bibliotecas".into(),80695893),("Java".into(),250000000),("Instancias".into(),2000000),("Caché".into(),1000000)],total:818182066,papeleras:vec![std::path::PathBuf::from("fixture/.papelera")]}); },
         "java-global" => { a.seccion = Seccion::Ajustes; a.ajuste = 2; },
+        "acerca-de" => { a.seccion = Seccion::Ajustes; a.ajuste = 7; },
         s if s.starts_with("exportar-lista-") => crate::exportar_lista_mods::preparar_diseno(&mut a,s),
         "icono-generado" | "icono-imagen" => crate::icono_instancia::preparar_diseno(&mut a,&scene),
         "exportar-lista-html" | "exportar-lista-json" | "exportar-lista-personalizado" => crate::exportar_lista_mods::preparar_diseno(&mut a,&scene),

@@ -206,6 +206,7 @@ pub enum Accion {
     ExportarProgreso(u64,u64),
     MostrarExportacion(std::path::PathBuf),
     AbrirListaEnlace(String),
+    AbrirRepositorio,
 
     ExportarCancelar,
     ExportarConfirmar,
@@ -722,6 +723,10 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             if url.starts_with("https://modrinth.com/mod/") {
                 return crate::servicios::actualizar(app,crate::servicios::Accion::Enlace(url));
             }
+        }
+        // La dirección sale de `workspace.package.repository`, igual que la versión.
+        Accion::AbrirRepositorio => {
+            return crate::servicios::actualizar(app, crate::servicios::Accion::Enlace(env!("CARGO_PKG_REPOSITORY").into()));
         }
         Accion::Exportada(result) => match result {
             Ok(path)=>{
@@ -1838,9 +1843,11 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
         }
         _ => {
             col = col
-                .push(text("Icaro Launcher 0.1.0").font(fuentes::TITULO).size(texto::HEADING.0).color(p.text))
+                .push(text(concat!("Icaro Launcher ", env!("CARGO_PKG_VERSION"))).font(fuentes::TITULO).size(texto::HEADING.0).color(p.text))
                 .push(text("Un launcher de Minecraft escrito en Rust, ligero y optimizado, para Windows y Arch Linux.").size(texto::BODY.0).color(p.text_muted))
-                .push(text("Licencia GPL-3.0. Grabados de dominio público (CC0) de The Met, la National Gallery of Art y el Art Institute of Chicago. Íconos Pixelarticons (MIT).").size(texto::BODY.0).color(p.text_muted));
+                .push(text("Licencia GPL-3.0. Grabados de dominio público (CC0) de The Met, la National Gallery of Art y el Art Institute of Chicago. Íconos Pixelarticons (MIT).").size(texto::BODY.0).color(p.text_muted))
+                .push(Space::with_height(espacio::S2))
+                .push(row![componentes::boton_con_icono(p, Icono::Externo, "Código fuente en GitHub", Variante::Secundario, Some(m(Accion::AbrirRepositorio)), false)]);
             if app.servicios.demo {
                 col = col.push(Space::with_height(espacio::S3))
                 .push(text("Pantallas de ejemplo").font(fuentes::TITULO).size(texto::BODY.0 + 1.0).color(p.text))

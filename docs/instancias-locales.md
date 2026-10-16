@@ -41,6 +41,10 @@ La vista previa se actualiza directamente en RGBA con trabajo limitado a 256 × 
 
 Eliminar muestra una revisión de respaldos con **Continuar con la eliminación**, seguida de la confirmación con nombre, consecuencias, diez bloques de avance y grietas sobre toda la tarjeta. Soltar o pulsar **Cancelar** interrumpe la confirmación antes de iniciar la operación. Cancelar queda alineado con el pie de la tarjeta. Los archivos se conservan en la papelera del sistema. En Capturas dentro de la instancia, el estado vacío explica F2 y ofrece Jugar para esa instancia.
 
+## Importar mods propios
+
+En **Instancia → Mods → Importar .jar** se eligen uno o varios archivos propios. La copia se realiza fuera del hilo de interfaz y el lote completo se conserva sin cambios si falla un archivo o hay un nombre ocupado, incluso si el mod existente está desactivado. Se importan como archivos locales: no se descargan dependencias ni se certifica su compatibilidad. Minecraft y las demás operaciones de la instancia deben haber terminado.
+
 ## Exportar
 
 ExportarInstancia muestra un árbol con carpetas, casillas mixtas, tamaños y selecciones Recomendada/Todo/Para compartir/Solo mundos. Genera ZIP de Ícaro o Prism/MultiMC; el segundo necesita la versión concreta del loader y usa `mmc-pack.json` con el esquema oficial. Sus contenidos se verifican con pruebas; la importación en las aplicaciones externas sigue pendiente de comprobación manual. MRPACK pertenece a otro componente.

@@ -8,6 +8,8 @@ La versión **0.2.0** incorpora la sincronización con servidores dedicados y co
 
 La actualización **0.2.1** añade importación local de MRPACK/ZIP, corrige el scroll del selector y la consola de fondo en Windows, y comparte las consultas de Modrinth entre instalaciones. Consulta las [notas de 0.2.1](docs/releases/0.2.1.md). La línea de mantenimiento es `v0.2.x`.
 
+La versión **0.2.3** acelera la sincronización con servidores: revisa los mods leyéndolos una sola vez, aplica los cambios moviendo solo los archivos afectados con un diario recuperable y registra cada fase en `logs/sincronizacion.log`. Acerca de muestra la versión real y enlaza el repositorio. Consulta las [notas de 0.2.3](docs/releases/0.2.3.md).
+
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
@@ -181,7 +183,7 @@ Consulta el [detalle de implementación pendiente](docs/pendientes-implementacio
 
 ### Servidores, ZeroTier y sincronización
 
-Servidores guarda su lista y orden por arrastre, usa el PanelLateral original, consulta Minecraft con DNS SRV y lanza la instancia vinculada. RedPrivada permite solicitar pertenencia mediante la API local o la CLI de ZeroTier; reconoce también redes unidas desde la aplicación oficial. La sincronización consulta un servicio en el PC del anfitrión y revisa/aplica versiones exactas antes de Jugar. El servicio lee directamente la carpeta de mods del servidor dedicado, filtra mods exclusivos de servidor y actualiza el índice cuando cambian los archivos; no requiere una instancia cliente de Ícaro. Los mods de Modrinth se descargan de su catálogo y los JAR propios, ausentes o modificados se descargan del anfitrión, con avisos y verificación de tamaño/SHA-512. Incluye un arranque para Arch y un workflow de compilación Linux x86_64 cuya ejecución está pendiente. También faltan instalación/permisos automáticos de ZeroTier y validación con dos equipos. Consulta [servidores](docs/servidores.md) y [sincronización con el anfitrión](docs/sincronizacion-servidores.md).
+Servidores guarda su lista y orden por arrastre, usa el PanelLateral original, consulta Minecraft con DNS SRV y lanza la instancia vinculada. RedPrivada permite solicitar pertenencia mediante la API local o la CLI de ZeroTier; reconoce también redes unidas desde la aplicación oficial. La sincronización consulta un servicio en el PC del anfitrión y revisa/aplica versiones exactas antes de Jugar. El servicio lee directamente la carpeta de mods del servidor dedicado, filtra mods exclusivos de servidor y actualiza el índice cuando cambian los archivos; no requiere una instancia cliente de Ícaro. Los mods de Modrinth se descargan de su catálogo y los JAR propios, ausentes o modificados se descargan del anfitrión, con avisos y verificación de tamaño/SHA-512. La aplicación mueve solo los archivos afectados mediante un diario recuperable y registra cada fase en `logs/sincronizacion.log`. Incluye un arranque para Arch y un workflow de compilación Linux x86_64 cuya ejecución está pendiente. También faltan instalación/permisos automáticos de ZeroTier y validación con dos equipos. Consulta [servidores](docs/servidores.md) y [sincronización con el anfitrión](docs/sincronizacion-servidores.md).
 
 - [x] Añadir, editar, eliminar y guardar servidores reales con dirección, puerto e instancia asociada.
 - [x] Consultar estado, latencia, versión y jugadores cuando el servidor entregue esos datos; DNS ordinario, IP y resolución SRV conectados.

@@ -828,7 +828,15 @@ pub fn lista(app: &App) -> Element<'_, Mensaje> {
         Icono::Mas,
         "Agregar mods",
         Variante::Secundario,
-        Some(Mensaje::VistaMods(1)),
+        (!busy).then_some(Mensaje::VistaMods(1)),
+        true,
+    ));
+    toolbar = toolbar.push(componentes::boton_con_icono(
+        p,
+        Icono::Subir,
+        "Importar .jar",
+        Variante::Secundario,
+        (!busy).then_some(Mensaje::ModsReales(mods_reales::Accion::ImportarLocal)),
         true,
     ));
     let selected_update = mods_reales::updates(app).iter().any(|v| {

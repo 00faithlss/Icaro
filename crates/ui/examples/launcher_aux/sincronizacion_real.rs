@@ -47,6 +47,7 @@ pub enum Accion {
     Abrir(usize),
     Revisada(u64, Result<Plan, String>),
     Aplicar(bool),
+    AutorizarReemplazos(bool),
     Progreso(u64, String, bool),
     Terminada(u64, bool, Result<Vec<Servidor>, String>),
     Reintentar,
@@ -174,10 +175,18 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     let addr = endpoint?;
                     let catalog = source.map_err(|e| e.to_string())?;
                     let index = sync::consultar(addr, cancel.clone()).await?;
+                    // La lectura local depende del disco y no cuenta para el límite de Modrinth.
+                    let local = tokio::select! {
+                        _ = cancel.cancelled() => return Err("Consulta cancelada.".to_owned()),
+                        r = sync::analizar(&store, &instance) => r?,
+                    };
                     let result = tokio::select! {
                         _ = cancel.cancelled() => Err("Consulta cancelada.".to_owned()),
-                        r = tokio::time::timeout(std::time::Duration::from_secs(90), sync::preparar(&catalog, &store, &instance, index, addr.to_string())) => {
-                            r.map_err(|_| "Modrinth no respondió a tiempo. Inténtalo de nuevo.".to_owned()).and_then(|r| r)
+                        r = tokio::time::timeout(std::time::Duration::from_secs(90), sync::preparar_desde(&catalog, &store, &instance, index, addr.to_string(), local)) => {
+                            r.map_err(|_| {
+                                sync::registrar_evento("error fase=plan-limite-90s", &instance.id, "Modrinth no respondió a tiempo");
+                                "Modrinth no respondió a tiempo. Inténtalo de nuevo.".to_owned()
+                            }).and_then(|r| r)
                         }
                     };
                     // Una pausa del proveedor no invalida las respuestas correctas ya obtenidas.
@@ -201,6 +210,13 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 return actualizar(app, Accion::Aplicar(true));
             }
         }
+        Accion::AutorizarReemplazos(valor) => {
+            if !app.servicios.sincronizacion.ocupado {
+                if let Some(plan) = app.servicios.sincronizacion.plan.as_mut() {
+                    plan.autorizar_reemplazos(valor);
+                }
+            }
+        }
         Accion::Aplicar(play) => {
             if app.pantalla != Some(Pantalla::Sincronizar) {
                 return Task::none();
@@ -214,6 +230,9 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             else {
                 return Task::none();
             };
+            if !plan.puede_aplicar() {
+                return Task::none();
+            }
             if s.ocupado
                 || app.servicios.juego.ocupada(&instance.id)
                 || app.servicios.mods.busy.is_some()
@@ -246,6 +265,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                         let catalog = source.map_err(|e| e.to_string())?;
                         let latest = sync::consultar(addr, cancel.clone()).await?;
                         if latest.revision()? != plan.revision_origen() {
+                            sync::registrar_evento("error fase=anfitrion-cambio", &instance.id, "la revisión del anfitrión cambió desde el plan");
                             return Err("Los mods del anfitrión cambiaron. Comprueba de nuevo antes de sincronizar.".into());
                         }
                         sync::aplicar(
@@ -428,12 +448,12 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
         body = body.push(if s.aplicando {
             icaro_ui::progreso::continuo(
                 p,
-                s.progreso as f32
-                    / s.plan.as_ref().map_or(1, |p| {
-                        (p.indice.mods.len() + p.indice.archivos.len()
-                            + p.cambios.iter().filter(|c| c.tipo == Tipo::Quitar).count())
-                        .max(1)
-                    }) as f32,
+                // La sincronización informa un paso por cambio del plan; los mods
+                // que ya coinciden no cuentan como trabajo pendiente.
+                {
+                    let total = s.plan.as_ref().map_or(1, |p| p.cambios.len().max(1));
+                    s.progreso.min(total) as f32 / total as f32
+                },
                 app.reducir,
             )
         } else {
@@ -508,6 +528,17 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
         body = body.push(line);
     }
     if let Some(plan) = &s.plan {
+        if !plan.conflictos.is_empty() {
+            body = body.push(componentes::aviso_detallado(p, componentes::Estado::Aviso,
+                "Mods locales distintos de los del anfitrión",
+                &format!("{}. Para usar las versiones del servidor, autoriza el reemplazo. Tus archivos quedarán respaldados en una carpeta .icaro-mods-conflictos dentro de la carpeta de juego.", plan.conflictos.join(", "))));
+            body = body.push(componentes::casilla(
+                p,
+                "Respaldar estos mods y usar los del anfitrión",
+                plan.puede_aplicar(),
+                |v| m(Accion::AutorizarReemplazos(v)),
+            ));
+        }
         for aviso in &plan.indice.avisos {
             body=body.push(text(aviso.clone()).size(13).color(p.text_muted));
         }
@@ -531,7 +562,7 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
                 (!s.ocupado).then(|| m(Accion::Reintentar)),
             ));
     }
-    let enabled = !s.ocupado && (s.plan.is_some() || s.visual);
+    let enabled = !s.ocupado && (s.plan.as_ref().is_some_and(|p| p.puede_aplicar()) || s.visual);
     let footer = container(responsive(move |size| {
         let first = componentes::boton(
             p,
