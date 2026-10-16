@@ -16,6 +16,7 @@ use std::{
 };
 
 const META: &str = ".icaro-mods.json";
+pub mod locales;
 pub mod sincronizacion;
 const MAX_FILE: u64 = 128 * 1024 * 1024;
 
@@ -1747,14 +1748,14 @@ pub fn recuperar_operaciones(store: &Almacen, id: &str) -> Result<usize, Error> 
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    struct Prueba(PathBuf);
+    pub(super) struct Prueba(pub(super) PathBuf);
     impl Prueba {
-        fn nueva() -> Self {
+        pub(super) fn nueva() -> Self {
             let mut bytes = [0; 16];
             getrandom::fill(&mut bytes).unwrap();
             Self(std::env::temp_dir().join(format!("icaro-mods-test-{}", hash(&bytes))))
         }
-        fn instancia(&self) -> (Almacen, crate::instancias::Instancia) {
+        pub(super) fn instancia(&self) -> (Almacen, crate::instancias::Instancia) {
             let store = Almacen::nuevo(&self.0);
             let i = store
                 .crear_con_loader("Mundo", "1.21.1", "fabric", 0)

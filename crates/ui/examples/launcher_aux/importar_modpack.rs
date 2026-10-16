@@ -44,8 +44,13 @@ fn dato<'a>(p: Paleta, glifo: Icono, label: String, valor: String) -> Element<'a
         container(
             row![
                 icono(glifo, Tam::Sm, p.text),
-                text(label).size(13).color(p.text).width(Length::Fill),
-                mono(p, valor)
+                text(label)
+                    .size(13)
+                    .color(p.text)
+                    .width(Length::FillPortion(1)),
+                container(mono(p, valor))
+                    .width(Length::FillPortion(1))
+                    .align_right(Length::Fill)
             ]
             .spacing(12)
             .align_y(Alignment::Center)

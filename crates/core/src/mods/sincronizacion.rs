@@ -139,6 +139,9 @@ pub struct Plan {
     pub indice: Indice,
     pub cambios: Vec<Cambio>,
     pub conservados: Vec<String>,
+    pub conflictos: Vec<String>,
+    reemplazos: BTreeSet<String>,
+    reemplazos_autorizados: bool,
     origen: String,
     huella: Vec<(String, String)>,
     actuales: Vec<Instalado>,
@@ -150,7 +153,15 @@ pub struct Plan {
     recuperadas: BTreeSet<String>,
 }
 impl Plan {
-    pub fn revision_origen(&self) -> &str { &self.revision_origen }
+    pub fn revision_origen(&self) -> &str {
+        &self.revision_origen
+    }
+    pub fn autorizar_reemplazos(&mut self, autorizar: bool) {
+        self.reemplazos_autorizados = autorizar;
+    }
+    pub fn puede_aplicar(&self) -> bool {
+        self.conflictos.is_empty() || self.reemplazos_autorizados
+    }
 }
 
 // Corrección acotada a la versión cuyos metadatos omiten un requisito del cliente.
@@ -300,7 +311,7 @@ pub fn huella(store: &Almacen, id: &str) -> Result<Vec<(String, String)>, String
     recuperar(&game).map_err(err)?;
     fingerprint(&game.join("mods"))
 }
-fn fingerprint(dir: &Path) -> Result<Vec<(String, String)>, String> {
+pub(super) fn fingerprint(dir: &Path) -> Result<Vec<(String, String)>, String> {
     let mut out = vec![];
     if dir.exists() {
         huella_dir(dir, dir, 0, &mut out, &mut 0)?;
@@ -443,6 +454,32 @@ pub async fn preparar(
         m.sha512 = sha;
     }
     let dir = store.juego(&instance.id).map_err(err)?.join("mods");
+    // Los JAR importados pueden no tener identidad de catálogo todavía.
+    // Una consulta por lote permite reconocer versiones anteriores sin adivinar por nombre.
+    if index.mods.iter().any(|e| !installed.iter().any(|m| m.project_id == e.proyecto)) {
+        let hashes: Vec<_> = installed.iter().filter(|m| m.activo && m.project_id.is_empty())
+            .map(|m| m.sha512.clone()).collect();
+        if !hashes.is_empty() {
+            let reconocidas = source.versiones_por_hash(&hashes).await.map_err(err)?;
+            for m in &mut installed {
+                if m.project_id.is_empty() {
+                    if let Some(v) = reconocidas.get(&m.sha512).filter(|v| v.files.iter().any(|f| f.hashes.sha512.eq_ignore_ascii_case(&m.sha512))) {
+                        m.project_id = v.project_id.clone();
+                        m.version_id = v.id.clone();
+                        m.version = v.version_number.clone();
+                    }
+                }
+            }
+        }
+    }
+    let mut identidades = BTreeMap::new();
+    if matches!(instance.loader.as_str(), "fabric" | "quilt") {
+        for m in &installed {
+            if let Some(id) = identidad_fabric(&ruta_mod(&dir, m))? {
+                identidades.insert(m.archivo.clone(), id);
+            }
+        }
+    }
     let mut locales_previos = vec![];
     let managed = if dir.join(SYNC).exists() {
         if regular(&dir.join(SYNC), false).map_err(err)?.len() > MAX_INDEX as u64 {
@@ -481,8 +518,16 @@ pub async fn preparar(
     }
     let mut changes = vec![];
     let mut versions = vec![];
-    let (locales, quitar_locales) =
-        preparar_locales(&index, &installed, &locales_previos, &quitar, &mut changes)?;
+    let mut conflictos = vec![];
+    let (locales, mut quitar_locales) = preparar_locales(
+        &index,
+        &installed,
+        &locales_previos,
+        &quitar,
+        &mut changes,
+        &mut conflictos,
+        &identidades,
+    )?;
     if !locales.is_empty() {
         direccion_archivos(&origen)?;
     }
@@ -575,10 +620,12 @@ pub async fn preparar(
             bytes: 0,
         });
     }
+    let reemplazos = reconciliar_identidades(&installed, &identidades, &locales, &versions, &mut changes, &mut conflictos)?;
+    quitar_locales.retain(|a| !reemplazos.contains(&a.archivo));
     let keep = installed
         .iter()
         .filter(|m| {
-            !locales
+            !reemplazos.contains(&m.archivo) && !conflictos.contains(&m.archivo) && !locales
                 .iter()
                 .any(|a| a.archivo.eq_ignore_ascii_case(&m.archivo))
                 && !quitar_locales
@@ -600,6 +647,9 @@ pub async fn preparar(
         indice: index,
         cambios: changes,
         conservados: keep,
+        conflictos,
+        reemplazos,
+        reemplazos_autorizados: false,
         origen,
         huella: fingerprint,
         actuales: installed,
@@ -611,22 +661,126 @@ pub async fn preparar(
         recuperadas,
     })
 }
+fn identidad_fabric(path: &Path) -> Result<Option<String>, String> {
+    Ok(
+        dedicado::descriptor_fabric(path, &mut vec![])?.and_then(|d| {
+            d.get("id")
+                .and_then(|v| v.as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+        }),
+    )
+}
+
+// La identidad del descriptor prevalece sobre el nombre y la versión declarada:
+// dos JAR pueden anunciar la misma versión y contener registros diferentes.
+fn reconciliar_identidades(
+    installed: &[Instalado],
+    identidades: &BTreeMap<String, String>,
+    locales: &[ArchivoPropio],
+    versiones: &[Version],
+    cambios: &mut Vec<Cambio>,
+    conflictos: &mut Vec<String>,
+) -> Result<BTreeSet<String>, String> {
+    let mut destinos = Vec::new();
+    for local in locales {
+        let id = installed
+            .iter()
+            .find(|m| m.sha512.eq_ignore_ascii_case(&local.sha512))
+            .and_then(|m| identidades.get(&m.archivo))
+            .cloned()
+            .or_else(|| local.id.strip_prefix("icaro-host-").map(str::to_owned));
+        if let Some(id) = id {
+            destinos.push((
+                local.id.clone(),
+                local.archivo.clone(),
+                local.sha512.clone(),
+                id,
+            ));
+        }
+    }
+    for version in versiones {
+        let file = &version.files[0];
+        let exacto = installed
+            .iter()
+            .find(|m| m.sha512.eq_ignore_ascii_case(&file.hashes.sha512));
+        let anterior = exacto.or_else(|| {
+            installed
+                .iter()
+                .find(|m| m.project_id == version.project_id)
+        });
+        if let Some(id) = anterior.and_then(|m| identidades.get(&m.archivo)) {
+            destinos.push((
+                version.project_id.clone(),
+                exacto
+                    .map(|m| m.archivo.clone())
+                    .unwrap_or_else(|| file.filename.clone()),
+                file.hashes.sha512.clone(),
+                id.clone(),
+            ));
+        }
+    }
+    let mut requeridos = BTreeMap::new();
+    let mut reemplazos = BTreeSet::new();
+    for (proyecto, archivo, sha, id) in destinos {
+        if requeridos
+            .insert(id.clone(), sha.clone())
+            .is_some_and(|otra| otra != sha)
+        {
+            return Err(format!(
+                "El anfitrión publica dos JAR distintos del mismo mod {id}. Revisa el servidor."
+            ));
+        }
+        for actual in installed.iter().filter(|m| {
+            (m.activo || m.archivo.eq_ignore_ascii_case(&archivo))
+                && identidades.get(&m.archivo) == Some(&id)
+                && !(m.archivo.eq_ignore_ascii_case(&archivo)
+                    && m.sha512.eq_ignore_ascii_case(&sha))
+        }) {
+            if !reemplazos.insert(actual.archivo.clone()) {
+                continue;
+            }
+            conflictos.retain(|n| n != &actual.archivo);
+            if let Some(cambio) = cambios.iter_mut().find(|c| c.proyecto == proyecto) {
+                if cambio.tipo == Tipo::Agregar {
+                    cambio.tipo = Tipo::Actualizar;
+                }
+                if cambio.antes.is_empty() {
+                    cambio.antes = actual.version.clone();
+                }
+            } else {
+                cambios.push(Cambio {
+                    proyecto: format!("icaro-reemplazo-{}", hash(actual.archivo.as_bytes())),
+                    tipo: Tipo::Quitar,
+                    nombre: format!("{id} · copia anterior: {}", actual.archivo),
+                    antes: actual.version.clone(),
+                    despues: String::new(),
+                    bytes: 0,
+                });
+            }
+        }
+    }
+    Ok(reemplazos)
+}
+
 fn preparar_locales(
     index: &Indice,
     installed: &[Instalado],
     previos: &[ArchivoPropio],
     quitar: &BTreeSet<String>,
     changes: &mut Vec<Cambio>,
+    conflictos: &mut Vec<String>,
+    identidades: &BTreeMap<String, String>,
 ) -> Result<(Vec<ArchivoPropio>, Vec<ArchivoPropio>), String> {
     let mut wanted = vec![];
     for entry in &index.archivos {
         let previous = previos.iter().find(|a| a.id == entry.id);
-        let current = previous
+        let current = installed.iter().find(|m| m.sha512.eq_ignore_ascii_case(&entry.sha512)).or_else(|| previous
             .and_then(|p| {
                 installed
                     .iter()
                     .find(|m| m.archivo.eq_ignore_ascii_case(&p.archivo))
-            })
+            }))
             .or_else(|| {
                 installed
                     .iter()
@@ -636,6 +790,10 @@ fn preparar_locales(
                 installed
                     .iter()
                     .find(|m| m.archivo.eq_ignore_ascii_case(&entry.archivo))
+            })
+            .or_else(|| {
+                installed.iter().find(|m| m.activo && identidades.get(&m.archivo)
+                    .is_some_and(|id| entry.id.strip_prefix("icaro-host-") == Some(id.as_str())))
             });
         if let Some(m) = current {
             let same = m.sha512.eq_ignore_ascii_case(&entry.sha512);
@@ -644,16 +802,14 @@ fn preparar_locales(
                     && p.sha512.eq_ignore_ascii_case(&m.sha512)
             });
             if !same && !owned && !quitar.contains(&m.project_id) {
-                return Err(format!(
-                    "{} está modificado o pertenece a un archivo local. Se conserva.",
-                    m.archivo
-                ));
+                conflictos.push(m.archivo.clone());
             }
         }
         let mut local = entry.clone();
         if installed.iter().any(|m| {
             m.archivo.eq_ignore_ascii_case(&entry.archivo)
                 && current.is_none_or(|c| c.archivo != m.archivo)
+                && !identidades.get(&m.archivo).is_some_and(|id| entry.id.strip_prefix("icaro-host-") == Some(id.as_str()))
         }) {
             return Err(format!(
                 "El nombre {} está ocupado por otro archivo local.",
@@ -792,6 +948,9 @@ pub async fn aplicar(
     progress: impl Fn(&str, bool) + Send,
 ) -> Result<(), String> {
     let game = store.juego(&instance.id).map_err(err)?;
+    if !plan.puede_aplicar() {
+        return Err("Hay mods locales distintos de los del anfitrión. Revisa los conflictos y autoriza su respaldo antes de sincronizar.".into());
+    }
     let _lock = guardia(&game).map_err(err)?;
     recuperar(&game).map_err(err)?;
     let dir = game.join("mods");
@@ -840,18 +999,35 @@ pub async fn aplicar(
     fs::create_dir(&stage).map_err(err)?;
     let result = async {
         if dir.exists() { copiar(&dir,&stage,0,&mut 0,&mut 0).map_err(err)?; }
+        let respaldos: BTreeSet<_> = plan.conflictos.iter().chain(plan.reemplazos.iter()).cloned().collect();
+        // El respaldo es independiente de la carpeta temporal de recuperación.
+        // Permanece disponible incluso después de otras sincronizaciones.
+        if !respaldos.is_empty() {
+            let respaldo = game.join(format!(".icaro-mods-conflictos-{}", random.iter().map(|b| format!("{b:02x}")).collect::<String>()));
+            fs::create_dir(&respaldo).map_err(err)?;
+            for nombre in &respaldos {
+                let anterior = plan.actuales.iter().find(|m| &m.archivo == nombre).ok_or("El conflicto ya no existe.")?;
+                let ruta = ruta_mod(&stage, anterior);
+                let destino = respaldo.join(ruta.file_name().ok_or("Nombre de mod inválido.")?);
+                fs::copy(&ruta, &destino).map_err(err)?;
+                if hash_archivo(&destino).map_err(err)? != anterior.sha512 { return Err("No se pudo verificar el respaldo del mod local.".into()); }
+                fs::OpenOptions::new().write(true).open(&destino).and_then(|f| f.sync_all()).map_err(err)?;
+                fs::remove_file(ruta).map_err(err)?;
+            }
+        }
+        let actuales: Vec<_> = plan.actuales.iter().filter(|m| !respaldos.contains(&m.archivo)).cloned().collect();
         let wanted=plan.indice.mods.iter().map(|m|m.proyecto.clone()).collect::<BTreeSet<_>>();
-        let mut records=plan.actuales.iter().filter(|m|!plan.quitar.contains(&m.project_id) && !wanted.contains(&m.project_id)).cloned().collect::<Vec<_>>();
-        for old in plan.actuales.iter().filter(|m|plan.quitar.contains(&m.project_id)) { progress(&old.project_id,false); fs::remove_file(ruta_mod(&stage,old)).map_err(err)?; progress(&old.project_id,true); }
+        let mut records=actuales.iter().filter(|m|!plan.quitar.contains(&m.project_id) && !wanted.contains(&m.project_id)).cloned().collect::<Vec<_>>();
+        for old in actuales.iter().filter(|m|plan.quitar.contains(&m.project_id)) { progress(&old.project_id,false); fs::remove_file(ruta_mod(&stage,old)).map_err(err)?; progress(&old.project_id,true); }
         for v in &plan.destinos {
             progress(&v.project_id,false);
             if cancel.is_cancelled() { return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()); }
             let file=&v.files[0];
-            let old=plan.actuales.iter().find(|m|m.project_id == v.project_id).or_else(||plan.actuales.iter().find(|m|m.sha512.eq_ignore_ascii_case(&file.hashes.sha512)));
+            let old=actuales.iter().find(|m|m.sha512.eq_ignore_ascii_case(&file.hashes.sha512)).or_else(||actuales.iter().find(|m|m.project_id == v.project_id));
             let same=old.is_some_and(|m|m.sha512.eq_ignore_ascii_case(&file.hashes.sha512));
             let filename=if same {old.unwrap().archivo.clone()} else {file.filename.clone()};
             let target=stage.join(&filename);
-            if plan.actuales.iter().any(|m|!plan.quitar.contains(&m.project_id) && m.archivo.eq_ignore_ascii_case(&filename) && old.is_none_or(|o|o.archivo != m.archivo)) { return Err(format!("El nombre {filename} está ocupado por un archivo local.")); }
+            if actuales.iter().any(|m|!plan.quitar.contains(&m.project_id) && m.archivo.eq_ignore_ascii_case(&filename) && old.is_none_or(|o|o.archivo != m.archivo)) { return Err(format!("El nombre {filename} está ocupado por un archivo local.")); }
             if (target.exists() || stage.join(format!("{filename}.disabled")).exists()) && old.is_none_or(|m|m.archivo.to_lowercase() != filename.to_lowercase()) { return Err(format!("El nombre {filename} está ocupado por un archivo local.")); }
             if same {
                 if !old.unwrap().activo { fs::rename(ruta_mod(&stage,old.unwrap()),&target).map_err(err)?; }
@@ -900,6 +1076,26 @@ pub async fn aplicar(
             }
             records.retain(|m|!m.archivo.eq_ignore_ascii_case(&local.archivo));
             progress(&local.id,true);
+        }
+        if matches!(instance.loader.as_str(), "fabric" | "quilt") {
+            let mut requeridos = BTreeSet::new();
+            for local in &plan.locales {
+                if let Some(id) = identidad_fabric(&stage.join(&local.archivo))? { requeridos.insert(id); }
+            }
+            for registro in records.iter().filter(|r| wanted.contains(&r.project_id)) {
+                if let Some(id) = identidad_fabric(&stage.join(&registro.archivo))? { requeridos.insert(id); }
+            }
+            let mut vistos = BTreeSet::new();
+            for entrada in fs::read_dir(&stage).map_err(err)? {
+                let path = entrada.map_err(err)?.path();
+                if path.extension().is_some_and(|e| e == "jar") {
+                    if let Some(id) = identidad_fabric(&path)? {
+                        if requeridos.contains(&id) && !vistos.insert(id.clone()) {
+                            return Err(format!("Quedaron dos versiones activas del mod {id}. No se publicó la sincronización."));
+                        }
+                    }
+                }
+            }
         }
         guardar_archivo(&stage.join(META),&serde_json::to_vec_pretty(&records).map_err(err)?).map_err(err)?;
         guardar_archivo(&stage.join(SYNC),&serde_json::to_vec(&Gestionados {origen:plan.origen.clone(), proyectos:wanted, archivos:plan.locales.clone()}).map_err(err)?).map_err(err)?;
@@ -1495,6 +1691,175 @@ mod tests {
         );
         assert_eq!(fs::read(dir.join("example-1.jar")).unwrap(), b"primero");
     }
+    #[tokio::test]
+    async fn apogee_renombrado_y_duplicado_se_actualiza_por_id_y_hash_sin_perder_mods_personales() {
+        fn jar(id: &str, contenido: &str) -> Vec<u8> {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            writer
+                .start_file("fabric.mod.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            write!(
+                writer,
+                "{{\"id\":\"{id}\",\"version\":\"1.1.1\",\"environment\":\"*\"}}"
+            )
+            .unwrap();
+            writer
+                .start_file("registros.txt", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(contenido.as_bytes()).unwrap();
+            writer.finish().unwrap().into_inner()
+        }
+        for exacto_presente in [false, true] {
+            let (_temp, store, i) = store();
+            let f = fake();
+            let game = store.juego(&i.id).unwrap();
+            let dir = game.join("mods");
+            fs::create_dir(&dir).unwrap();
+            let viejo = jar("apogee", "registros anteriores");
+            let nuevo = jar("apogee", "23 registros nuevos del servidor");
+            let personal = jar("solo_cliente", "personal");
+            fs::write(dir.join("apogee-1.1.1.jar"), &viejo).unwrap();
+            fs::write(dir.join("apogee-copia.jar"), &viejo).unwrap();
+            fs::write(dir.join("apogee-antiguo.jar.disabled"), &viejo).unwrap();
+            fs::write(dir.join("personal.jar"), &personal).unwrap();
+            if exacto_presente {
+                fs::write(dir.join("apogee-1.2.0.jar"), &nuevo).unwrap();
+            }
+            let host = game.join("host");
+            fs::create_dir(&host).unwrap();
+            fs::write(host.join("apogee-1.2.0.jar"), &nuevo).unwrap();
+            let mut indice = index(&f, "v1");
+            indice.esquema = 2;
+            indice.mods.clear();
+            indice.archivos.push(ArchivoPropio {
+                id: "icaro-host-apogee".into(),
+                nombre: "Apogee".into(),
+                version: "1.1.1".into(),
+                archivo: "apogee-1.2.0.jar".into(),
+                bytes: nuevo.len() as u64,
+                sha512: hash(&nuevo),
+            });
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let cancel = CancellationToken::new();
+            let servicio = tokio::spawn(servir_archivos(
+                listener,
+                Arc::new(RwLock::new(Some(indice.clone()))),
+                cancel.clone(),
+                Some(host),
+            ));
+            let plan = preparar(&f, &store, &i, indice.clone(), addr.clone())
+                .await
+                .unwrap();
+            assert!(plan.puede_aplicar() && plan.conflictos.is_empty());
+            assert_eq!(plan.reemplazos.len(), 2);
+            if !exacto_presente {
+                assert!(plan.cambios.iter().any(|c| c.tipo == Tipo::Actualizar));
+            }
+            aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {})
+                .await
+                .unwrap();
+            assert_eq!(fs::read(dir.join("apogee-1.2.0.jar")).unwrap(), nuevo);
+            assert!(!dir.join("apogee-1.1.1.jar").exists() && !dir.join("apogee-copia.jar").exists());
+            assert_eq!(fs::read(dir.join("personal.jar")).unwrap(), personal);
+            assert!(dir.join("apogee-antiguo.jar.disabled").exists());
+            let respaldo = fs::read_dir(&game)
+                .unwrap()
+                .flatten()
+                .find(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with(".icaro-mods-conflictos-")
+                })
+                .unwrap()
+                .path();
+            assert_eq!(fs::read(respaldo.join("apogee-1.1.1.jar")).unwrap(), viejo);
+            let plan = preparar(&f, &store, &i, indice, addr).await.unwrap();
+            assert!(plan.cambios.is_empty() && plan.reemplazos.is_empty());
+            cancel.cancel();
+            servicio.await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn conflicto_local_muestra_el_plan_y_solo_reemplaza_con_autorizacion_y_respaldo() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        let game = store.juego(&i.id).unwrap();
+        let dir = game.join("mods");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("survivor.jar"), b"mi mod personal").unwrap();
+        fs::write(dir.join("cliente.jar"), b"solo cliente").unwrap();
+        let host = game.join("host");
+        fs::create_dir(&host).unwrap();
+        fs::write(host.join("survivor.jar"), b"mod del anfitrion").unwrap();
+        let mut indice = index(&f, "v2");
+        indice.esquema = 2;
+        indice.archivos.push(ArchivoPropio {
+            id: "icaro-host-survivor".into(),
+            nombre: "Survivor".into(),
+            version: "2".into(),
+            archivo: "survivor.jar".into(),
+            bytes: 17,
+            sha512: hash(b"mod del anfitrion"),
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let cancel = CancellationToken::new();
+        let servicio = tokio::spawn(servir_archivos(
+            listener,
+            Arc::new(RwLock::new(Some(indice.clone()))),
+            cancel.clone(),
+            Some(host),
+        ));
+        let mut plan = preparar(&f, &store, &i, indice.clone(), addr.clone())
+            .await
+            .unwrap();
+        assert_eq!(plan.conflictos, ["survivor.jar"]);
+        assert_eq!(plan.cambios.len(), 2);
+        assert!(!plan.puede_aplicar());
+        assert!(
+            aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {})
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(dir.join("survivor.jar")).unwrap(),
+            b"mi mod personal"
+        );
+        plan.autorizar_reemplazos(true);
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {})
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(dir.join("survivor.jar")).unwrap(),
+            b"mod del anfitrion"
+        );
+        assert_eq!(fs::read(dir.join("cliente.jar")).unwrap(), b"solo cliente");
+        let respaldo = fs::read_dir(&game)
+            .unwrap()
+            .flatten()
+            .find(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".icaro-mods-conflictos-")
+            })
+            .unwrap()
+            .path();
+        assert_eq!(
+            fs::read(respaldo.join("survivor.jar")).unwrap(),
+            b"mi mod personal"
+        );
+        let plan = preparar(&f, &store, &i, indice, addr).await.unwrap();
+        assert!(plan.conflictos.is_empty() && plan.cambios.is_empty());
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {})
+            .await
+            .unwrap();
+        assert!(respaldo.join("survivor.jar").is_file());
+        cancel.cancel();
+        servicio.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn no_adivina_versiones_ni_sobrescribe_nombres_locales() {
         let (_temp, store, i) = store();

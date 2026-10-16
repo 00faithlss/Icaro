@@ -34,6 +34,7 @@ pub struct Estado {
     pub progreso: String,
     pub confirmacion: Option<(Instancia, Vec<Version>)>,
     pub confirmacion_recurso: Option<(Instancia, Version)>,
+    selector_local: bool,
     comprobando: BTreeMap<String, u64>,
     secuencia: u64,
     operacion: u64,
@@ -41,6 +42,9 @@ pub struct Estado {
 #[derive(Debug, Clone)]
 pub enum Accion {
     Cargar,
+    ImportarLocal,
+    LocalesElegidos(String, Option<Vec<std::path::PathBuf>>),
+    LocalesImportados(String, u64, Result<usize, String>),
     Revisadas(String, u64, Result<Vec<Version>, String>),
     Instalar(String, Option<String>),
     Preparada(Instancia, u64, Result<Version, String>),
@@ -210,6 +214,84 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
         return Task::none();
     }
     match action {
+        Accion::ImportarLocal => {
+            let Some(i) = instancia(app).cloned().filter(|i| i.loader != "vanilla") else {
+                return Task::none();
+            };
+            if app.servicios.mods.selector_local
+                || app.servicios.mods.busy.is_some()
+                || app.servicios.instancias.operando
+                || app.servicios.sincronizacion.ocupado
+                || app.servicios.juego.ocupada(&i.id)
+            {
+                return Task::none();
+            }
+            app.servicios.mods.selector_local = true;
+            return Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Importar mods propios")
+                        .add_filter("Mods Java", &["jar"])
+                        .pick_files()
+                        .await
+                        .map(|archivos| {
+                            archivos
+                                .into_iter()
+                                .map(|f| f.path().to_path_buf())
+                                .collect()
+                        })
+                },
+                move |r| m(Accion::LocalesElegidos(i.id.clone(), r)),
+            );
+        }
+        Accion::LocalesElegidos(id, archivos) => {
+            app.servicios.mods.selector_local = false;
+            let Some(archivos) = archivos.filter(|a| !a.is_empty()) else {
+                return Task::none();
+            };
+            if app.servicios.mods.busy.is_some()
+                || app.servicios.instancias.operando
+                || app.servicios.sincronizacion.ocupado
+                || app.servicios.juego.ocupada(&id)
+            {
+                return Task::none();
+            }
+            app.servicios.mods.secuencia += 1;
+            let request = app.servicios.mods.secuencia;
+            app.servicios.mods.operacion = request;
+            app.servicios.mods.busy = Some(id.clone());
+            app.servicios.mods.progreso = "Importando JAR personales…".into();
+            let store = app.servicios.instancias.almacen.clone();
+            let instancia = id.clone();
+            return Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        mods::locales::importar(&store, &instancia, &archivos)
+                    })
+                    .await
+                    .map_err(|_| "No se pudo importar el mod local.".to_owned())?
+                    .map_err(|e| e.to_string())
+                },
+                move |r| m(Accion::LocalesImportados(id.clone(), request, r)),
+            );
+        }
+        Accion::LocalesImportados(id, request, resultado)
+            if request == app.servicios.mods.operacion =>
+        {
+            app.servicios.mods.busy = None;
+            match resultado {
+                Ok(n) => {
+                    app.servicios.mods.errores.remove(&id);
+                    app.servicios.mods.updates.remove(&id);
+                    recargar(app, &id);
+                    app.avisar(format!("Se importaron {n} JAR personales. Revisa sus requisitos y compatibilidad antes de jugar."));
+                }
+                Err(e) => {
+                    app.servicios.mods.errores.insert(id, e.clone());
+                    app.avisar_error(e);
+                }
+            }
+        }
         Accion::Cargar => {
             let Some(i) = instancia(app).cloned().filter(|i| i.loader != "vanilla") else {
                 return Task::none();

@@ -4,6 +4,10 @@ El servicio lee directamente `mods` de la carpeta del servidor dedicado que ejec
 
 ## Preparar al anfitrión
 
+Si el descriptor confirma que un JAR local es el mismo mod exigido por el servidor, se sustituye automáticamente por el archivo exacto del anfitrión y se retiran sus otras copias activas, aunque cambie el nombre o ambos declaren la misma versión. Los originales se guardan en `.icaro-mods-conflictos-<identificador>` dentro de la carpeta de juego, fuera de `mods`. Se comparan hashes, no solo números de versión. Los otros mods personales y las copias anteriores desactivadas se conservan.
+
+Si únicamente coincide el nombre del archivo y no se puede confirmar su identidad, la revisión muestra el conflicto junto a los demás cambios. **Respaldar estos mods y usar los del anfitrión** autoriza ese reemplazo con respaldo. Sin esa autorización no se aplica un plan con conflictos de identidad desconocida.
+
 El anfitrión debe autorizar a sus amigos en ZeroTier y conocer la carpeta, versión de Minecraft y versión exacta del loader de su servidor. El servicio lee archivos y publica metadatos; no modifica el servidor, sus mundos ni sus configuraciones.
 
 ### Arch Linux del anfitrión

@@ -77,6 +77,8 @@ pub struct Resultado {
     pub version: String,
     pub compilacion: u64,
     pub correcto: bool,
+    #[serde(default)]
+    pub detalle: Option<String>,
 }
 
 fn ruta_resultado(exe: &Path) -> Result<PathBuf, Error> {
@@ -331,11 +333,72 @@ fn staging() -> Result<PathBuf, Error> {
     }
     Err(Error::Disco)
 }
-/// Descarga a un temporal y solo prepara el reemplazo cuando coinciden hash y tamaño.
+// Reutiliza únicamente archivos completos que coincidan con el manifiesto actual.
+// Los .part y los binarios modificados nunca se consideran preparados.
+fn recuperar_descarga(raiz: &Path, disponible: &Disponible) -> Option<Preparada> {
+    rechazar_enlaces(raiz).ok()?;
+    let mut candidatos: Vec<_> = std::fs::read_dir(raiz)
+        .ok()?
+        .take(256)
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let nombre = e.file_name();
+            let nombre = nombre.to_string_lossy();
+            nombre.len() == 32 && nombre.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+        .collect();
+    candidatos
+        .sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+    for candidato in candidatos.into_iter().take(64) {
+        let archivo = candidato.path().join(format!("{}.exe", disponible.sha256));
+        if rechazar_enlaces(&archivo).is_err() {
+            continue;
+        }
+        let Ok(mut entrada) = std::fs::File::open(&archivo) else {
+            continue;
+        };
+        if !entrada
+            .metadata()
+            .is_ok_and(|m| m.is_file() && m.len() == disponible.bytes)
+        {
+            continue;
+        }
+        let mut hash = Sha256::new();
+        if std::io::copy(
+            &mut std::io::Read::take(&mut entrada, disponible.bytes + 1),
+            &mut hash,
+        )
+        .is_err()
+            || format!("{:x}", hash.finalize()) != disponible.sha256
+        {
+            continue;
+        }
+        return Some(Preparada {
+            version: disponible.version.clone(),
+            compilacion: disponible.compilacion,
+            archivo,
+            sha256: disponible.sha256.clone(),
+            bytes: disponible.bytes,
+            instalador: disponible.instalador,
+        });
+    }
+    None
+}
+
+/// Reutiliza una descarga íntegra o descarga a un temporal antes de preparar el reemplazo.
 pub async fn descargar<F: Fn(u64, u64)>(d: Disponible, progreso: F) -> Result<Preparada, Error> {
     validar_descarga(&d)?;
     if !cfg!(all(windows, target_arch = "x86_64")) {
         return Err(Error::Plataforma);
+    }
+    let disponible = d.clone();
+    if let Some(preparada) =
+        tokio::task::spawn_blocking(move || recuperar_descarga(&carpeta(), &disponible))
+            .await
+            .map_err(|_| Error::Disco)?
+    {
+        progreso(d.bytes, d.bytes);
+        return Ok(preparada);
     }
     let ruta = staging()?;
     let temporal = ruta.join(format!("{}.part", d.sha256));
@@ -476,6 +539,7 @@ fn lanzar(origen: &Path, destino: &Path, hash: &str, reiniciar: bool, preparada:
         .map_err(|_| Error::Disco)?;
     archivo.sync_all().map_err(|_| Error::Disco)?;
     drop(archivo);
+    // PowerShell e Inno Setup reciben rutas Win32, sin el prefijo de canonicalize.
     let mut cmd = std::process::Command::new("powershell.exe");
     cmd.args([
         "-NoProfile",
@@ -484,17 +548,17 @@ fn lanzar(origen: &Path, destino: &Path, hash: &str, reiniciar: bool, preparada:
         "Bypass",
         "-File",
     ])
-    .arg(script)
+    .arg(ruta_ayudante(&script))
     .arg("-ProcessId")
     .arg(std::process::id().to_string())
     .arg("-Source")
-    .arg(origen)
+    .arg(ruta_ayudante(origen))
     .arg("-Target")
-    .arg(destino)
+    .arg(ruta_ayudante(destino))
     .arg("-Hash")
     .arg(hash)
     .arg("-Outcome")
-    .arg(ruta_resultado(destino)?)
+    .arg(ruta_ayudante(&ruta_resultado(destino)?))
     .arg("-Version")
     .arg(&preparada.version)
     .arg("-BuildNumber")
@@ -508,6 +572,17 @@ fn lanzar(origen: &Path, destino: &Path, hash: &str, reiniciar: bool, preparada:
         .map_err(|_| Error::Disco)?;
     Ok(())
 }
+
+fn ruta_ayudante(path: &Path) -> PathBuf {
+    let texto = path.to_string_lossy();
+    if let Some(unc) = texto.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    if let Some(disco) = texto.strip_prefix(r"\\?\") {
+        return PathBuf::from(disco);
+    }
+    path.to_path_buf()
+}
 #[cfg(not(windows))]
 fn lanzar(_: &Path, _: &Path, _: &str, _: bool, _: &Preparada) -> Result<(), Error> {
     Err(Error::Plataforma)
@@ -515,12 +590,21 @@ fn lanzar(_: &Path, _: &Path, _: &str, _: bool, _: &Preparada) -> Result<(), Err
 
 const SCRIPT: &str = r#"param([int]$ProcessId, [string]$Source, [string]$Target, [string]$Hash, [switch]$Restart, [switch]$Installer, [string]$Outcome, [string]$Version, [UInt64]$BuildNumber)
 $ErrorActionPreference = 'Stop'
+# Solo un ayudante puede actualizar una misma copia del launcher.
+$taskIdentity = [Security.Cryptography.SHA256]::Create()
+$taskName = [BitConverter]::ToString($taskIdentity.ComputeHash([Text.Encoding]::UTF8.GetBytes($Target.ToLowerInvariant()))).Replace('-', '')
+$taskIdentity.Dispose()
+$taskMutex = [Threading.Mutex]::new($false, ('Local\IcaroUpdate-' + $taskName))
+try { $taskOwnsMutex = $taskMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $taskOwnsMutex = $true }
+if (-not $taskOwnsMutex) { $taskMutex.Dispose(); exit 0 }
 $taskBackup = $Target + '.icaro-anterior-' + [Guid]::NewGuid().ToString('N')
 $taskNew = $Target + '.icaro-nuevo-' + [Guid]::NewGuid().ToString('N')
 $taskSourceStream = $null
 $taskOutputStream = $null
 $taskReplaced = $false
 $taskSuccess = $false
+$taskFailure = $null
+$taskRestartAllowed = $true
 function Assert-RegularPath([string]$taskPath) {
     $taskCheck = [IO.Path]::GetFullPath($taskPath)
     while ($taskCheck) {
@@ -536,6 +620,11 @@ function Assert-RegularPath([string]$taskPath) {
 try {
     $taskProcess = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if ($taskProcess) { $taskProcess.WaitForExit() }
+    $taskOther = Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($Target)) -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -ieq $Target }
+    if ($taskOther) {
+        $taskRestartAllowed = $false
+        throw 'Cierra las otras ventanas de Icaro Launcher y vuelve a intentar la actualización.'
+    }
     Assert-RegularPath $Source
     Assert-RegularPath $Target
     $taskSourceStream = [IO.File]::Open($Source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
@@ -549,6 +638,7 @@ try {
         $taskLog = $Source + '.install.log'
         $taskSetup = Start-Process -FilePath $Source -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/SP-','/NORESTART','/NOCLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS',('/DIR="' + $taskInstallDir + '"'),('/LOG="' + $taskLog + '"')) -WindowStyle Hidden -Wait -PassThru
         if ($taskSetup.ExitCode -ne 0) { throw ('Instalador: ' + $taskSetup.ExitCode) }
+        if ((Get-Item -LiteralPath $Target).VersionInfo.ProductVersion -ne $Version) { throw 'El instalador terminó sin actualizar esta copia de Icaro Launcher.' }
         $taskSuccess = $true
         return
     }
@@ -595,20 +685,33 @@ try {
         try {
             Assert-RegularPath $Outcome
             Assert-RegularPath $taskReceiptTemp
-            $taskReceipt = @{esquema=1;version=$Version;compilacion=$BuildNumber;correcto=$taskSuccess} | ConvertTo-Json -Compress
+            $taskReceipt = @{esquema=1;version=$Version;compilacion=$BuildNumber;correcto=$taskSuccess;detalle=$taskFailure} | ConvertTo-Json -Compress
             [IO.File]::WriteAllText($taskReceiptTemp, $taskReceipt, [Text.UTF8Encoding]::new($false))
             if (Test-Path -LiteralPath $Outcome) { [IO.File]::Replace($taskReceiptTemp, $Outcome, [NullString]::Value) }
             else { [IO.File]::Move($taskReceiptTemp, $Outcome) }
         } catch { }
     }
     # Tanto éxito como fallo vuelven al launcher; no aparece otro asistente.
-    if ($Restart -and (Test-Path -LiteralPath $Target)) { Start-Process -FilePath $Target -WindowStyle Normal }
+    if ($Restart -and $taskRestartAllowed -and (Test-Path -LiteralPath $Target)) { Start-Process -FilePath $Target -WindowStyle Normal }
+    $taskMutex.ReleaseMutex()
+    $taskMutex.Dispose()
 }
 "#;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn el_ayudante_recibe_rutas_win32_y_conserva_espacios_y_unc() {
+        assert_eq!(
+            ruta_ayudante(Path::new(r"\\?\C:\Icaro Launcher\archivo.exe")),
+            PathBuf::from(r"C:\Icaro Launcher\archivo.exe")
+        );
+        assert_eq!(
+            ruta_ayudante(Path::new(r"\\?\UNC\equipo\Icaro Launcher\archivo.exe")),
+            PathBuf::from(r"\\equipo\Icaro Launcher\archivo.exe")
+        );
+    }
     struct ArchivoResultado(PathBuf);
     impl ArchivoResultado {
         fn nuevo(bytes: &[u8]) -> Self {
@@ -669,6 +772,38 @@ mod tests {
         };
         (release, manifest)
     }
+    #[test]
+    fn reintentar_tras_reabrir_reutiliza_solo_la_descarga_completa_y_verificada() {
+        let marca = ArchivoResultado::nuevo(b"prueba de cache");
+        let raiz = marca.0.with_extension("cache");
+        let carpeta = raiz.join("0123456789abcdef0123456789abcdef");
+        std::fs::create_dir(&raiz).unwrap();
+        std::fs::create_dir(&carpeta).unwrap();
+        let (release, manifest) = datos();
+        let mut disponible = resolver(release, manifest, "0.1.0").unwrap().unwrap();
+        let contenido = b"ejecutable ya descargado";
+        disponible.bytes = contenido.len() as u64;
+        disponible.sha256 = format!("{:x}", Sha256::digest(contenido));
+        let archivo = carpeta.join(format!("{}.exe", disponible.sha256));
+        let parcial = archivo.with_extension("part");
+        std::fs::write(&parcial, contenido).unwrap();
+        assert!(recuperar_descarga(&raiz, &disponible).is_none());
+        std::fs::rename(&parcial, &archivo).unwrap();
+        let preparada = recuperar_descarga(&raiz, &disponible).unwrap();
+        assert_eq!(preparada.archivo, archivo);
+        assert_eq!(preparada.version, disponible.version);
+        let mut otro = disponible.clone();
+        otro.sha256 = "f".repeat(64);
+        assert!(recuperar_descarga(&raiz, &otro).is_none());
+        std::fs::write(&archivo, vec![b'x'; contenido.len()]).unwrap();
+        assert!(recuperar_descarga(&raiz, &disponible).is_none());
+        std::fs::write(&archivo, b"incompleto").unwrap();
+        assert!(recuperar_descarga(&raiz, &disponible).is_none());
+        std::fs::remove_file(&archivo).unwrap();
+        std::fs::remove_dir(&carpeta).unwrap();
+        std::fs::remove_dir(&raiz).unwrap();
+    }
+
     #[test]
     fn compara_versiones_numericamente() {
         assert!(numeros("0.10.0") > numeros("0.9.9"));

@@ -1,0 +1,327 @@
+{
+  "schema": 1,
+  "date": "2026-10-15",
+  "scope": "Investigacion; no es una medicion del launcher completo ni un cambio del sincronizador",
+  "base_commit": "b740ea9ccf9feb9ae376459b95938d2ba2411afe",
+  "working_tree_dirty": true,
+  "hardware": {
+    "cpu": "AMD Ryzen 5 5600X",
+    "physical_cores": 6,
+    "logical_processors": 12,
+    "filesystem": "NTFS"
+  },
+  "toolchain": {
+    "rustc": "1.99.0",
+    "cargo": "1.99.0",
+    "sha2": "0.10.9"
+  },
+  "corpus": {
+    "files": 259,
+    "bytes": 573603052,
+    "MiB": 547.0304985046387,
+    "scope": "mods de boys; despues de retirar las cinco copias anteriores"
+  },
+  "hash_microbenchmark": {
+    "sha-debug-sha2-opt": [
+      {
+        "debug": true,
+        "muestra": 0,
+        "bytes": 33554432,
+        "seconds": 0.0503059,
+        "MiB_s": 636.1082894849312,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": true,
+        "muestra": 1,
+        "bytes": 33554432,
+        "seconds": 0.0502933,
+        "MiB_s": 636.2676539419764,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": true,
+        "muestra": 2,
+        "bytes": 33554432,
+        "seconds": 0.0510635,
+        "MiB_s": 626.6707139150274,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      }
+    ],
+    "sha-debug": [
+      {
+        "debug": true,
+        "muestra": 0,
+        "bytes": 33554432,
+        "seconds": 3.1069836,
+        "MiB_s": 10.299378471131936,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": true,
+        "muestra": 1,
+        "bytes": 33554432,
+        "seconds": 3.0002867,
+        "MiB_s": 10.665647386298115,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": true,
+        "muestra": 2,
+        "bytes": 33554432,
+        "seconds": 2.9995760000000002,
+        "MiB_s": 10.668174435320191,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      }
+    ],
+    "sha-release-z": [
+      {
+        "debug": false,
+        "muestra": 0,
+        "bytes": 33554432,
+        "seconds": 0.0452519,
+        "MiB_s": 707.1526278454606,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": false,
+        "muestra": 1,
+        "bytes": 33554432,
+        "seconds": 0.0454424,
+        "MiB_s": 704.1881590761051,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": false,
+        "muestra": 2,
+        "bytes": 33554432,
+        "seconds": 0.0448404,
+        "MiB_s": 713.6421619789297,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      }
+    ],
+    "sha-release": [
+      {
+        "debug": false,
+        "muestra": 0,
+        "bytes": 33554432,
+        "seconds": 0.046406,
+        "MiB_s": 689.5660043959832,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": false,
+        "muestra": 1,
+        "bytes": 33554432,
+        "seconds": 0.0478102,
+        "MiB_s": 669.3132427808292,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      },
+      {
+        "debug": false,
+        "muestra": 2,
+        "bytes": 33554432,
+        "seconds": 0.0460336,
+        "MiB_s": 695.1444162524764,
+        "checksum": "3364f9cffb07daf4a1aaa2cb296c2a28c25e6bbf48c4dfadb645c67b14d15d06642fb87d4ad32444ff963e60840ada9a012aefc20522793890e55c0dddcabaf9"
+      }
+    ],
+    "sha256-debug": [
+      {
+        "debug": true,
+        "muestra": 0,
+        "bytes": 33554432,
+        "seconds": 0.7314414,
+        "MiB_s": 43.74923267947371,
+        "checksum": "371036ccdfc733fa30542a26a4f276536147c906d1570f0becc1d6f8b868c311"
+      },
+      {
+        "debug": true,
+        "muestra": 1,
+        "bytes": 33554432,
+        "seconds": 0.6991151,
+        "MiB_s": 45.7721482485502,
+        "checksum": "371036ccdfc733fa30542a26a4f276536147c906d1570f0becc1d6f8b868c311"
+      },
+      {
+        "debug": true,
+        "muestra": 2,
+        "bytes": 33554432,
+        "seconds": 0.6893962,
+        "MiB_s": 46.41743020921786,
+        "checksum": "371036ccdfc733fa30542a26a4f276536147c906d1570f0becc1d6f8b868c311"
+      }
+    ],
+    "sha256-release-z": [
+      {
+        "debug": false,
+        "muestra": 0,
+        "bytes": 33554432,
+        "seconds": 0.0729727,
+        "MiB_s": 438.5201589087426,
+        "checksum": "371036ccdfc733fa30542a26a4f276536147c906d1570f0becc1d6f8b868c311"
+      },
+      {
+        "debug": false,
+        "muestra": 1,
+        "bytes": 33554432,
+        "seconds": 0.0766572,
+        "MiB_s": 417.44284946489046,
+        "checksum": "371036ccdfc733fa30542a26a4f276536147c906d1570f0becc1d6f8b868c311"
+      },
+      {
+        "debug": false,
+        "muestra": 2,
+        "bytes": 33554432,
+        "seconds": 0.0738924,
+        "MiB_s": 433.06212817556343,
+        "checksum": "371036ccdfc733fa30542a26a4f276536147c906d1570f0becc1d6f8b868c311"
+      }
+    ]
+  },
+  "hash_summary": {
+    "sha-debug-sha2-opt": {
+      "samples": 3,
+      "median_MiB_s": 636.1082894849312,
+      "median_seconds_32MiB": 0.0503059
+    },
+    "sha-debug": {
+      "samples": 3,
+      "median_MiB_s": 10.665647386298115,
+      "median_seconds_32MiB": 3.0002867
+    },
+    "sha-release-z": {
+      "samples": 3,
+      "median_MiB_s": 707.1526278454606,
+      "median_seconds_32MiB": 0.0452519
+    },
+    "sha-release": {
+      "samples": 3,
+      "median_MiB_s": 689.5660043959832,
+      "median_seconds_32MiB": 0.046406
+    },
+    "sha256-debug": {
+      "samples": 3,
+      "median_MiB_s": 45.7721482485502,
+      "median_seconds_32MiB": 0.6991151
+    },
+    "sha256-release-z": {
+      "samples": 3,
+      "median_MiB_s": 433.06212817556343,
+      "median_seconds_32MiB": 0.0738924
+    }
+  },
+  "io_release_warm": [
+    {
+      "operation": "metadata_snapshot",
+      "files": 259,
+      "seconds": 0.017667368
+    },
+    {
+      "operation": "copy_all",
+      "bytes": 573603052,
+      "seconds": 0.3086806
+    },
+    {
+      "operation": "hash_all_release",
+      "bytes": 573603052,
+      "seconds": 0.8883172
+    },
+    {
+      "operation": "hardlink_sandbox",
+      "files": 259,
+      "seconds": 0.1485751
+    },
+    {
+      "operation": "move_five_sandbox",
+      "seconds": 0.0011203
+    }
+  ],
+  "network": {
+    "descriptor_python": {
+      "files": 259,
+      "recognized": 255,
+      "seconds": 0.48038219999943976,
+      "note": "Referencia Python; no sustituye perfil Rust"
+    },
+    "host_manifest": [
+      {
+        "seconds": 0.08387410000068485,
+        "bytes": 32587,
+        "status": 200
+      },
+      {
+        "seconds": 0.06514530000276864,
+        "bytes": 32587,
+        "status": 200
+      },
+      {
+        "seconds": 0.0758045000002312,
+        "bytes": 32587,
+        "status": 200
+      }
+    ],
+    "host_serial": {
+      "seconds": 0.6908785999985412,
+      "bytes": 2851990,
+      "files": [
+        {
+          "bytes": 1227424,
+          "seconds": 0.208901900001365
+        },
+        {
+          "bytes": 323130,
+          "seconds": 0.13148699999874225
+        },
+        {
+          "bytes": 699172,
+          "seconds": 0.17312029999811784
+        },
+        {
+          "bytes": 602264,
+          "seconds": 0.17716820000350708
+        }
+      ],
+      "note": "8 GET de archivos en total; segunda pasada puede tener cache caliente"
+    },
+    "host_parallel_2": {
+      "seconds": 0.43129100000078324,
+      "bytes": 2851990,
+      "files": [
+        {
+          "bytes": 1227424,
+          "seconds": 0.24734299999909126
+        },
+        {
+          "bytes": 323130,
+          "seconds": 0.22798749999856227
+        },
+        {
+          "bytes": 699172,
+          "seconds": 0.19225600000208942
+        },
+        {
+          "bytes": 602264,
+          "seconds": 0.17390049999812618
+        }
+      ],
+      "note": "8 GET de archivos en total; segunda pasada puede tener cache caliente"
+    },
+    "modrinth_headers": {
+      "status": 200,
+      "seconds": 0.8526577000011457,
+      "headers": {
+        "X-Ratelimit-Limit": "300",
+        "X-Ratelimit-Remaining": "299",
+        "X-Ratelimit-Reset": "0"
+      }
+    }
+  },
+  "limits": [
+    "3 muestras por variante de hashing en RAM de 32 MiB; no mide el launcher completo",
+    "Una pasada de IO con datos calientes; no implica ancho de banda fisico sostenido del disco",
+    "La descarga paralela se midio despues de la serial; posible efecto de cache",
+    "No se alteraron archivos de la instancia ni del servidor; copias y enlaces solo en target",
+    "Sin mediciones en el PC del amigo, Linux, HDD o conexion lenta"
+  ]
+}

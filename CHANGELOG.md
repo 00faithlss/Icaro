@@ -1,5 +1,23 @@
 # Changelog
 
+## Sin publicar
+
+- Acerca de muestra la versión compilada del workspace en lugar del texto fijo `0.1.0`.
+- Amplía la guía de colaboradores con el estado del hotfix, los pendientes y las prioridades de la investigación de sincronización.
+
+## [0.2.2] - 2026-10-15
+
+- Identifica versiones anteriores y copias duplicadas de un mod por su ID interno y sus hashes. La sincronización respalda y retira las copias activas del mismo mod del servidor, conserva otros mods personales y verifica que no queden dos versiones activas de un mod requerido.
+
+- Reutiliza el paquete de actualización ya descargado tras reabrir el launcher o reintentar una instalación fallida; vuelve a verificar tamaño y SHA-256 y descarta archivos parciales o alterados.
+
+- Mantiene bloqueada la actualización hasta cerrar el launcher, evita ayudantes simultáneos y normaliza las rutas para PowerShell/Inno Setup. Comprueba la versión instalada y muestra el motivo de un fallo.
+- Distribuye el espacio del resumen de importación para que una lista larga de carpetas no aplaste las etiquetas.
+- Muestra el plan de sincronización aunque un JAR propio choque con el del anfitrión; exige autorizar su reemplazo y conserva una copia verificable fuera de `mods`.
+- Añade **Importar .jar** en la lista de mods: selección múltiple, publicación atómica y conservación de nombres ya ocupados.
+
+Incluye una [investigación de rendimiento](docs/investigaciones/rendimiento-sincronizacion-2026-10-15.md) con mediciones y un banco de pruebas reproducible. Las optimizaciones propuestas siguen pendientes. Consulta las [notas de 0.2.2](docs/releases/0.2.2.md) para la validación y sus límites. Esta preparación local todavía requiere publicar los artefactos para distribuir la actualización.
+
 ## [0.2.1] - 2026-10-15
 
 - Añade selección de MRPACK/ZIP por ruta y con Examinar, y adapta ImportarModpack al diseño entregado: grabado, iconos, fases de lectura, resumen, nombre/grupo y recuperación de errores.
@@ -55,6 +73,7 @@ Publicación consolidada de las mejoras de servidores y las correcciones probada
 
 Primera entrega pública para Windows: instancias Vanilla y Fabric, catálogo de contenido, cuentas, consola, capturas y actualización del launcher. Consulta las [notas completas](docs/releases/0.1.0.md).
 
+[0.2.2]: docs/releases/0.2.2.md
 [0.2.1]: https://github.com/00faithlss/Icaro-launcher/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/00faithlss/Icaro-launcher/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/00faithlss/Icaro-launcher/tree/v0.1.0

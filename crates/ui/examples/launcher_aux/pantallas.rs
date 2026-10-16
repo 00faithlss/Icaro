@@ -1838,7 +1838,7 @@ pub fn pagina_ajustes<'a>(app: &'a App) -> Element<'a, Mensaje> {
         }
         _ => {
             col = col
-                .push(text("Icaro Launcher 0.1.0").font(fuentes::TITULO).size(texto::HEADING.0).color(p.text))
+                .push(text(concat!("Icaro Launcher ", env!("CARGO_PKG_VERSION"))).font(fuentes::TITULO).size(texto::HEADING.0).color(p.text))
                 .push(text("Un launcher de Minecraft escrito en Rust, ligero y optimizado, para Windows y Arch Linux.").size(texto::BODY.0).color(p.text_muted))
                 .push(text("Licencia GPL-3.0. Grabados de dominio público (CC0) de The Met, la National Gallery of Art y el Art Institute of Chicago. Íconos Pixelarticons (MIT).").size(texto::BODY.0).color(p.text_muted));
             if app.servicios.demo {

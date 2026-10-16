@@ -1,0 +1,11 @@
+{
+  "version": "0.2.2",
+  "notas": [
+    {"tipo":"correccion","texto":"Evita ayudantes de actualización simultáneos y conserva el bloqueo hasta cerrar el launcher. Normaliza las rutas de Windows, comprueba la versión instalada y muestra el motivo de un fallo."},
+    {"tipo":"correccion","texto":"Reutiliza una actualización ya descargada al reintentar, verificando otra vez tamaño y SHA-256; descarta paquetes parciales o alterados."},
+    {"tipo":"correccion","texto":"La sincronización identifica copias antiguas y duplicadas por el ID interno y los hashes, incluso si el mod cambió de nombre o declara la misma versión. Respalda las copias sustituidas y conserva los otros mods personales."},
+    {"tipo":"correccion","texto":"Permite revisar el plan aunque exista una colisión con un JAR propio. Los reemplazos sin identidad reconocida requieren autorización y conservan una copia verificada."},
+    {"tipo":"correccion","texto":"Corrige el texto cortado del resumen al importar modpacks con listas largas de carpetas, conservando los iconos y el diseño."},
+    {"tipo":"nuevo","texto":"Añade Importar .jar en los mods de la instancia, con selección múltiple, publicación atómica y protección de los archivos existentes."}
+  ]
+}

@@ -47,6 +47,7 @@ pub enum Accion {
     Abrir(usize),
     Revisada(u64, Result<Plan, String>),
     Aplicar(bool),
+    AutorizarReemplazos(bool),
     Progreso(u64, String, bool),
     Terminada(u64, bool, Result<Vec<Servidor>, String>),
     Reintentar,
@@ -201,6 +202,13 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                 return actualizar(app, Accion::Aplicar(true));
             }
         }
+        Accion::AutorizarReemplazos(valor) => {
+            if !app.servicios.sincronizacion.ocupado {
+                if let Some(plan) = app.servicios.sincronizacion.plan.as_mut() {
+                    plan.autorizar_reemplazos(valor);
+                }
+            }
+        }
         Accion::Aplicar(play) => {
             if app.pantalla != Some(Pantalla::Sincronizar) {
                 return Task::none();
@@ -214,6 +222,9 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
             else {
                 return Task::none();
             };
+            if !plan.puede_aplicar() {
+                return Task::none();
+            }
             if s.ocupado
                 || app.servicios.juego.ocupada(&instance.id)
                 || app.servicios.mods.busy.is_some()
@@ -508,6 +519,17 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
         body = body.push(line);
     }
     if let Some(plan) = &s.plan {
+        if !plan.conflictos.is_empty() {
+            body = body.push(componentes::aviso_detallado(p, componentes::Estado::Aviso,
+                "Mods locales distintos de los del anfitrión",
+                &format!("{}. Para usar las versiones del servidor, autoriza el reemplazo. Tus archivos quedarán respaldados en una carpeta .icaro-mods-conflictos dentro de la carpeta de juego.", plan.conflictos.join(", "))));
+            body = body.push(componentes::casilla(
+                p,
+                "Respaldar estos mods y usar los del anfitrión",
+                plan.puede_aplicar(),
+                |v| m(Accion::AutorizarReemplazos(v)),
+            ));
+        }
         for aviso in &plan.indice.avisos {
             body=body.push(text(aviso.clone()).size(13).color(p.text_muted));
         }
@@ -531,7 +553,7 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
                 (!s.ocupado).then(|| m(Accion::Reintentar)),
             ));
     }
-    let enabled = !s.ocupado && (s.plan.is_some() || s.visual);
+    let enabled = !s.ocupado && (s.plan.as_ref().is_some_and(|p| p.puede_aplicar()) || s.visual);
     let footer = container(responsive(move |size| {
         let first = componentes::boton(
             p,
