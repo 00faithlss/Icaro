@@ -151,27 +151,78 @@ pub fn escribir_json(path: &Path, value: &serde_json::Value) -> Result<(), Strin
     result
 }
 pub fn registrar(root: &Path, message: &str) -> Result<(), String> {
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs();
+    anexar(root, "launcher", &format!("{time} {}", linea(message)))
+}
+
+/// Registro propio de un componente en `logs/<nombre>.log`, con fecha UTC legible
+/// y la misma rotación que el registro del launcher.
+pub fn registrar_en(root: &Path, nombre: &str, message: &str) -> Result<(), String> {
+    if nombre.is_empty() || !nombre.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        return Err("Nombre de registro inválido".into());
+    }
+    let ahora = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    anexar(root, nombre, &format!("{} {}", fecha_utc(ahora), linea(message)))
+}
+
+fn linea(message: &str) -> String {
+    message
+        .chars()
+        .take(2000)
+        .collect::<String>()
+        .replace(['\r', '\n'], " ")
+}
+
+/// `AAAA-MM-DD HH:MM:SS.mmmZ` sin dependencias de calendario (algoritmo civil de Howard Hinnant).
+fn fecha_utc(desde_epoch: std::time::Duration) -> String {
+    let segundos = desde_epoch.as_secs();
+    let dias = (segundos / 86_400) as i64;
+    let resto = segundos % 86_400;
+    let z = dias + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let dia = doy - (153 * mp + 2) / 5 + 1;
+    let mes = if mp < 10 { mp + 3 } else { mp - 9 };
+    let anio = yoe + era * 400 + i64::from(mes <= 2);
+    format!(
+        "{anio:04}-{mes:02}-{dia:02} {:02}:{:02}:{:02}.{:03}Z",
+        resto / 3600,
+        resto % 3600 / 60,
+        resto % 60,
+        desde_epoch.subsec_millis()
+    )
+}
+
+fn anexar(root: &Path, nombre: &str, linea: &str) -> Result<(), String> {
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
     regular(root)?;
     let logs = root.join("logs");
     fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
     regular(&logs)?;
-    let path = logs.join("launcher.log");
+    let path = logs.join(format!("{nombre}.log"));
     if path.exists() && regular(&path)?.len() > 1024 * 1024 {
-        let oldest = logs.join("launcher.3.log");
+        let oldest = logs.join(format!("{nombre}.3.log"));
         if oldest.exists() {
             regular(&oldest)?;
             fs::remove_file(oldest).map_err(|e| e.to_string())?;
         }
         for n in (1..3).rev() {
-            let src = logs.join(format!("launcher.{n}.log"));
+            let src = logs.join(format!("{nombre}.{n}.log"));
             if src.exists() {
                 regular(&src)?;
-                fs::rename(src, logs.join(format!("launcher.{}.log", n + 1)))
+                fs::rename(src, logs.join(format!("{nombre}.{}.log", n + 1)))
                     .map_err(|e| e.to_string())?;
             }
         }
-        fs::rename(&path, logs.join("launcher.1.log")).map_err(|e| e.to_string())?;
+        fs::rename(&path, logs.join(format!("{nombre}.1.log"))).map_err(|e| e.to_string())?;
     }
     if path.exists() {
         regular(&path)?;
@@ -181,20 +232,7 @@ pub fn registrar(root: &Path, message: &str) -> Result<(), String> {
         .append(true)
         .open(path)
         .map_err(|e| e.to_string())?;
-    let time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_secs();
-    writeln!(
-        file,
-        "{time} {}",
-        message
-            .chars()
-            .take(2000)
-            .collect::<String>()
-            .replace(['\r', '\n'], " ")
-    )
-    .map_err(|e| e.to_string())
+    writeln!(file, "{linea}").map_err(|e| e.to_string())
 }
 
 /// Traslada ajustes existentes a la instancia antes de retirar la copia global.
@@ -270,6 +308,23 @@ mod tests {
         let p = std::env::temp_dir().join(format!("icaro-storage-{}", u64::from_le_bytes(nonce)));
         fs::create_dir(&p).unwrap();
         p
+    }
+    #[test]
+    fn registro_propio_usa_fecha_legible_una_linea_y_rotacion() {
+        use std::time::Duration;
+        assert_eq!(fecha_utc(Duration::ZERO), "1970-01-01 00:00:00.000Z");
+        assert_eq!(fecha_utc(Duration::from_millis(951_782_400_123)), "2000-02-29 00:00:00.123Z");
+        assert_eq!(fecha_utc(Duration::from_secs(1_792_119_363)), "2026-10-16 02:56:03.000Z");
+        let root = temp();
+        registrar_en(&root, "sincronizacion", "primera\r\nlínea").unwrap();
+        let texto = fs::read_to_string(root.join("logs/sincronizacion.log")).unwrap();
+        assert!(texto.ends_with("Z primera  línea\n"), "{texto}");
+        assert!(registrar_en(&root, "../fuera", "x").is_err());
+        fs::write(root.join("logs/sincronizacion.log"), vec![b'x'; 1024 * 1024 + 1]).unwrap();
+        registrar_en(&root, "sincronizacion", "nueva").unwrap();
+        assert!(root.join("logs/sincronizacion.1.log").exists());
+        assert!(!root.join("logs/launcher.1.log").exists());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn limpieza_cache_y_rotacion_protegen_datos_personales() {

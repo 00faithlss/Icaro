@@ -48,7 +48,7 @@ Icaro/
   meta/minecraft/           # Catálogo, metadatos por versión/hash y clientes por hash
   meta/fabric/              # Perfiles oficiales por versión de Minecraft y Fabric
   cache/                    # Respuestas y descargas temporales recuperables
-  logs/                     # Registros del launcher con rotación
+  logs/                     # Registros del launcher y de sincronización, con rotación
   estado.json               # Preferencias globales, sin configuraciones activas por instancia
   opciones-minecraft.json   # Sensibilidad, teclas y gráficos compartidos del jugador
   instances/
@@ -114,7 +114,7 @@ La integración de loaders debe apoyarse en estas rutas compartidas. La migraci�
 
 ## Almacenamiento y mantenimiento
 
-Almacenamiento mide archivos reales fuera del hilo de dibujo, muestra todas las categorías de la raíz y ofrece Actualizar, Limpiar caché, Recuperar operaciones y traslado de papeleras antiguas. La limpieza se limita a `cache/`; no retira assets, bibliotecas, runtimes, mundos, mods, iconos ni configuración. El recorrido tiene límites y rechaza enlaces y uniones de carpetas. El registro `logs/launcher.log` rota al superar 1 MiB y conserva tres archivos anteriores. No se registran tokens ni datos de cuentas.
+Almacenamiento mide archivos reales fuera del hilo de dibujo, muestra todas las categorías de la raíz y ofrece Actualizar, Limpiar caché, Recuperar operaciones y traslado de papeleras antiguas. La limpieza se limita a `cache/`; no retira assets, bibliotecas, runtimes, mundos, mods, iconos ni configuración. El recorrido tiene límites y rechaza enlaces y uniones de carpetas. Los registros `logs/launcher.log` y `logs/sincronizacion.log` rotan al superar 1 MiB y conservan tres archivos anteriores cada uno. No se registran tokens ni datos de cuentas.
 
 Las exportaciones de Ícaro incluyen los ajustes portables conocidos; una selección manual de Java conserva una marca que obliga a resolverla en el PC de destino. No se exportan rutas absolutas de Java ni campos locales desconocidos. El ZIP no incluye el almacén común ni los marcadores de instalación. La importación completa y los instaladores de Quilt, Forge y NeoForge siguen siendo funciones independientes pendientes, como se indica en `pendientes-implementacion.md`.
 
