@@ -7,6 +7,8 @@
 - La sincronización calcula los hashes de `mods` una vez por revisión en lugar de dos, y al aplicar solo vuelve a leerlos si cambiaron los metadatos de algún archivo. Pulsar Jugar con el conjunto al día pasa de tres lecturas completas a una.
 - La lectura local de mods se ejecuta fuera del executor asíncrono y se detiene al cancelar. El límite de 90 segundos de la revisión ya no incluye el disco, por lo que una carpeta grande no se presenta como un fallo de Modrinth.
 - Las compilaciones de desarrollo optimizan `sha2` y `sha1`; las mediciones de sincronización en debug dejan de estar dominadas por el hashing sin optimizar.
+- Aplicar una sincronización ya no copia toda la carpeta `mods`: descarga y verifica solo lo nuevo, y mueve únicamente los archivos afectados mediante un diario que se deshace si falla o si el launcher se cierra a mitad. Los mods personales no se copian ni se recrean.
+- La barra de progreso de la sincronización cuenta los cambios del plan en lugar de todos los mods del índice.
 
 ## [0.2.2] - 2026-10-15
 

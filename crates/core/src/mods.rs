@@ -147,7 +147,7 @@ fn recuperar(game: &Path) -> Result<(), Error> {
         regular(&backup, true)?;
         fs::rename(backup, mods).map_err(|_| Error::Disco)?;
     }
-    Ok(())
+    sincronizacion::recuperar_transacciones(game)
 }
 fn registros(game: &Path) -> Result<Vec<Instalado>, Error> {
     let dir = game.join("mods");

@@ -444,12 +444,12 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
         body = body.push(if s.aplicando {
             icaro_ui::progreso::continuo(
                 p,
-                s.progreso as f32
-                    / s.plan.as_ref().map_or(1, |p| {
-                        (p.indice.mods.len() + p.indice.archivos.len()
-                            + p.cambios.iter().filter(|c| c.tipo == Tipo::Quitar).count())
-                        .max(1)
-                    }) as f32,
+                // La sincronización informa un paso por cambio del plan; los mods
+                // que ya coinciden no cuentan como trabajo pendiente.
+                {
+                    let total = s.plan.as_ref().map_or(1, |p| p.cambios.len().max(1));
+                    s.progreso.min(total) as f32 / total as f32
+                },
                 app.reducir,
             )
         } else {

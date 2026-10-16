@@ -145,6 +145,8 @@ pub struct Plan {
     origen: String,
     huella: Vec<(String, String)>,
     estado: Vec<EstadoArchivo>,
+    /// Identidades Fabric leídas en la revisión, por nombre de archivo activo.
+    identidades: BTreeMap<String, String>,
     actuales: Vec<Instalado>,
     destinos: Vec<Version>,
     quitar: BTreeSet<String>,
@@ -843,6 +845,7 @@ pub async fn preparar_desde(
         origen,
         huella: fingerprint,
         estado: estado_inicial,
+        identidades,
         actuales: installed,
         destinos: versions,
         quitar,
@@ -1185,142 +1188,479 @@ pub async fn aplicar(
     }
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(err)?;
-    let stage = game.join(format!(
-        ".icaro-mods-next-{}",
-        random
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    ));
-    fs::create_dir(&stage).map_err(err)?;
+    let id_tx = random.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let tx_nombre = format!("{PREFIJO_TX}{id_tx}");
+    let tx = game.join(&tx_nombre);
+    fs::create_dir(&tx).map_err(err)?;
+    fs::create_dir(tx.join("nuevos")).map_err(err)?;
     let result = async {
-        if dir.exists() {
-            let (origen, destino) = (dir.clone(), stage.clone());
-            bloqueante(move |_| copiar(&origen, &destino, 0, &mut 0, &mut 0).map_err(err)).await?;
-        }
+        // Estado virtual de `mods`: se planifican los movimientos sin tocar la carpeta.
+        let mut virtual_ = Virtual::nuevo(&dir, &plan.huella);
+        let mut ops: Vec<Op> = vec![];
+        let mut descargas: Vec<(usize, Descarga)> = vec![];
+        let mut solo_servidor = vec![];
         let respaldos: BTreeSet<_> = plan.conflictos.iter().chain(plan.reemplazos.iter()).cloned().collect();
-        // El respaldo es independiente de la carpeta temporal de recuperación.
-        // Permanece disponible incluso después de otras sincronizaciones.
-        if !respaldos.is_empty() {
-            let respaldo = game.join(format!(".icaro-mods-conflictos-{}", random.iter().map(|b| format!("{b:02x}")).collect::<String>()));
-            fs::create_dir(&respaldo).map_err(err)?;
-            for nombre in &respaldos {
-                let anterior = plan.actuales.iter().find(|m| &m.archivo == nombre).ok_or("El conflicto ya no existe.")?;
-                let ruta = ruta_mod(&stage, anterior);
-                let destino = respaldo.join(ruta.file_name().ok_or("Nombre de mod inválido.")?);
-                fs::copy(&ruta, &destino).map_err(err)?;
-                if hash_archivo(&destino).map_err(err)? != anterior.sha512 { return Err("No se pudo verificar el respaldo del mod local.".into()); }
-                fs::OpenOptions::new().write(true).open(&destino).and_then(|f| f.sync_all()).map_err(err)?;
-                fs::remove_file(ruta).map_err(err)?;
-            }
+        for nombre in &respaldos {
+            let anterior = plan.actuales.iter().find(|m| &m.archivo == nombre).ok_or("El conflicto ya no existe.")?;
+            let actual = nombre_mod(anterior);
+            virtual_.retirar(&actual)?;
+            ops.push(Op::Respaldar(actual));
         }
         let actuales: Vec<_> = plan.actuales.iter().filter(|m| !respaldos.contains(&m.archivo)).cloned().collect();
-        let wanted=plan.indice.mods.iter().map(|m|m.proyecto.clone()).collect::<BTreeSet<_>>();
-        let mut records=actuales.iter().filter(|m|!plan.quitar.contains(&m.project_id) && !wanted.contains(&m.project_id)).cloned().collect::<Vec<_>>();
-        for old in actuales.iter().filter(|m|plan.quitar.contains(&m.project_id)) { progress(&old.project_id,false); fs::remove_file(ruta_mod(&stage,old)).map_err(err)?; progress(&old.project_id,true); }
-        for v in &plan.destinos {
-            progress(&v.project_id,false);
-            if cancel.is_cancelled() { return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()); }
-            let file=&v.files[0];
-            let old=actuales.iter().find(|m|m.sha512.eq_ignore_ascii_case(&file.hashes.sha512)).or_else(||actuales.iter().find(|m|m.project_id == v.project_id));
-            let same=old.is_some_and(|m|m.sha512.eq_ignore_ascii_case(&file.hashes.sha512));
-            let filename=if same {old.unwrap().archivo.clone()} else {file.filename.clone()};
-            let target=stage.join(&filename);
-            if actuales.iter().any(|m|!plan.quitar.contains(&m.project_id) && m.archivo.eq_ignore_ascii_case(&filename) && old.is_none_or(|o|o.archivo != m.archivo)) { return Err(format!("El nombre {filename} está ocupado por un archivo local.")); }
-            if (target.exists() || stage.join(format!("{filename}.disabled")).exists()) && old.is_none_or(|m|m.archivo.to_lowercase() != filename.to_lowercase()) { return Err(format!("El nombre {filename} está ocupado por un archivo local.")); }
-            if same {
-                if !old.unwrap().activo { fs::rename(ruta_mod(&stage,old.unwrap()),&target).map_err(err)?; }
-            } else {
-                let bytes=tokio::select! { _=cancel.cancelled()=>return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()), r=source.archivo(file)=>r.map_err(err)? };
-                if bytes.len() as u64 != file.size || hash(&bytes) != file.hashes.sha512.to_lowercase() { return Err("El mod descargado no coincide con su tamaño o SHA-512.".into()); }
-                if let Some(old)=old { fs::remove_file(ruta_mod(&stage,old)).map_err(err)?; }
-                guardar_archivo(&target,&bytes).map_err(err)?;
-            }
-            if plan.recuperadas.contains(&v.project_id)
-                    && matches!(instance.loader.as_str(), "fabric" | "quilt")
-                    && dedicado::descriptor_fabric(&target, &mut vec![])?
-                        .is_some_and(|d| d.get("environment").and_then(|v| v.as_str()) == Some("server"))
-                {
-                    return Err(format!("La dependencia {} declara que solo admite servidor. El conjunto anterior se conserva.", v.project_id));
-            }
-            records.retain(|m|m.archivo != filename && m.project_id != v.project_id);
-            let nombre=plan.cambios.iter().find(|c|c.proyecto==v.project_id).map(|c|c.nombre.clone()).or_else(||old.map(|m|m.nombre.clone())).unwrap_or_else(||v.name.clone());
-            records.push(Instalado { project_id:v.project_id.clone(), nombre, version_id:v.id.clone(), version:v.version_number.clone(), publicada:v.date_published.clone(), archivo:filename, sha512:file.hashes.sha512.clone(), activo:true, dependencias:v.dependencies.clone() });
-            progress(&v.project_id,true);
+        let wanted = plan.indice.mods.iter().map(|m| m.proyecto.clone()).collect::<BTreeSet<_>>();
+        let mut records = actuales.iter().filter(|m| !plan.quitar.contains(&m.project_id) && !wanted.contains(&m.project_id)).cloned().collect::<Vec<_>>();
+        for old in actuales.iter().filter(|m| plan.quitar.contains(&m.project_id)) {
+            let actual = nombre_mod(old);
+            virtual_.retirar(&actual)?;
+            ops.push(Op::Retirar(actual));
         }
-        records.retain(|m|!m.project_id.is_empty());
-        guardar_archivo(&stage.join(META),&serde_json::to_vec_pretty(&records).map_err(err)?).map_err(err)?;
+        for v in &plan.destinos {
+            let file = &v.files[0];
+            let old = actuales.iter().find(|m| m.sha512.eq_ignore_ascii_case(&file.hashes.sha512)).or_else(|| actuales.iter().find(|m| m.project_id == v.project_id));
+            let same = old.is_some_and(|m| m.sha512.eq_ignore_ascii_case(&file.hashes.sha512));
+            let filename = if same { old.unwrap().archivo.clone() } else { file.filename.clone() };
+            if actuales.iter().any(|m| !plan.quitar.contains(&m.project_id) && m.archivo.eq_ignore_ascii_case(&filename) && old.is_none_or(|o| o.archivo != m.archivo)) {
+                return Err(format!("El nombre {filename} está ocupado por un archivo local."));
+            }
+            if (virtual_.existe(&filename) || virtual_.existe(&format!("{filename}.disabled"))) && old.is_none_or(|m| m.archivo.to_lowercase() != filename.to_lowercase()) {
+                return Err(format!("El nombre {filename} está ocupado por un archivo local."));
+            }
+            if same {
+                let old = old.unwrap();
+                if !old.activo {
+                    let desde = nombre_mod(old);
+                    virtual_.activar(&desde, &filename)?;
+                    ops.push(Op::Activar { desde, hasta: filename.clone() });
+                }
+            } else {
+                let indice = descargas.len();
+                descargas.push((indice, Descarga::Modrinth(v.project_id.clone(), file.clone())));
+                if let Some(old) = old {
+                    let actual = nombre_mod(old);
+                    virtual_.retirar(&actual)?;
+                    ops.push(Op::Retirar(actual));
+                }
+                virtual_.colocar(&filename, tx.join("nuevos").join(indice.to_string()))?;
+                ops.push(Op::Colocar { indice, nombre: filename.clone() });
+            }
+            if plan.recuperadas.contains(&v.project_id) && matches!(instance.loader.as_str(), "fabric" | "quilt") {
+                solo_servidor.push((v.project_id.clone(), filename.clone()));
+            }
+            records.retain(|m| m.archivo != filename && m.project_id != v.project_id);
+            let nombre = plan.cambios.iter().find(|c| c.proyecto == v.project_id).map(|c| c.nombre.clone()).or_else(|| old.map(|m| m.nombre.clone())).unwrap_or_else(|| v.name.clone());
+            records.push(Instalado { project_id: v.project_id.clone(), nombre, version_id: v.id.clone(), version: v.version_number.clone(), publicada: v.date_published.clone(), archivo: filename, sha512: file.hashes.sha512.clone(), activo: true, dependencias: v.dependencies.clone() });
+        }
         for old in &plan.quitar_locales {
-            progress(&old.id,false);
-            let path = stage.join(&old.archivo);
-            let disabled = stage.join(format!("{}.disabled",old.archivo));
-            if path.exists() { fs::remove_file(path).map_err(err)?; }
-            else if disabled.exists() { fs::remove_file(disabled).map_err(err)?; }
+            let disabled = format!("{}.disabled", old.archivo);
+            if virtual_.existe(&old.archivo) {
+                virtual_.retirar(&old.archivo)?;
+                ops.push(Op::Retirar(old.archivo.clone()));
+            } else if virtual_.existe(&disabled) {
+                virtual_.retirar(&disabled)?;
+                ops.push(Op::Retirar(disabled));
+            }
             records.retain(|m| !m.archivo.eq_ignore_ascii_case(&old.archivo));
-            progress(&old.id,true);
         }
         for local in &plan.locales {
-            progress(&local.id,false);
-            if cancel.is_cancelled() { return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()); }
-            let target=stage.join(&local.archivo);
-            let disabled=stage.join(format!("{}.disabled",local.archivo));
-            // La copia conserva los hashes verificados en la revisión del plan.
-            let verificado = |nombre: String| plan.huella.iter().any(|(n, h)| n == &nombre && h.eq_ignore_ascii_case(&local.sha512));
-            let same=if target.exists() { verificado(local.archivo.clone()) }
-                else if disabled.exists() { verificado(format!("{}.disabled",local.archivo)) } else { false };
-            if same { if !target.exists() {fs::rename(&disabled,&target).map_err(err)?;} }
-            else {
-                let bytes=tokio::select!{_=cancel.cancelled()=>return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()),r=descargar_propio(&plan.origen,local)=>r?};
-                if target.exists(){fs::remove_file(&target).map_err(err)?;}
-                if disabled.exists(){fs::remove_file(&disabled).map_err(err)?;}
-                guardar_archivo(&target,&bytes).map_err(err)?;
-            }
-            records.retain(|m|!m.archivo.eq_ignore_ascii_case(&local.archivo));
-            progress(&local.id,true);
-        }
-        if matches!(instance.loader.as_str(), "fabric" | "quilt") {
-            let requeridos_archivos: Vec<_> = plan.locales.iter().map(|l| l.archivo.clone())
-                .chain(records.iter().filter(|r| wanted.contains(&r.project_id)).map(|r| r.archivo.clone()))
-                .collect();
-            let carpeta = stage.clone();
-            let cancelado = cancel.clone();
-            bloqueante(move |token| {
-                let mut requeridos = BTreeSet::new();
-                for archivo in &requeridos_archivos {
-                    if let Some(id) = identidad_fabric(&carpeta.join(archivo))? { requeridos.insert(id); }
+            let disabled = format!("{}.disabled", local.archivo);
+            // Los hashes de la revisión siguen vigentes: la carpeta no cambió.
+            let verificado = |nombre: &str| plan.huella.iter().any(|(n, h)| n == nombre && h.eq_ignore_ascii_case(&local.sha512));
+            let same = if virtual_.existe(&local.archivo) { verificado(&local.archivo) } else if virtual_.existe(&disabled) { verificado(&disabled) } else { false };
+            if same {
+                if !virtual_.existe(&local.archivo) {
+                    virtual_.activar(&disabled, &local.archivo)?;
+                    ops.push(Op::Activar { desde: disabled, hasta: local.archivo.clone() });
                 }
-                let mut vistos = BTreeSet::new();
-                for entrada in fs::read_dir(&carpeta).map_err(err)? {
-                    if token.is_cancelled() || cancelado.is_cancelled() {
-                        return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
-                    }
-                    let path = entrada.map_err(err)?.path();
-                    if path.extension().is_some_and(|e| e == "jar") {
-                        if let Some(id) = identidad_fabric(&path)? {
-                            if requeridos.contains(&id) && !vistos.insert(id.clone()) {
-                                return Err(format!("Quedaron dos versiones activas del mod {id}. No se publicó la sincronización."));
-                            }
+            } else {
+                let indice = descargas.len();
+                descargas.push((indice, Descarga::Propio(local.clone())));
+                if virtual_.existe(&local.archivo) {
+                    virtual_.retirar(&local.archivo)?;
+                    ops.push(Op::Retirar(local.archivo.clone()));
+                }
+                if virtual_.existe(&disabled) {
+                    virtual_.retirar(&disabled)?;
+                    ops.push(Op::Retirar(disabled));
+                }
+                virtual_.colocar(&local.archivo, tx.join("nuevos").join(indice.to_string()))?;
+                ops.push(Op::Colocar { indice, nombre: local.archivo.clone() });
+            }
+            records.retain(|m| !m.archivo.eq_ignore_ascii_case(&local.archivo));
+        }
+        // Solo se descarga lo que falta; la carpeta activa no cambia hasta el commit.
+        for (indice, descarga) in &descargas {
+            let id = descarga.id();
+            progress(&id, false);
+            if cancel.is_cancelled() {
+                return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
+            }
+            let (bytes, tamano, sha) = match descarga {
+                Descarga::Modrinth(_, file) => {
+                    let bytes = tokio::select! { _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()), r = source.archivo(file) => r.map_err(err)? };
+                    (bytes, file.size, file.hashes.sha512.to_lowercase())
+                }
+                Descarga::Propio(local) => {
+                    let bytes = tokio::select! { _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()), r = descargar_propio(&plan.origen, local) => r? };
+                    (bytes, local.bytes, local.sha512.to_lowercase())
+                }
+            };
+            let destino = tx.join("nuevos").join(indice.to_string());
+            bloqueante(move |_| {
+                if bytes.len() as u64 != tamano || hash(&bytes) != sha {
+                    return Err("El mod descargado no coincide con su tamaño o SHA-512.".into());
+                }
+                guardar_archivo(&destino, &bytes).map_err(err)
+            })
+            .await?;
+            progress(&id, true);
+        }
+        records.retain(|m| !m.project_id.is_empty());
+        let meta = serde_json::to_vec_pretty(&records).map_err(err)?;
+        let sync = serde_json::to_vec(&Gestionados { origen: plan.origen.clone(), proyectos: wanted.clone(), archivos: plan.locales.clone() }).map_err(err)?;
+        for (nombre, bytes) in [(META, meta), (SYNC, sync)] {
+            let indice = descargas.len() + ops.len();
+            guardar_archivo(&tx.join("nuevos").join(indice.to_string()), &bytes).map_err(err)?;
+            if virtual_.existe(nombre) {
+                virtual_.retirar(nombre)?;
+                ops.push(Op::Retirar(nombre.into()));
+            }
+            virtual_.colocar(nombre, tx.join("nuevos").join(indice.to_string()))?;
+            ops.push(Op::Colocar { indice, nombre: nombre.into() });
+        }
+        // Las comprobaciones de identidad usan el estado final, no la carpeta actual.
+        let fabric = matches!(instance.loader.as_str(), "fabric" | "quilt");
+        let requeridos_archivos: Vec<_> = plan.locales.iter().map(|l| l.archivo.clone())
+            .chain(records.iter().filter(|r| wanted.contains(&r.project_id)).map(|r| r.archivo.clone()))
+            .collect();
+        let final_ = virtual_.clone();
+        let cancelado = cancel.clone();
+        let (carpeta, conocidas) = (dir.clone(), plan.identidades.clone());
+        bloqueante(move |token| {
+            // Los archivos que siguen en `mods` no cambiaron desde la revisión:
+            // se reutiliza su identidad y solo se abren los JAR descargados.
+            let identidad = |ruta: &Path| -> Result<Option<String>, String> {
+                if ruta.parent() == Some(carpeta.as_path()) {
+                    let nombre = ruta.file_name().unwrap_or_default().to_string_lossy();
+                    let base = nombre.strip_suffix(".disabled").unwrap_or(&nombre);
+                    return Ok(conocidas.get(base).cloned());
+                }
+                identidad_fabric(ruta)
+            };
+            for (proyecto, archivo) in &solo_servidor {
+                if dedicado::descriptor_fabric(&final_.ruta(archivo)?, &mut vec![])?
+                    .is_some_and(|d| d.get("environment").and_then(|v| v.as_str()) == Some("server"))
+                {
+                    return Err(format!("La dependencia {proyecto} declara que solo admite servidor. El conjunto anterior se conserva."));
+                }
+            }
+            if !fabric {
+                return Ok(());
+            }
+            let mut requeridos = BTreeSet::new();
+            for archivo in &requeridos_archivos {
+                if let Some(id) = identidad(&final_.ruta(archivo)?)? { requeridos.insert(id); }
+            }
+            let mut vistos = BTreeSet::new();
+            for (nombre, ruta) in final_.archivos() {
+                if token.is_cancelled() || cancelado.is_cancelled() {
+                    return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
+                }
+                if nombre.ends_with(".jar") {
+                    if let Some(id) = identidad(ruta)? {
+                        if requeridos.contains(&id) && !vistos.insert(id.clone()) {
+                            return Err(format!("Quedaron dos versiones activas del mod {id}. No se publicó la sincronización."));
                         }
                     }
                 }
-                Ok(())
-            }).await?;
+            }
+            Ok(())
+        })
+        .await?;
+        if cancel.is_cancelled() {
+            return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
         }
-        guardar_archivo(&stage.join(META),&serde_json::to_vec_pretty(&records).map_err(err)?).map_err(err)?;
-        guardar_archivo(&stage.join(SYNC),&serde_json::to_vec(&Gestionados {origen:plan.origen.clone(), proyectos:wanted, archivos:plan.locales.clone()}).map_err(err)?).map_err(err)?;
-        let (carpeta, esperado, verificada) = (dir.clone(), plan.estado.clone(), plan.huella.clone());
-        if cancel.is_cancelled() || !bloqueante(move |token| sin_cambios(&carpeta, &esperado, &verificada, &token)).await? { return Err("Los mods cambiaron o se canceló la sincronización. El conjunto anterior se conserva.".into()); }
-        let backup=game.join(".icaro-mods-backup");
-        if backup.exists() { borrar_preparacion(&game,&backup).map_err(err)?; }
-        if dir.exists() { fs::rename(&dir,&backup).map_err(err)?; }
-        if fs::rename(&stage,&dir).is_err() { if backup.exists(){let _=fs::rename(&backup,&dir);} return Err("No se pudo publicar la sincronización. El conjunto anterior se conserva.".into()); }
-        if backup.exists() { let _=borrar_preparacion(&game,&backup); }
+        // Commit: el diario se escribe antes de mover el primer archivo y
+        // permite deshacer la transacción tras un cierre abrupto.
+        let (juego, carpeta, esperado, verificada) = (game.clone(), dir.clone(), plan.estado.clone(), plan.huella.clone());
+        let tx_commit = tx_nombre.clone();
+        let respaldo = format!(".icaro-mods-conflictos-{id_tx}");
+        bloqueante(move |token| {
+            if !sin_cambios(&carpeta, &esperado, &verificada, &token)? {
+                return Err("Los mods cambiaron o se canceló la sincronización. El conjunto anterior se conserva.".into());
+            }
+            let movimientos = movimientos(&ops, &tx_commit, &respaldo);
+            if !carpeta.exists() {
+                // Instalación desde cero: una carpeta vacía es inocua si se deshace.
+                fs::create_dir(&carpeta).map_err(err)?;
+            }
+            if ops.iter().any(|op| matches!(op, Op::Respaldar(_))) {
+                // El respaldo de conflictos permanece después de confirmar.
+                fs::create_dir(juego.join(&respaldo)).map_err(err)?;
+            }
+            fs::create_dir(juego.join(&tx_commit).join("retirados")).map_err(err)?;
+            ejecutar(&juego, &tx_commit, &movimientos)
+        })
+        .await?;
+        // Los cambios sin descarga (retiradas, activaciones) terminan con el commit.
+        for c in &plan.cambios {
+            if !descargas.iter().any(|(_, d)| d.id() == c.proyecto) {
+                progress(&c.proyecto, true);
+            }
+        }
         Ok(())
-    }.await;
-    if stage.exists() {
-        let _ = borrar_preparacion(&game, &stage);
+    }
+    .await;
+    if tx.exists() {
+        // Si quedó un diario sin confirmar, `recuperar` lo resolverá; nunca se borra a ciegas.
+        if !tx.join(DIARIO).exists() || leer_diario(&tx).is_ok_and(|d| d.confirmada) {
+            let _ = borrar_preparacion(&game, &tx);
+        }
     }
     result
+}
+
+const PREFIJO_TX: &str = ".icaro-mods-tx-";
+const DIARIO: &str = "diario.json";
+
+#[derive(Debug, Clone)]
+enum Descarga {
+    Modrinth(String, ModFile),
+    Propio(ArchivoPropio),
+}
+impl Descarga {
+    fn id(&self) -> String {
+        match self {
+            Descarga::Modrinth(proyecto, _) => proyecto.clone(),
+            Descarga::Propio(local) => local.id.clone(),
+        }
+    }
+}
+
+/// Paso del plan sobre la carpeta `mods`; todos se ejecutan como renombrados.
+#[derive(Debug, Clone)]
+enum Op {
+    Retirar(String),
+    Respaldar(String),
+    Activar { desde: String, hasta: String },
+    Colocar { indice: usize, nombre: String },
+}
+
+fn nombre_mod(m: &Instalado) -> String {
+    if m.activo {
+        m.archivo.clone()
+    } else {
+        format!("{}.disabled", m.archivo)
+    }
+}
+
+/// Contenido previsto de `mods` (nombres de primer nivel) y la ruta de la
+/// que procede cada archivo al confirmar.
+#[derive(Debug, Clone)]
+struct Virtual {
+    archivos: BTreeMap<String, (String, PathBuf)>,
+}
+impl Virtual {
+    fn nuevo(dir: &Path, huella: &[(String, String)]) -> Self {
+        Self {
+            archivos: huella
+                .iter()
+                .filter(|(n, _)| !n.contains(['/', '\\']))
+                .map(|(n, _)| (n.to_lowercase(), (n.clone(), dir.join(n))))
+                .collect(),
+        }
+    }
+    fn existe(&self, nombre: &str) -> bool {
+        self.archivos.contains_key(&nombre.to_lowercase())
+    }
+    fn retirar(&mut self, nombre: &str) -> Result<(), String> {
+        self.archivos
+            .remove(&nombre.to_lowercase())
+            .map(|_| ())
+            .ok_or_else(|| format!("{nombre} ya no está en la carpeta de mods. Comprueba de nuevo."))
+    }
+    fn colocar(&mut self, nombre: &str, origen: PathBuf) -> Result<(), String> {
+        if !nombre_valido(nombre.strip_suffix(".disabled").unwrap_or(nombre)) && nombre != META && nombre != SYNC {
+            return Err("Nombre de mod inválido.".into());
+        }
+        if self.existe(nombre) {
+            return Err(format!("El nombre {nombre} está ocupado por un archivo local."));
+        }
+        self.archivos.insert(nombre.to_lowercase(), (nombre.into(), origen));
+        Ok(())
+    }
+    fn activar(&mut self, desde: &str, hasta: &str) -> Result<(), String> {
+        let (_, origen) = self
+            .archivos
+            .remove(&desde.to_lowercase())
+            .ok_or_else(|| format!("{desde} ya no está en la carpeta de mods. Comprueba de nuevo."))?;
+        self.colocar(hasta, origen)
+    }
+    fn ruta(&self, nombre: &str) -> Result<PathBuf, String> {
+        self.archivos
+            .get(&nombre.to_lowercase())
+            .map(|(_, ruta)| ruta.clone())
+            .ok_or_else(|| format!("Falta {nombre} en el conjunto preparado."))
+    }
+    fn archivos(&self) -> impl Iterator<Item = (&String, &PathBuf)> {
+        self.archivos.values().map(|(n, r)| (n, r))
+    }
+}
+
+/// Renombrado registrado en el diario, con rutas relativas a la carpeta de juego.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Movimiento {
+    origen: String,
+    destino: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Diario {
+    esquema: u32,
+    confirmada: bool,
+    movimientos: Vec<Movimiento>,
+}
+
+fn movimientos(ops: &[Op], tx: &str, respaldo: &str) -> Vec<Movimiento> {
+    let mod_ = |n: &str| format!("mods/{n}");
+    ops.iter()
+        .enumerate()
+        .map(|(i, op)| match op {
+            Op::Retirar(n) => Movimiento { origen: mod_(n), destino: format!("{tx}/retirados/{i}") },
+            Op::Respaldar(n) => Movimiento { origen: mod_(n), destino: format!("{respaldo}/{n}") },
+            Op::Activar { desde, hasta } => Movimiento { origen: mod_(desde), destino: mod_(hasta) },
+            Op::Colocar { indice, nombre } => Movimiento { origen: format!("{tx}/nuevos/{indice}"), destino: mod_(nombre) },
+        })
+        .collect()
+}
+
+/// Solo acepta rutas creadas por la transacción: `mods/<archivo>` o un archivo
+/// dentro de una carpeta `.icaro-mods-*` de la carpeta de juego.
+fn ruta_diario(game: &Path, relativa: &str) -> Result<PathBuf, Error> {
+    let partes: Vec<_> = relativa.split('/').collect();
+    let valida = |p: &&str| !p.is_empty() && *p != "." && *p != ".." && !p.contains(['\\', ':']);
+    let permitida = match partes.as_slice() {
+        ["mods", archivo] => {
+            *archivo == META
+                || *archivo == SYNC
+                || nombre_valido(archivo.strip_suffix(".disabled").unwrap_or(archivo))
+        }
+        [carpeta, archivo] => carpeta.starts_with(".icaro-mods-") && valida(archivo),
+        [carpeta, sub, archivo] => {
+            carpeta.starts_with(PREFIJO_TX)
+                && matches!(*sub, "nuevos" | "retirados")
+                && archivo.parse::<usize>().is_ok()
+        }
+        _ => false,
+    };
+    if !permitida || !partes.iter().all(valida) {
+        return Err(Error::Datos);
+    }
+    Ok(partes.iter().fold(game.to_path_buf(), |r, p| r.join(p)))
+}
+
+fn escribir_diario(tx: &Path, diario: &Diario) -> Result<(), String> {
+    crate::almacenamiento::escribir_json(
+        &tx.join(DIARIO),
+        &serde_json::to_value(diario).map_err(err)?,
+    )
+}
+fn leer_diario(tx: &Path) -> Result<Diario, Error> {
+    let ruta = tx.join(DIARIO);
+    if regular(&ruta, false)?.len() > 4 * 1024 * 1024 {
+        return Err(Error::Datos);
+    }
+    let diario: Diario = serde_json::from_slice(&fs::read(ruta).map_err(|_| Error::Disco)?)
+        .map_err(|_| Error::Datos)?;
+    if diario.esquema != 1 || diario.movimientos.len() > 8192 {
+        return Err(Error::Datos);
+    }
+    Ok(diario)
+}
+
+/// Mueve solo los archivos afectados. Ante un fallo deshace lo realizado; si
+/// tampoco puede deshacerse, el diario queda para la recuperación posterior.
+fn ejecutar(game: &Path, tx_nombre: &str, movimientos: &[Movimiento]) -> Result<(), String> {
+    let tx = game.join(tx_nombre);
+    let mut diario = Diario { esquema: 1, confirmada: false, movimientos: movimientos.to_vec() };
+    escribir_diario(&tx, &diario)?;
+    let mut hechos = 0;
+    let resultado = (|| {
+        for m in movimientos {
+            let origen = ruta_diario(game, &m.origen).map_err(err)?;
+            let destino = ruta_diario(game, &m.destino).map_err(err)?;
+            regular(&origen, false).map_err(err)?;
+            if fs::symlink_metadata(&destino).is_ok() {
+                return Err(format!("{} ya existe. No se sobrescribirá.", m.destino));
+            }
+            fs::rename(&origen, &destino).map_err(err)?;
+            hechos += 1;
+        }
+        Ok(())
+    })();
+    if let Err(e) = resultado {
+        // Solo se deshace lo que este proceso movió; lo pendiente sigue intacto.
+        return match deshacer(game, &movimientos[..hechos]) {
+            Ok(()) => {
+                let _ = fs::remove_file(tx.join(DIARIO));
+                Err(format!("No se pudo publicar la sincronización. El conjunto anterior se conserva. {e}"))
+            }
+            Err(_) => Err(format!("No se pudo publicar la sincronización ni deshacerla por completo; se reintentará al volver a abrir la instancia. {e}")),
+        };
+    }
+    diario.confirmada = true;
+    escribir_diario(&tx, &diario)
+}
+
+/// Deshace en orden inverso los movimientos completados. Un archivo presente en
+/// ambos extremos es un cambio ajeno: se detiene sin sobrescribirlo.
+fn deshacer(game: &Path, movimientos: &[Movimiento]) -> Result<(), Error> {
+    for m in movimientos.iter().rev() {
+        let origen = ruta_diario(game, &m.origen)?;
+        let destino = ruta_diario(game, &m.destino)?;
+        let en_origen = fs::symlink_metadata(&origen).is_ok();
+        let en_destino = fs::symlink_metadata(&destino).is_ok();
+        match (en_origen, en_destino) {
+            (false, true) => {
+                regular(&destino, false)?;
+                fs::rename(&destino, &origen).map_err(|_| Error::Disco)?;
+            }
+            (true, true) => return Err(Error::Archivo(m.origen.clone())),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Resuelve transacciones de sincronización interrumpidas. Se ejecuta con el
+/// bloqueo de la instancia tomado, antes de leer o modificar `mods`.
+pub(super) fn recuperar_transacciones(game: &Path) -> Result<(), Error> {
+    for entrada in fs::read_dir(game).map_err(|_| Error::Disco)? {
+        let entrada = entrada.map_err(|_| Error::Disco)?;
+        let nombre = entrada.file_name().to_string_lossy().into_owned();
+        if !nombre.starts_with(PREFIJO_TX) {
+            continue;
+        }
+        let tx = entrada.path();
+        regular(&tx, true)?;
+        if tx.join(DIARIO).exists() {
+            let diario = leer_diario(&tx)?;
+            if !diario.confirmada {
+                deshacer(game, &diario.movimientos)?;
+            }
+        }
+        borrar_preparacion(game, &tx)?;
+    }
+    for entrada in fs::read_dir(game).map_err(|_| Error::Disco)? {
+        // Un respaldo de conflictos vacío solo puede venir de un commit deshecho.
+        let ruta = entrada.map_err(|_| Error::Disco)?.path();
+        if ruta.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".icaro-mods-conflictos-"))
+            && fs::read_dir(&ruta).is_ok_and(|mut d| d.next().is_none())
+        {
+            let _ = fs::remove_dir(&ruta);
+        }
+    }
+    Ok(())
 }
 pub fn endpoint(address: &str) -> Result<SocketAddr, String> {
     let d = crate::servidores::direccion(address)?;
@@ -1934,6 +2274,137 @@ mod tests {
         assert!(error.contains("cambiaron"), "{error}");
         let otra = store.crear_con_loader("Otra", "1.20.1", "fabric", 0).unwrap();
         assert!(preparar_desde(&f, &store, &otra, index(&f, "v2"), "host".into(), local).await.is_err());
+    }
+    #[tokio::test]
+    async fn actualizar_no_copia_ni_recrea_los_archivos_no_afectados() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        fs::write(dir.join("personal.jar"), vec![7u8; 256 * 1024]).unwrap();
+        let identidad = |nombre: &str| {
+            let meta = fs::metadata(dir.join(nombre)).unwrap();
+            estado_archivo(nombre.into(), &meta)
+        };
+        let personal = identidad("personal.jar");
+        let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
+        let avisos = std::sync::Mutex::new(vec![]);
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |id, hecho| avisos.lock().unwrap().push((id.to_owned(), hecho)))
+            .await
+            .unwrap();
+        // El mismo archivo, no una copia: conserva creación, fecha e identidad.
+        assert_eq!(identidad("personal.jar"), personal);
+        assert!(dir.join("example-2.jar").exists() && !dir.join("example-1.jar").exists());
+        assert_eq!(*avisos.lock().unwrap(), vec![("example".to_owned(), false), ("example".to_owned(), true)]);
+        let juego = store.juego(&i.id).unwrap();
+        assert!(!fs::read_dir(&juego).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".icaro-mods-tx-")));
+    }
+    #[tokio::test]
+    #[ignore = "Mide revisión y aplicación con 500 MiB de mods personales; escribe archivos temporales grandes"]
+    async fn medir_actualizacion_con_carpeta_grande() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        let bloque = (0..2 * 1024 * 1024u32).map(|n| (n % 251) as u8).collect::<Vec<_>>();
+        for n in 0..250 {
+            let mut contenido = bloque.clone();
+            contenido[..4].copy_from_slice(&(n as u32).to_le_bytes());
+            fs::write(dir.join(format!("personal-{n:03}.jar")), contenido).unwrap();
+        }
+        let inicio = std::time::Instant::now();
+        let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
+        let revision = inicio.elapsed();
+        let inicio = std::time::Instant::now();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let aplicacion = inicio.elapsed();
+        let inicio = std::time::Instant::now();
+        let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let sin_cambios = inicio.elapsed();
+        println!("MEDICION revision={revision:?} aplicacion={aplicacion:?} jugar_sin_cambios={sin_cambios:?}");
+    }
+    fn transaccion(juego: &Path, confirmada: bool, movimientos: &[(&str, &str)]) -> PathBuf {
+        let tx = juego.join(format!("{PREFIJO_TX}prueba"));
+        fs::create_dir_all(tx.join("nuevos")).unwrap();
+        fs::create_dir_all(tx.join("retirados")).unwrap();
+        let movimientos = movimientos.iter().map(|(o, d)| Movimiento { origen: (*o).into(), destino: (*d).into() }).collect();
+        escribir_diario(&tx, &Diario { esquema: 1, confirmada, movimientos }).unwrap();
+        tx
+    }
+    #[test]
+    fn cierre_abrupto_deshace_el_commit_parcial_al_abrir_la_instancia() {
+        let (_temp, store, i) = store();
+        let juego = store.juego(&i.id).unwrap();
+        let mods = juego.join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        fs::write(mods.join("personal.jar"), b"personal").unwrap();
+        // Se retiró a.jar y se colocó b.jar; faltaba colocar c.jar.
+        let tx = transaccion(&juego, false, &[
+            ("mods/a.jar", ".icaro-mods-tx-prueba/retirados/0"),
+            (".icaro-mods-tx-prueba/nuevos/1", "mods/b.jar"),
+            (".icaro-mods-tx-prueba/nuevos/2", "mods/c.jar"),
+        ]);
+        fs::write(tx.join("retirados/0"), b"anterior").unwrap();
+        fs::write(mods.join("b.jar"), b"nuevo").unwrap();
+        fs::write(tx.join("nuevos/2"), b"pendiente").unwrap();
+        let inventario = inventario(&store, &i.id).unwrap();
+        assert_eq!(fs::read(mods.join("a.jar")).unwrap(), b"anterior");
+        assert!(!mods.join("b.jar").exists() && !mods.join("c.jar").exists());
+        assert_eq!(fs::read(mods.join("personal.jar")).unwrap(), b"personal");
+        assert!(!tx.exists());
+        assert_eq!(inventario.len(), 2);
+    }
+    #[test]
+    fn commit_confirmado_no_se_deshace_y_un_archivo_ajeno_no_se_sobrescribe() {
+        let (_temp, store, i) = store();
+        let juego = store.juego(&i.id).unwrap();
+        let mods = juego.join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        let tx = transaccion(&juego, true, &[(".icaro-mods-tx-prueba/nuevos/0", "mods/b.jar")]);
+        fs::write(mods.join("b.jar"), b"nuevo").unwrap();
+        inventario(&store, &i.id).unwrap();
+        assert_eq!(fs::read(mods.join("b.jar")).unwrap(), b"nuevo");
+        assert!(!tx.exists());
+        // Si alguien volvió a crear el original, la recuperación se detiene sin pisarlo.
+        let tx = transaccion(&juego, false, &[("mods/a.jar", ".icaro-mods-tx-prueba/retirados/0")]);
+        fs::write(tx.join("retirados/0"), b"anterior").unwrap();
+        fs::write(mods.join("a.jar"), b"del jugador").unwrap();
+        assert!(inventario(&store, &i.id).is_err());
+        assert_eq!(fs::read(mods.join("a.jar")).unwrap(), b"del jugador");
+        assert_eq!(fs::read(tx.join("retirados/0")).unwrap(), b"anterior");
+    }
+    #[test]
+    fn fallo_durante_el_commit_restaura_lo_movido() {
+        let (_temp, _store, _i) = store();
+        let juego = _store.juego(&_i.id).unwrap();
+        let mods = juego.join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        let tx = transaccion(&juego, false, &[]);
+        fs::write(mods.join("a.jar"), b"anterior").unwrap();
+        fs::write(mods.join("ocupado.jar"), b"ajeno").unwrap();
+        fs::write(tx.join("nuevos/1"), b"nuevo").unwrap();
+        let movimientos = [
+            Movimiento { origen: "mods/a.jar".into(), destino: ".icaro-mods-tx-prueba/retirados/0".into() },
+            Movimiento { origen: ".icaro-mods-tx-prueba/nuevos/1".into(), destino: "mods/ocupado.jar".into() },
+        ];
+        let error = ejecutar(&juego, ".icaro-mods-tx-prueba", &movimientos).unwrap_err();
+        assert!(error.contains("conserva"), "{error}");
+        assert_eq!(fs::read(mods.join("a.jar")).unwrap(), b"anterior");
+        assert_eq!(fs::read(mods.join("ocupado.jar")).unwrap(), b"ajeno");
+        assert!(!tx.join(DIARIO).exists());
+    }
+    #[test]
+    fn el_diario_solo_acepta_rutas_de_la_transaccion() {
+        let juego = Path::new("juego");
+        for valida in ["mods/a.jar", "mods/a.jar.disabled", "mods/.icaro-mods.json", ".icaro-mods-tx-x/nuevos/3", ".icaro-mods-conflictos-x/a.jar"] {
+            assert!(ruta_diario(juego, valida).is_ok(), "{valida}");
+        }
+        for invalida in ["../a.jar", "mods/../a.jar", "mods/sub/a.jar", "C:/a.jar", "mods/a\\b.jar", "options.txt", "saves/mundo/level.dat", ".icaro-mods-tx-x/nuevos/a", ".icaro-mods-tx-x/otros/1", "/mods/a.jar", ""] {
+            assert!(ruta_diario(juego, invalida).is_err(), "{invalida}");
+        }
     }
     #[tokio::test]
     async fn descartar_la_revision_local_detiene_el_trabajo_bloqueante() {
