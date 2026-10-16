@@ -197,11 +197,13 @@ pub fn actualizar(app: &mut App, accion: Accion) -> Task<Mensaje> {
                 }
             }
         }
-        Accion::AplicacionLanzada(r) if app.actualizacion.aplicando => {
-            app.actualizacion.aplicando=false;
-            match r {
-                Ok(())=>return crate::juego_real::cerrar(app),
-                Err(e)=>{app.actualizacion.preparada=None;app.actualizacion.al_cerrar=false;app.actualizacion.error=Some(e);},
+        Accion::AplicacionLanzada(r) if app.actualizacion.aplicando => match r {
+            Ok(()) => return crate::juego_real::cerrar(app),
+            Err(e) => {
+                app.actualizacion.aplicando = false;
+                app.actualizacion.preparada = None;
+                app.actualizacion.al_cerrar = false;
+                app.actualizacion.error = Some(e);
             }
         }
         Accion::AplicacionLanzada(_)=>{},
@@ -320,6 +322,9 @@ fn vista_ancho(app: &App, ancho: f32) -> Element<'_, Mensaje> {
         } else {
             "No se pudo completar la actualización. Vuelve a intentarlo desde esta pantalla."
         }).size(texto::BODY.0).color(if resultado.correcto {p.success}else{p.error}));
+        if let Some(detalle) = &resultado.detalle {
+            notas = notas.push(text(detalle.clone()).size(texto::BODY_SM.0).color(p.error));
+        }
     }
     if let Some(error) = &e.error {
         notas = notas.push(text(error.clone()).size(texto::BODY_SM.0).color(p.error));
@@ -493,6 +498,34 @@ mod tests {
         let (mut app,_) = crate::iniciar_con_guardado(crate::Seccion::Instancias,false,None,false,crate::servicios::Estado::nuevo(true),None);
         preparar_diseno(&mut app);
         app
+    }
+    #[test]
+    fn comprobar_tras_un_fallo_no_inicia_otra_descarga_ni_instalacion() {
+        let mut app = app();
+        let disponible = app.actualizacion.disponible.clone();
+        app.actualizacion.al_cerrar = false;
+        app.actualizacion.resultado = Some(
+            serde_json::from_value(serde_json::json!({
+                "esquema": 1, "version": "0.2.1", "compilacion": 42, "correcto": false,
+                "detalle": "El reemplazo falló"
+            }))
+            .unwrap(),
+        );
+        let _ = actualizar(&mut app, Accion::Comprobada(Ok(disponible)));
+        assert!(!app.actualizacion.descargando && !app.actualizacion.aplicando);
+        assert!(!app.actualizacion.al_cerrar);
+        assert!(app.actualizacion.resultado.is_some());
+    }
+
+    #[test]
+    fn el_ayudante_lanzado_mantiene_el_bloqueo_hasta_el_cierre() {
+        let mut app = app();
+        app.actualizacion.aplicando = true;
+        let _ = actualizar(&mut app, Accion::AplicacionLanzada(Ok(())));
+        assert!(app.actualizacion.aplicando);
+        let _ = actualizar(&mut app, Accion::Ahora);
+        assert!(!app.actualizacion.descargando);
+        assert!(!al_cerrar(&mut app));
     }
     #[test]
     fn la_preparacion_bloquea_otro_intento_el_cierre_y_el_juego() {
