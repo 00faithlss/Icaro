@@ -2230,6 +2230,7 @@ pub fn preparar_diseno(app: &mut App, scene: &str) {
                         imagen: Lamina::Umbral,
                         original: Some(icaro_ui::capturas::OriginalCaptura {
                             imagen: iced::widget::image::Handle::from_path(&ruta),
+                            miniatura: Some(iced::widget::image::Handle::from_path(&ruta)),
                             ruta,
                             instancia_id: id.clone(),
                             modificada: meta.modified().ok(),

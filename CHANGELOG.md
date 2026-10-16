@@ -1,5 +1,9 @@
 # Changelog
 
+## [Sin publicar]
+
+- Capturas ya no congela la interfaz al abrirse. La cuadrícula usa miniaturas de 480 × 270 generadas en segundo plano (hasta cuatro a la vez, de la más reciente a la más antigua), que aparecen a medida que están listas; antes cada PNG se decodificaba y se subía a la GPU a resolución completa en el primer cuadro. El visor sigue abriendo el original sin recodificar, y un PNG dañado deja su hueco vacío sin afectar al resto.
+
 ## [0.2.5] - 2026-10-16
 
 - Sustituye Invitado por cuentas sin conexión con nombre propio, UUID estable, guardado, selección y eliminación desde el componente CuentaSinConexion entregado. Conserva sus iconos, cabeza rayada, temas y confirmación en fila; eliminar un perfil no toca mundos ni instancias.
