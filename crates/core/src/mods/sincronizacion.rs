@@ -114,6 +114,60 @@ impl Indice {
         ))
     }
 }
+/// Última sincronización aplicada con éxito, fuera de `mods` y excluida de la
+/// exportación. Si el anfitrión y la carpeta siguen idénticos, el plan es vacío
+/// y puede confirmarse sin consultar Modrinth.
+const VERIFICADO: &str = ".icaro-sync-verificado.json";
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Verificado {
+    esquema: u32,
+    origen: String,
+    revision: String,
+    /// Índice ya completado con las dependencias recuperadas por el cliente.
+    indice: Indice,
+    locales: Vec<ArchivoPropio>,
+    /// SHA-512 de la huella completa de `mods` tras aplicar.
+    huella: String,
+    /// Segundos desde epoch. Pasadas 24 h se vuelve a confirmar con Modrinth,
+    /// por ejemplo para notar versiones retiradas o dependencias recuperadas nuevas.
+    fecha: u64,
+}
+const VIGENCIA_VERIFICADO: u64 = 24 * 3600;
+fn segundos_ahora() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+fn resumen_huella(huella: &[(String, String)]) -> String {
+    let texto: String = huella.iter().map(|(ruta, sha)| format!("{ruta}\0{sha}\n")).collect();
+    hash(texto.as_bytes())
+}
+fn leer_verificado(game: &Path) -> Option<Verificado> {
+    let ruta = game.join(VERIFICADO);
+    if regular(&ruta, false).ok()?.len() > 4 * 1024 * 1024 {
+        return None;
+    }
+    serde_json::from_slice::<Verificado>(&fs::read(ruta).ok()?)
+        .ok()
+        .filter(|v| {
+            v.esquema == 1
+                && v.huella.len() == 128
+                && segundos_ahora().saturating_sub(v.fecha) < VIGENCIA_VERIFICADO
+        })
+}
+fn guardar_verificado(game: &Path, plan: &Plan, huella: &[(String, String)]) -> Result<(), String> {
+    let registro = Verificado {
+        esquema: 1,
+        origen: plan.origen.clone(),
+        revision: plan.revision_origen.clone(),
+        indice: plan.indice.clone(),
+        locales: plan.locales.clone(),
+        huella: resumen_huella(huella),
+        fecha: segundos_ahora(),
+    };
+    crate::almacenamiento::escribir_json(&game.join(VERIFICADO), &serde_json::to_value(registro).map_err(err)?)
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Gestionados {
     origen: String,
@@ -156,6 +210,8 @@ pub struct Plan {
     quitar_locales: Vec<ArchivoPropio>,
     revision_origen: String,
     recuperadas: BTreeSet<String>,
+    /// Plan vacío confirmado con el registro verificado, sin consultar Modrinth.
+    sin_red: bool,
 }
 impl Plan {
     pub fn revision_origen(&self) -> &str {
@@ -700,9 +756,10 @@ pub async fn preparar_desde(
         Ok(plan) => {
             let cuenta = |tipo: Tipo| plan.cambios.iter().filter(|c| c.tipo == tipo).count();
             registrar(format!(
-                "plan instancia={} origen={origen} revision={} agregar={} actualizar={} quitar={} conflictos={} reemplazos={} descarga_bytes={} ms={}",
+                "plan instancia={} origen={origen} revision={} sin_red={} agregar={} actualizar={} quitar={} conflictos={} reemplazos={} descarga_bytes={} ms={}",
                 instance.id,
                 corta(&plan.revision_origen),
+                plan.sin_red,
                 cuenta(Tipo::Agregar),
                 cuenta(Tipo::Actualizar),
                 cuenta(Tipo::Quitar),
@@ -734,6 +791,43 @@ async fn construir_plan(
         || index.loader_version != crate::versiones_instancia::leer_loader(store, instance)
     {
         return Err("La instancia debe usar el mismo Minecraft, loader y versión del loader que el anfitrión. Cámbialos antes de sincronizar.".into());
+    }
+    // Mismo anfitrión, misma revisión y `mods` idéntica a la última sincronización
+    // correcta: el resultado sería un plan vacío, así que no se consulta Modrinth.
+    let game = store.juego(&instance.id).map_err(err)?;
+    if let Some(verificado) = leer_verificado(&game).filter(|v| {
+        v.origen == origen && v.revision == revision_origen && v.huella == resumen_huella(&local.huella)
+    }) {
+        let wanted: BTreeSet<_> = verificado.indice.mods.iter().map(|m| m.proyecto.clone()).collect();
+        let conservados = local
+            .instalados
+            .iter()
+            .filter(|m| {
+                !wanted.contains(&m.project_id)
+                    && !verificado.locales.iter().any(|a| a.archivo.eq_ignore_ascii_case(&m.archivo))
+            })
+            .map(|m| m.nombre.clone())
+            .collect();
+        return Ok(Plan {
+            indice: verificado.indice,
+            cambios: vec![],
+            conservados,
+            conflictos: vec![],
+            reemplazos: BTreeSet::new(),
+            reemplazos_autorizados: false,
+            origen,
+            huella: local.huella,
+            estado: local.estado,
+            identidades: local.identidades,
+            actuales: local.instalados,
+            destinos: vec![],
+            quitar: BTreeSet::new(),
+            locales: verificado.locales,
+            quitar_locales: vec![],
+            revision_origen,
+            recuperadas: BTreeSet::new(),
+            sin_red: true,
+        });
     }
     let recuperadas = completar_dependencias_propias(source, &mut index).await?;
     let AnalisisLocal {
@@ -963,6 +1057,7 @@ async fn construir_plan(
         quitar_locales,
         revision_origen,
         recuperadas,
+        sin_red: false,
     })
 }
 fn identidad_fabric(path: &Path) -> Result<Option<String>, String> {
@@ -1319,8 +1414,20 @@ async fn aplicar_transaccion(
                 return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
             }
             registrar(format!("al-dia instancia={} sin_movimientos=true", instance.id));
+            // La carpeta coincide con `plan.huella`, verificada al revisar. Un plan
+            // sin red no renueva la fecha: la vigencia cuenta desde la última consulta.
+            if plan.sin_red {
+                return Ok(());
+            }
+            if let Err(e) = guardar_verificado(&game, plan, &plan.huella) {
+                registrar(format!("aviso fase=verificado instancia={} mensaje={e}", instance.id));
+            }
             return Ok(());
         }
+    }
+    // Un plan sin red no contiene destinos: nunca debe ejecutar una transacción.
+    if plan.sin_red {
+        return Err("La carpeta de mods ya no coincide con la última sincronización. Comprueba de nuevo.".into());
     }
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(err)?;
@@ -1551,6 +1658,18 @@ async fn aplicar_transaccion(
             Ok(())
         })
         .await?;
+        // La sincronización ya está publicada: un fallo aquí solo pierde el atajo sin red.
+        let (juego, carpeta, publicado) = (game.clone(), dir.clone(), plan.clone());
+        let registro = bloqueante(move |token| {
+            let mut inventario = Inventario::cargar(&juego);
+            let lectura = inventario.leer(&carpeta, &estado(&carpeta)?, &token)?;
+            let _ = inventario.guardar(&juego);
+            guardar_verificado(&juego, &publicado, &lectura.huella)
+        })
+        .await;
+        if let Err(e) = registro {
+            registrar(format!("aviso fase=verificado instancia={} mensaje={e}", instance.id));
+        }
         // Los cambios sin descarga (retiradas, activaciones) terminan con el commit.
         for c in &plan.cambios {
             if !descargas.iter().any(|(_, d)| d.id() == c.proyecto) {
@@ -2305,6 +2424,8 @@ mod tests {
         assert!(plan.cambios.is_empty());
         aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_,_| panic!("No copiar un conjunto ya completo")).await.unwrap();
         let anterior = huella(&store, &i.id).unwrap();
+        // El registro verificado caducó: la revisión vuelve a consultar Modrinth.
+        fs::remove_file(store.juego(&i.id).unwrap().join(VERIFICADO)).unwrap();
         let server = jar("biblioteca", "server");
         let v = f.versions.get_mut("biblioteca1").unwrap();
         v.files[0].hashes.sha512 = hash(&server); v.files[0].size = server.len() as u64;
@@ -2665,6 +2786,56 @@ mod tests {
         envejecer(std::ffi::OsStr::new("example-1.jar"));
         let error = analizar(&store, &i).await.unwrap_err();
         assert!(error.contains("fue modificado"), "{error}");
+    }
+    /// Fuente que falla ante cualquier consulta: prueba que no se usó la red.
+    struct SinRed;
+    impl Fuente for SinRed {
+        async fn version(&self, _: &str) -> Result<Version, Error> { Err(Error::Datos) }
+        async fn versiones(&self, _: &str, _: &str, _: &str) -> Result<Vec<Version>, Error> { Err(Error::Datos) }
+        async fn nombre(&self, _: &str) -> Result<String, Error> { Err(Error::Datos) }
+        async fn archivo(&self, _: &ModFile) -> Result<Vec<u8>, Error> { Err(Error::Datos) }
+        async fn versiones_por_hash(&self, _: &[String]) -> Result<BTreeMap<String, Version>, Error> { Err(Error::Datos) }
+        async fn solo_cliente(&self, _: &str) -> Result<bool, Error> { Err(Error::Datos) }
+    }
+    #[tokio::test]
+    async fn sincronizacion_verificada_se_confirma_sin_red_hasta_que_cambia_la_carpeta() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let juego = store.juego(&i.id).unwrap();
+        assert!(juego.join(VERIFICADO).exists());
+        let antes = huella(&store, &i.id).unwrap();
+
+        // Mismo anfitrión y misma carpeta: plan vacío sin una sola consulta.
+        let plan = preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        assert!(plan.sin_red && plan.cambios.is_empty());
+        aplicar(&SinRed, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        assert_eq!(huella(&store, &i.id).unwrap(), antes);
+
+        // Otro origen o una revisión distinta vuelven al camino normal.
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "otro".into()).await.is_err());
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v2"), "host".into()).await.is_err());
+
+        // Un mod personal nuevo invalida el atajo y un plan sin red obsoleto se rechaza.
+        let dir = juego.join("mods");
+        fs::write(dir.join("personal.jar"), b"nuevo").unwrap();
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.is_err());
+        let error = aplicar(&SinRed, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap_err();
+        assert!(error.contains("cambiaron") || error.contains("Comprueba de nuevo"), "{error}");
+        assert!(dir.join("personal.jar").exists() && dir.join("example-1.jar").exists());
+
+        // Con la red, el plan normal conserva el mod personal y renueva el registro.
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        assert!(!plan.sin_red && plan.cambios.is_empty());
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.unwrap().sin_red);
+
+        // Pasadas 24 h el registro caduca y se vuelve a confirmar con Modrinth.
+        let mut registro = leer_verificado(&juego).unwrap();
+        registro.fecha -= VIGENCIA_VERIFICADO;
+        fs::write(juego.join(VERIFICADO), serde_json::to_vec(&registro).unwrap()).unwrap();
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.is_err());
     }
     #[tokio::test]
     async fn descartar_la_revision_local_detiene_el_trabajo_bloqueante() {
