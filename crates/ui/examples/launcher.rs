@@ -85,6 +85,10 @@ mod diseno_mods;
 mod pruebas_diseno;
 #[path = "launcher_aux/servicios.rs"]
 mod servicios;
+#[path = "launcher_aux/cuenta_sin_conexion.rs"]
+mod cuenta_sin_conexion;
+#[path = "launcher_aux/skin_sin_conexion.rs"]
+mod skin_sin_conexion;
 #[path = "launcher_aux/catalogo.rs"]
 mod catalogo;
 #[path = "launcher_aux/ficha.rs"]
@@ -1177,6 +1181,9 @@ fn actualizar_estado(app: &mut App, m: Mensaje) -> Task<Mensaje> {
         }
         Mensaje::Eliminar => {app.dialogo=false;}
         Mensaje::Escape => {
+            if app.servicios.local.abierta {
+                return cuenta_sin_conexion::actualizar(app, cuenta_sin_conexion::Accion::Cerrar);
+            }
             if app.pantalla==Some(pantallas::Pantalla::Sincronizar)&&!app.servicios.demo{return sincronizacion_real::actualizar(app,sincronizacion_real::Accion::Cerrar);}
             if app.servicios.servidores.arrastre.is_some(){return servidores_reales::actualizar(app,servidores_reales::Accion::CancelarOrden);}
             if app.servicios.servidores.panel_abierto(){return servidores_reales::actualizar(app,servidores_reales::Accion::Cerrar);}
@@ -3292,7 +3299,7 @@ fn vista(app: &App) -> Element<'_, Mensaje> {
         p,
         if matches!(app.pantalla, Some(pantallas::Pantalla::Cuenta | pantallas::Pantalla::Estudio)) { None } else { Some(app.seccion) },
         app.barra_colapsada(),
-        Cuenta { nombre: app.servicios.nombre(app.sesion.estado.nombre()), proveedor: "Microsoft", estado: app.sesion.estado, textura:app.sesion.cuenta.actual.as_ref().map(|t|t.rgba.as_ref()) },
+        Cuenta { nombre: app.servicios.nombre(app.sesion.estado.nombre()), proveedor: if app.servicios.session.as_ref().is_some_and(|s|s.es_local()) {"Sin conexión"} else {"Microsoft"}, estado: app.sesion.estado, textura:cuenta_sin_conexion::textura_activa(app) },
         if app.servicios.demo {Some(DescargasActivas { cantidad: 2, velocidad: "6,1 MB/s".into(), avance: 0.58 })}else{juego_real::indicador(app)},
         contenido,
         pie,
@@ -3554,6 +3561,15 @@ fn main() -> iced::Result {
                         _ => None,
                     },
                     _ => None,
+                }));
+                return iced::Subscription::batch(subs);
+            }
+            if app.servicios.local.skin.is_some() {
+                subs.push(iced::event::listen_with(|e,_,_| match e {
+                    iced::Event::Window(window::Event::FileHovered(_))=>Some(skin_sin_conexion::m(skin_sin_conexion::Accion::Encima(true))),
+                    iced::Event::Window(window::Event::FilesHoveredLeft)=>Some(skin_sin_conexion::m(skin_sin_conexion::Accion::Encima(false))),
+                    iced::Event::Window(window::Event::FileDropped(p))=>Some(skin_sin_conexion::m(skin_sin_conexion::Accion::Soltar(p))),
+                    _=>None,
                 }));
                 return iced::Subscription::batch(subs);
             }

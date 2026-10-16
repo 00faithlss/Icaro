@@ -756,7 +756,7 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
         }
         Accion::JugarComoInvitado => {
             app.pantalla = None;
-            app.sesion.estado = icaro_ui::cuenta::EstadoSesion::Invitado;
+            app.sesion.estado = icaro_ui::cuenta::EstadoSesion::SinConexion;
             app.avisar("Sigues como invitado. Puedes iniciar sesión luego desde la cuenta.".into());
             arrancar(app);
         }
@@ -985,7 +985,7 @@ fn primera<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
             crate::servicios::welcome_status(app),
             row![
                 componentes::boton(p, "Iniciar sesión", Variante::Primario, disponible.then(|| m(Accion::Abrir(Pantalla::Codigo)))),
-                componentes::boton(p, "Continuar como invitado", Variante::Fantasma, disponible.then(|| m(Accion::JugarComoInvitado))),
+                componentes::boton(p, "Usar cuenta sin conexión", Variante::Fantasma, disponible.then(|| m(Accion::JugarComoInvitado))),
             ].spacing(espacio::S3).wrap(),
         ].spacing(espacio::S4).width(Length::Fill).into());
     }
@@ -1010,13 +1010,13 @@ fn primera<'a>(app: &'a App, p: Paleta) -> Element<'a, Mensaje> {
             .size(texto::BODY.0)
             .color(p.text_muted),
         Space::with_height(espacio::S4),
-        paso("1", "Inicia sesión", "Con tu cuenta Microsoft o como invitado.", true),
+        paso("1", "Inicia sesión", "Con tu cuenta Microsoft o una cuenta sin conexión.", true),
         paso("2", "Revisamos Java", "Si falta, Icaro Launcher lo descarga.", false),
         paso("3", "Tu primera instancia", "Vanilla, Fabric o un modpack.", false),
         Space::with_height(espacio::S4),
         row![
             componentes::boton(p, "Iniciar sesión", Variante::Primario, Some(m(Accion::Abrir(Pantalla::Codigo)))),
-            componentes::boton(p, "Jugar como invitado", Variante::Fantasma, Some(m(Accion::JugarComoInvitado))),
+            componentes::boton(p, "Usar cuenta sin conexión", Variante::Fantasma, Some(m(Accion::JugarComoInvitado))),
         ]
         .spacing(espacio::S3),
     ]

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.5] - 2026-10-16
+
+- Sustituye Invitado por cuentas sin conexión con nombre propio, UUID estable, guardado, selección y eliminación desde el componente CuentaSinConexion entregado. Conserva sus iconos, cabeza rayada, temas y confirmación en fila; eliminar un perfil no toca mundos ni instancias.
+- Restaura la cuenta local al abrir y mantiene sus datos separados de las credenciales Microsoft. Permite lanzar Vanilla/Fabric sin una sesión Microsoft; los servicios oficiales y los servidores con autenticación siguen requiriendo una cuenta Microsoft.
+- Añade el componente SkinSinConexion: PNG local, frente/espalda, modelo clásico/delgado, capa exterior y cabezas personalizadas. Guarda la skin por cuenta y prepara texturas firmadas con un agente verificado para el siguiente inicio del juego. Conserva la vista anterior ante errores y permite quitar la skin.
+- Quita del formulario la explicación técnica sobre el cálculo del UUID.
+
+Consulta [cuentas sin conexión](docs/cuentas-sin-conexion.md) para el alcance y la validación.
+
 ## [0.2.4] - 2026-10-16
 
 - La revisión de sincronización guarda un inventario de `mods` (`.icaro-mods-inventario.json`, junto al bloqueo de la carpeta de juego) y solo relee los archivos nuevos, modificados o con más de 7 días desde su última lectura completa. También reutiliza la identidad Fabric de cada JAR mientras su hash no cambie. En un banco de 500 MiB, Jugar sin cambios pasa de 2,4 s a unos 45 ms; la primera revisión sigue leyendo todo.

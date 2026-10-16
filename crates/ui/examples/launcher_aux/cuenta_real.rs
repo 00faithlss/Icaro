@@ -103,6 +103,9 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     match a {
         Accion::Abrir(estudio) => {
             app.sesion.menu = false;
+            if app.servicios.session.as_ref().is_some_and(|s| s.es_local()) {
+                return crate::cuenta_sin_conexion::actualizar(app, crate::cuenta_sin_conexion::Accion::Abrir);
+            }
             if estudio && app.servicios.session.is_none() {
                 return crate::servicios::actualizar(app, crate::servicios::Accion::Login);
             }
@@ -313,6 +316,13 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
     Task::none()
 }
 pub fn vista(app: &App) -> Element<'_, Mensaje> {
+    if app.servicios.session.as_ref().is_some_and(|s| s.es_local()) {
+        return column![
+            text(app.servicios.nombre("Sin cuenta")).size(32).color(app.paleta().text),
+            text("Sin conexión").color(app.paleta().text_muted),
+            componentes::boton_con_icono(app.paleta(),icaro_ui::iconos::Icono::Usuario,"Gestionar cuenta sin conexión",Variante::Secundario,Some(crate::cuenta_sin_conexion::m(crate::cuenta_sin_conexion::Accion::Abrir)),false),
+        ].spacing(20).into();
+    }
     let s = &app.sesion;
     let real = &s.cuenta;
     let p = app.paleta();
@@ -328,7 +338,7 @@ pub fn vista(app: &App) -> Element<'_, Mensaje> {
             estado: if app.servicios.session.is_some() {
                 EstadoSesion::Activa
             } else {
-                EstadoSesion::Invitado
+                EstadoSesion::SinConexion
             },
         nombre: real.perfil.as_ref().map_or_else(||app.servicios.nombre("Invitado"),|p|p.name.as_str()),
             correo: "Minecraft Java",
