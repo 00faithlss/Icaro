@@ -3,6 +3,7 @@
 ## Sin publicar
 
 - Acerca de muestra la versión compilada del workspace en lugar del texto fijo `0.1.0`.
+- Amplía la guía de colaboradores con el estado del hotfix, los pendientes y las prioridades de la investigación de sincronización.
 
 ## [0.2.2] - 2026-10-15
 
