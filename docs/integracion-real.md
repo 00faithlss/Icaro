@@ -2,7 +2,11 @@
 
 Estado y plan de implementación de la autenticación, la instalación del juego y las tiendas de mods. La guía de [inicio de sesión y catálogo](login-y-catalogo.md) describe cómo probar los servicios conectados.
 
-Actualizado el **12-10-2026**. El [roadmap general](../README.md#roadmap) y el [roadmap del diseño](roadmap-system-design.md) distinguen los recorridos conectados de las maquetas y pendientes.
+Actualizado el **16-10-2026**. El [roadmap general](../README.md#roadmap) y el [roadmap del diseño](roadmap-system-design.md) distinguen los recorridos conectados de las maquetas y pendientes.
+
+## Cuentas sin conexión y skins locales (0.2.5)
+
+Invitado se sustituye por perfiles locales guardados con identidad estable por nombre. El selector conserva Microsoft separado; no se envían credenciales locales a sus servicios. El componente SkinSinConexion carga PNG, muestra frente/espalda, permite elegir modelo y actualiza los avatares. El lanzamiento con skin local usa un servicio firmado en loopback y un agente oficial verificado por SHA-256. Las pruebas cubren persistencia, protocolo y arranque del agente con Java; queda pendiente comprobar la skin en una partida real y en servidores. Ver [alcance y almacenamiento](cuentas-sin-conexion.md).
 
 ## Estado actual
 

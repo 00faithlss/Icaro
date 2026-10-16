@@ -5,6 +5,8 @@
 
 pub mod auth;
 pub mod cuenta;
+pub mod cuentas_locales;
+pub mod skin_local;
 mod http;
 pub mod manifest;
 pub mod instancias;

@@ -169,6 +169,7 @@ impl Vault {
         Ok(Some(record))
     }
     pub fn remember(&self, generation: u64, session: &Session) -> Result<(), Error> {
+        if session.es_local() { return Err(Error::Unavailable); }
         self.save(generation, &session.profile.id, &session.refresh)
     }
     fn save(&self, generation: u64, profile_id: &str, refresh: &str) -> Result<(), Error> {

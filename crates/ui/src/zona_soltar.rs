@@ -114,6 +114,86 @@ pub fn zona_soltar_estado<'a, M: Clone + 'a>(
         })
         .into()
 }
+/// Variante compacta para el panel de skin, con la misma trama e iconografía.
+pub fn zona_soltar_skin<'a, M: Clone + 'a>(
+    p: Paleta,
+    arrastrando: bool,
+    titulo: String,
+    detalle: String,
+    rechazado: bool,
+    elegir: Option<M>,
+) -> Element<'a, M> {
+    let centro = container(
+        column![
+            icono(
+                Icono::Subir,
+                Tam::Lg,
+                if rechazado { p.error } else { p.text }
+            ),
+            text(titulo)
+                .font(fuentes::CUERPO_NEGRITA)
+                .size(14)
+                .color(p.text),
+            text(detalle)
+                .size(13)
+                .color(if rechazado { p.error } else { p.text_muted })
+        ]
+        .spacing(12)
+        .align_x(Alignment::Center),
+    )
+    .padding([20, 16])
+    .center_x(Length::Fill)
+    .center_y(180);
+    let interior: Element<'a, M> = if arrastrando {
+        container(centro)
+            .padding(4)
+            .style(move |_| container::Style {
+                border: iced::Border {
+                    color: p.text,
+                    width: 2.,
+                    radius: 0.into(),
+                },
+                ..Default::default()
+            })
+            .into()
+    } else {
+        stack![
+            canvas::Canvas::new(Rayado(p))
+                .width(Length::Fill)
+                .height(180),
+            centro
+        ]
+        .into()
+    };
+    button(interior)
+        .on_press_maybe(elegir)
+        .padding(0)
+        .width(Length::Fill)
+        .style(move |_, estado| button::Style {
+            background: Some(
+                if arrastrando {
+                    p.surface_hover
+                } else {
+                    p.surface_sunken
+                }
+                .into(),
+            ),
+            border: iced::Border {
+                color: if rechazado {
+                    p.error
+                } else if arrastrando || matches!(estado, button::Status::Hovered) {
+                    p.text
+                } else {
+                    p.border_strong
+                },
+                width: 2.,
+                radius: 0.into(),
+            },
+            text_color: p.text,
+            ..Default::default()
+        })
+        .into()
+}
 struct Rayado(Paleta);
 impl<M> canvas::Program<M> for Rayado {
     type State = ();

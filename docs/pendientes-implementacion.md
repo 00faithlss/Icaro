@@ -50,6 +50,10 @@ Las tareas pendientes de este apartado corresponden a Quilt, Forge y NeoForge; F
 
 ## 4. Cuenta, servidores y publicación
 
+- [x] Sustituir Invitado por cuentas sin conexión persistentes, con selección, eliminación y conservación de mundos/instancias.
+- [x] Conectar SkinSinConexion: PNG local, vista previa, modelo y avatares; servicio firmado y agente verificado al lanzar.
+- [ ] Validar la skin local en una partida Vanilla/Fabric real y comprobar su comportamiento en LAN y servidores compatibles.
+- [ ] Completar la gestión persistente de varias cuentas Microsoft y sus capes.
 - [x] Conectar PantallaCuenta y EstudioSkin originales con perfil/PNG reales, modelo, capas, historial y subida; validación manual de la subida pendiente.
 - [ ] Completar el recorrido de servidores, ZeroTier y sincronización descrito abajo. Lista, estado/SRV, conexión con una instancia, solicitud de pertenencia a redes y sincronización de Modrinth están conectados; quedan permisos/instalación de ZeroTier, salida, miembros y pruebas entre equipos.
 - [ ] Resolver la integración opcional de CurseForge cuando exista acceso válido a su API y condiciones de distribución.
@@ -90,4 +94,4 @@ Ajustes → Acerca de muestra la versión compilada del workspace y un enlace al
 
 La creación/preparación de instancias mantiene estable el estado del botón frente a eventos intercalados de descarga y verificación. La trama de Preparando es estática y no cambia cada fotograma. Ya se incorporaron la exportación de instancia, los seis formatos de lista de mods, el editor de iconos con vista previa inmediata, los avisos, apariencia, verificación de archivos y la confirmación de eliminación con bloques y grietas en toda la tarjeta; sus límites siguen registrados en el roadmap del diseño.
 
-La composición original de Cuenta/Estudio, PNG real, modelo/capas, subida e historial local están conectados. Pendientes: prueba manual con una cuenta real, capes propias, varias cuentas y cambio de nombre dentro de Ícaro. Ver [cuenta](cuenta.md).
+La composición original de Cuenta/Estudio, PNG real, modelo/capas, subida e historial local están conectados. Pendientes: prueba manual con una cuenta real, capes propias, varias cuentas Microsoft y cambio de nombre dentro de Ícaro. Ver [cuenta](cuenta.md).

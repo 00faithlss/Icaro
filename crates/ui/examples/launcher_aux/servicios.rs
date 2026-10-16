@@ -38,9 +38,10 @@ pub struct Estado {
     pub instancias: crate::instancias_reales::Estado,
     pub demo: bool,
     pub session: Option<Arc<Session>>,
+    pub local: crate::cuenta_sin_conexion::Estado,
     vault: Arc<Vault>,
     pub(crate) catalog: Result<Catalog, modrinth::Error>,
-    auth_id: u64,
+    pub(crate) auth_id: u64,
     auth_cancel: Option<CancellationToken>,
     pub auth_busy: bool,
     pub restoring: bool,
@@ -85,6 +86,7 @@ impl Estado {
             dependencias: Default::default(),
             demo,
             session: None,
+            local: Default::default(),
             vault: Arc::new(Vault::default()),
             catalog: Catalog::new().map(|catalog| {
                 if demo { catalog.with_metadata_cache() } else {
@@ -128,6 +130,9 @@ impl Estado {
         self.results.is_some()
     }
     pub fn nombre<'a>(&'a self, demo_name: &'a str) -> &'a str {
+        if let Some(sesion) = self.session.as_ref().filter(|s| s.es_local()) {
+            return &sesion.profile.name;
+        }
         if self.demo {
             demo_name
         } else if self.restoring {
@@ -135,7 +140,7 @@ impl Estado {
         } else {
             self.session
                 .as_ref()
-                .map_or("Invitado", |s| s.profile.name.as_str())
+                .map_or("Sin cuenta", |s| s.profile.name.as_str())
         }
     }
     pub fn cancel(&mut self) {
@@ -180,6 +185,7 @@ impl Drop for Estado {
 
 #[derive(Debug, Clone)]
 pub enum Accion {
+    Local(crate::cuenta_sin_conexion::Accion),
     Dependencias(u64, Vec<(String, Result<(String, String), String>)>),
     ReintentarDependencias,
     Inicializar,
@@ -279,7 +285,11 @@ async fn save(
     session: Arc<Session>,
 ) -> (Result<Option<Arc<Session>>, String>, bool) {
     let copy = session.clone();
-    let stored = tokio::task::spawn_blocking(move || vault.remember(id, &copy)).await;
+    let stored = tokio::task::spawn_blocking(move || {
+        vault.remember(id, &copy)?;
+        icaro_core::cuentas_locales::Cuentas::desactivar(&crate::estado::directorio(false))
+            .map_err(|_| icaro_core::vault::Error::Unavailable)
+    }).await;
     match stored {
         Ok(Ok(())) => (Ok(Some(session)), true),
         Ok(Err(icaro_core::vault::Error::Stale)) => {
@@ -289,7 +299,7 @@ async fn save(
     }
 }
 
-fn begin_auth(app: &mut App, restore: bool) -> Task<Mensaje> {
+pub(crate) fn begin_auth(app: &mut App, restore: bool) -> Task<Mensaje> {
     if app.servicios.auth_busy {
         return Task::none();
     }
@@ -310,6 +320,23 @@ fn begin_auth(app: &mut App, restore: bool) -> Task<Mensaje> {
                     .clone()
                     .try_send(Accion::Progreso(id, FaseAcceso::Autenticacion(stage)));
             };
+            if restore {
+                let locales = tokio::task::spawn_blocking(|| icaro_core::cuentas_locales::Cuentas::cargar(&crate::estado::directorio(false))).await;
+                match locales {
+                    Ok(Ok(cuentas)) => {
+                        let activa = cuentas.activa.clone();
+                        let _ = output.send(Accion::Local(crate::cuenta_sin_conexion::Accion::Cargadas(Ok(cuentas)))).await;
+                        if let Some(nombre) = activa {
+                            let r = Session::local(&nombre).map(|s| Some(Arc::new(s)));
+                            let _ = output.send(Accion::Autenticada(id, r, true)).await;
+                            return;
+                        }
+                    }
+                    _ => {
+                        let _ = output.send(Accion::Local(crate::cuenta_sin_conexion::Accion::Cargadas(Err("No se pudieron recuperar las cuentas sin conexión; el archivo original se conserva.".into())))).await;
+                    }
+                }
+            }
             let result = if restore {
                 let read_vault = vault.clone();
                 match tokio::task::spawn_blocking(move || read_vault.load()).await {
@@ -820,6 +847,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
         return Task::none();
     }
     match action {
+        Accion::Local(a) => return crate::cuenta_sin_conexion::actualizar(app, a),
         Accion::ReintentarDependencias => {
             app.servicios.dependencias.retain(|_, value| value.is_ok());
             return cargar_dependencias(app);
@@ -1159,6 +1187,7 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
             }
         }
         Accion::CancelarLogin => {
+            if app.servicios.local.ocupado { return Task::none(); }
             crate::juego_real::cancelar_espera_sesion(app);
             app.servicios.cancel();
             app.servicios.auth_error = None;
@@ -1169,22 +1198,21 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                 .then_some(pantallas::Pantalla::Primera);
         }
         Accion::ContinuarInvitado => {
-            crate::juego_real::cancelar_espera_sesion(app);
-            if app.servicios.restoring || app.servicios.auth_busy {
-                return Task::none();
-            }
-            app.servicios.cancel();
-            app.servicios.auth_error = None;
-            app.pantalla = None;
+            return crate::cuenta_sin_conexion::actualizar(app, crate::cuenta_sin_conexion::Accion::Abrir);
         }
         Accion::Logout => {
+            if app.servicios.auth_busy { return Task::none(); }
+            if app.servicios.session.as_ref().is_some_and(|s| s.es_local()) {
+                return crate::cuenta_sin_conexion::actualizar(app, crate::cuenta_sin_conexion::Accion::Abrir);
+            }
+            app.servicios.local.microsoft = None;
             app.sesion.cuenta.invalidar();
             app.sesion.subiendo = None;
             app.servicios.juego.cancelar_todo();
             app.servicios.cancel();
             app.servicios.session = None;
             app.servicios.remembered = false;
-            app.sesion.estado = EstadoSesion::Invitado;
+            app.sesion.estado = EstadoSesion::SinConexion;
             app.sesion.menu = false;
             app.servicios.auth_busy = true;
             let id = app.servicios.auth_id;
@@ -1234,10 +1262,10 @@ pub fn actualizar(app: &mut App, action: Accion) -> Task<Mensaje> {
                     if app.servicios.session.as_ref().map(|s| &s.profile.id) != session.as_ref().map(|s| &s.profile.id) {
                         app.sesion.cuenta.invalidar(); app.sesion.subiendo=None; app.sesion.textura=None;
                     }
-                    app.sesion.estado = if session.is_some() {
+                    app.sesion.estado = if session.as_ref().is_some_and(|s| !s.es_local()) {
                         EstadoSesion::Activa
                     } else {
-                        EstadoSesion::Invitado
+                        EstadoSesion::SinConexion
                     };
                     app.servicios.session = session;
                     if app.servicios.session.is_some() {
@@ -1487,7 +1515,7 @@ pub fn welcome_status(app: &App) -> Element<'_, Mensaje> {
         app.servicios
             .auth_error
             .as_deref()
-            .unwrap_or("Vincula tu cuenta de Minecraft para comenzar.")
+            .unwrap_or("Elige una cuenta Microsoft o sin conexión para comenzar.")
     };
     text(status)
         .width(Length::Fill)
@@ -1557,6 +1585,9 @@ pub fn login_view(app: &App) -> Element<'_, Mensaje> {
             Some(m(Accion::LoginBrowser)),
         ));
     }
+    if !app.servicios.auth_busy {
+        content = content.push(componentes::boton_con_icono(p, Icono::Usuario, "Usar cuenta sin conexión", Variante::Secundario, Some(crate::cuenta_sin_conexion::m(crate::cuenta_sin_conexion::Accion::Abrir)), false));
+    }
     if let Some(error) = &app.servicios.auth_error {
         content = content.push(text(error).color(p.warning).width(Length::Fill));
     }
@@ -1577,6 +1608,9 @@ pub fn account_view(app: &App) -> Element<'_, Mensaje> {
 }
 
 pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, Mensaje> {
+    if app.servicios.local.abierta {
+        return icaro_ui::superficies::con_velo(app.paleta(), window, crate::cuenta_sin_conexion::vista(app), crate::cuenta_sin_conexion::m(crate::cuenta_sin_conexion::Accion::Cerrar));
+    }
     if !app.sesion.menu {
         return window;
     }
@@ -1584,48 +1618,48 @@ pub fn selector<'a>(app: &'a App, window: Element<'a, Mensaje>) -> Element<'a, M
     let gestionar = Mensaje::Ses(crate::sesion::Accion::Gestionar);
     let activa = app.servicios.session.is_some();
     let mut cuentas = Vec::new();
-    if activa {
-        cuentas.push(CuentaSelector {
+    if activa && app.servicios.session.as_ref().is_some_and(|s| !s.es_local()) {
+        cuentas.push(CuentaSelector { textura: None,
             estado: EstadoSesion::Activa,
             nombre: app.servicios.nombre("Invitado").into(),
             seleccionada: true,
             al_pulsar: Some(gestionar.clone()),
         });
     }
-    cuentas.push(CuentaSelector {
-        estado: EstadoSesion::Invitado,
-        nombre: "Invitado".into(),
-        seleccionada: !activa,
-        al_pulsar: (!app.servicios.auth_busy).then(|| {
-            if activa {
-                Mensaje::Ses(crate::sesion::Accion::ElegirInvitado)
-            } else {
-                gestionar.clone()
-            }
-        }),
-    });
+    if app.servicios.session.as_ref().is_some_and(|s| s.es_local()) {
+        if let Some(ms) = &app.servicios.local.microsoft {
+            cuentas.push(CuentaSelector { textura: None,estado:EstadoSesion::Activa,nombre:ms.profile.name.clone(),seleccionada:false,
+                al_pulsar:(!app.servicios.auth_busy).then(||crate::cuenta_sin_conexion::m(crate::cuenta_sin_conexion::Accion::UsarMicrosoft))});
+        }
+    }
+    for nombre in &app.servicios.local.cuentas.nombres {
+        cuentas.push(CuentaSelector { textura: app.servicios.local.imagenes.get(nombre).map(|(i,_)|i.textura.rgba.clone()),
+            estado: EstadoSesion::SinConexion,
+            nombre: nombre.clone(),
+            seleccionada: app.servicios.session.as_ref().is_some_and(|s| s.es_local() && s.profile.name == *nombre),
+            al_pulsar: (!app.servicios.auth_busy).then(|| crate::cuenta_sin_conexion::m(crate::cuenta_sin_conexion::Accion::Usar(nombre.clone()))),
+        });
+    }
     let mut acciones = vec![AccionSelector {
-        icono: Icono::Usuario,
-        etiqueta: "Gestionar cuenta y skin".into(),
+        icono: Icono::UsuarioMas, etiqueta: "Agregar cuenta Microsoft".into(), peligro: false,
+        al_pulsar: (!app.servicios.auth_busy).then(||m(Accion::Login)),
+    }, AccionSelector {
+        icono: Icono::Usuario, etiqueta: "Añadir cuenta sin conexión".into(), peligro: false,
+        al_pulsar: (!app.servicios.auth_busy).then(||crate::cuenta_sin_conexion::m(crate::cuenta_sin_conexion::Accion::Abrir)),
+    }, AccionSelector {
+        icono: Icono::Ajustes,
+        etiqueta: if app.servicios.session.as_ref().is_some_and(|s|s.es_local()) {"Gestionar cuentas sin conexión"}else{"Gestionar cuenta y skin"}.into(),
         peligro: false,
         al_pulsar: Some(gestionar),
     }];
-    acciones.push(if activa {
-        AccionSelector {
+    if app.servicios.session.as_ref().is_some_and(|s|!s.es_local()) {
+        acciones.push(AccionSelector {
             icono: Icono::Salir,
-            etiqueta: format!("Cerrar sesión de {}", app.servicios.nombre("Invitado")),
+            etiqueta: format!("Cerrar sesión de {}", app.servicios.nombre("Sin cuenta")),
             peligro: true,
-            al_pulsar: (!app.servicios.auth_busy)
-                .then(|| Mensaje::Ses(crate::sesion::Accion::CerrarSesion)),
-        }
-    } else {
-        AccionSelector {
-            icono: Icono::Entrar,
-            etiqueta: "Iniciar sesión".into(),
-            peligro: false,
-            al_pulsar: (!app.servicios.auth_busy).then(|| m(Accion::Login)),
-        }
-    });
+            al_pulsar: (!app.servicios.auth_busy).then(|| Mensaje::Ses(crate::sesion::Accion::CerrarSesion)),
+        });
+    }
     let panel = cuenta::selector_cuentas(p, cuentas, acciones);
     let outside = iced::widget::mouse_area(Space::new(Length::Fill, Length::Fill))
         .on_press(Mensaje::Ses(crate::sesion::Accion::Menu(false)));
@@ -1989,8 +2023,10 @@ mod tests {
         assert!(app.servicios.auth_error.is_some());
 
         let _ = actualizar(&mut app, Accion::ContinuarInvitado);
-        assert_eq!(app.pantalla, None);
-        assert_eq!(app.servicios.nombre("Mineral_7"), "Invitado");
+        assert!(app.servicios.local.abierta);
+        assert_eq!(app.pantalla, Some(pantallas::Pantalla::Primera));
+        assert_eq!(app.servicios.nombre("Mineral_7"), "Sin cuenta");
+        let _ = crate::cuenta_sin_conexion::actualizar(&mut app, crate::cuenta_sin_conexion::Accion::Cerrar);
         for seccion in Seccion::TODAS {
             app.seccion = seccion;
             let _ = crate::vista(&app);
@@ -2565,6 +2601,6 @@ mod tests {
         assert_eq!(state.nombre("Mineral_7"), "Recuperando sesión…");
         assert!(state.session.is_none());
         state.cancel();
-        assert_eq!(state.nombre("Mineral_7"), "Invitado");
+        assert_eq!(state.nombre("Mineral_7"), "Sin cuenta");
     }
 }

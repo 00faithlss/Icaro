@@ -241,6 +241,9 @@ impl Estado {
             || self.activa.as_deref() == Some(id)
             || self.pendientes.iter().any(|s| s.instancia.id == id)
     }
+    pub fn permite_cambiar_cuenta(&self) -> bool {
+        self.libre() && self.pendientes.is_empty()
+    }
     fn libre(&self) -> bool {
         self.activa.is_none() && self.procesos.is_empty()
     }
@@ -440,6 +443,7 @@ pub(crate) fn config(app: &App, id: &str) -> (lanzamiento::Config, Option<std::p
                 && app.general.pantalla_completa,
             servidor: None,
             opciones_compartidas: icaro_core::opciones_minecraft::ruta(&app.servicios.instancias.almacen).ok(),
+            cuentas_locales: None,
         },
         crate::java_real::efectiva(&c, &app.java_global).0,
     )
@@ -488,7 +492,7 @@ pub fn iniciar_con_servidor(app:&mut App,index:usize,jugar:bool,servidor:Option<
     if jugar {
         let Some(session) = &app.servicios.session else {
             app.servicios.juego.espera_sesion = Some(i.id);
-            app.avisar("Inicia sesión con Microsoft para jugar.".into());
+            app.avisar("Elige una cuenta Microsoft o sin conexión para jugar.".into());
             return crate::servicios::actualizar(app, crate::servicios::Accion::Login);
         };
         if session.needs_refresh() || app.servicios.auth_busy {
@@ -659,6 +663,7 @@ fn lanzar(app: &mut App, id: String, preparada: Preparacion) -> Task<Mensaje> {
         return crate::servicios::actualizar(app, crate::servicios::Accion::Renovar);
     }
     let (mut config, _) = config(app, &id);
+    config.cuentas_locales=Some(crate::estado::directorio(false));
     config.servidor=app.servicios.juego.servidores.remove(&id);
     let game = match app.servicios.instancias.almacen.juego(&id) {
         Ok(p) => p,
@@ -1157,7 +1162,9 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                             lanzamiento::Nivel::Advertencia => Nivel::Warn,
                             _ => Nivel::Info,
                         },
-                        mensaje: texto,
+                        mensaje: if app.servicios.session.as_ref().is_some_and(|s|s.es_local()) && (texto.contains("Failed to verify username") || texto.contains("Invalid session") || texto.contains("multiplayer.disconnect.unverified_username")) {
+                            format!("Este servidor pide una cuenta Microsoft. {texto}")
+                        } else {texto},
                     });
                     return seguir_consola(app);
                 }

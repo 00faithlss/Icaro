@@ -86,6 +86,7 @@ pub enum Error {
 
 /// No implementa Serialize; sus credenciales solo se exponen al núcleo.
 pub struct Session {
+    local: bool,
     pub profile: Profile,
     pub expires_at: Instant,
     pub(crate) refresh: Zeroizing<String>,
@@ -109,6 +110,36 @@ pub struct Profile {
 }
 
 impl Session {
+    /// Identidad local sin credenciales ni acceso a los servicios de Microsoft.
+    pub fn local(nombre: &str) -> Result<Self, String> {
+        if !(3..=16).contains(&nombre.len())
+            || !nombre.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        {
+            return Err("Usa entre 3 y 16 letras, números o guiones bajos, sin espacios.".into());
+        }
+        let mut id = <md5::Md5 as md5::Digest>::digest(format!("OfflinePlayer:{nombre}"));
+        id[6] = (id[6] & 0x0f) | 0x30;
+        id[8] = (id[8] & 0x3f) | 0x80;
+        Ok(Self {
+            local: true,
+            profile: Profile { id: format!("{id:x}"), name: nombre.into() },
+            expires_at: Instant::now(),
+            refresh: Zeroizing::new(String::new()),
+            minecraft: Zeroizing::new(String::new()),
+            xuid: None,
+        })
+    }
+
+    pub fn es_local(&self) -> bool { self.local }
+
+    /// La identidad local permite ejecutar el juego, pero no autenticar en línea.
+    pub fn puede_jugar(&self) -> bool {
+        if self.local {
+            return Self::local(&self.profile.name).is_ok_and(|s| s.profile.id == self.profile.id);
+        }
+        self.has_minecraft_access() && !self.needs_refresh()
+    }
+
     /// Acceso exclusivo del núcleo al token que recibe el proceso del juego.
     pub(crate) fn minecraft_token(&self) -> &str {
         &self.minecraft
@@ -120,7 +151,7 @@ impl Session {
     }
 
     pub fn needs_refresh(&self) -> bool {
-        Instant::now() + Duration::from_secs(60) >= self.expires_at
+        !self.local && Instant::now() + Duration::from_secs(60) >= self.expires_at
     }
     /// La credencial queda en el núcleo y nunca se entrega a widgets o catálogos.
     pub fn has_minecraft_access(&self) -> bool {
@@ -410,6 +441,7 @@ async fn minecraft_session_with_progress(
         return Err(Error::NoMinecraft);
     }
     Ok(Session {
+        local: false,
         profile,
         expires_at: Instant::now() + Duration::from_secs(token.expires_in),
         refresh,
@@ -483,6 +515,7 @@ pub async fn refresh_with_progress(
 }
 
 pub async fn renew(session: &Session, cancel: CancellationToken) -> Result<Session, Error> {
+    if session.es_local() { return Err(Error::NoMinecraft); }
     refresh(session.refresh.clone(), cancel).await
 }
 
@@ -491,6 +524,7 @@ pub async fn renew_with_progress(
     cancel: CancellationToken,
     progress: impl Fn(Stage) + Send + Sync,
 ) -> Result<Session, Error> {
+    if session.es_local() { return Err(Error::NoMinecraft); }
     refresh_with_progress(session.refresh.clone(), cancel, progress).await
 }
 
@@ -661,6 +695,7 @@ mod tests {
     #[test]
     fn session_debug_does_not_expose_credentials() {
         let session = Session {
+            local: false,
             profile: Profile {
                 id: "0123456789abcdef0123456789abcdef".into(),
                 name: "Jugador".into(),

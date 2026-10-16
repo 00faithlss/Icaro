@@ -12,12 +12,14 @@ La versión **0.2.3** acelera la sincronización con servidores: revisa los mods
 
 La versión **0.2.4** completa la optimización de la sincronización: Jugar con los mods al día ya no relee la carpeta ni consulta Modrinth, las descargas van en paralelo directamente a disco y `icaro-sync-host` solo procesa los mods que cambian, con reanudación de descargas cortadas. Es compatible con servicios y launchers anteriores. Consulta las [notas de 0.2.4](docs/releases/0.2.4.md).
 
+La actualización **0.2.5** sustituye Invitado por cuentas sin conexión guardadas y añade skins locales con vista previa, modelo y avatar propio. Conserva mundos e instancias al quitar un perfil. Consulta las [notas de 0.2.5](docs/releases/0.2.5.md) y la [guía de cuentas sin conexión](docs/cuentas-sin-conexion.md); estas cuentas no autentican en servidores que exigen Microsoft.
+
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->
-[![Avance del roadmap: 74% — 62 de 84 tareas completadas](docs/assets/progreso.svg)](#roadmap)
+[![Avance del roadmap: 74% — 64 de 86 tareas completadas](docs/assets/progreso.svg)](#roadmap)
 
-**74% del roadmap implementado · 62/84 tareas.** Cada casilla tiene el mismo peso.
+**74% del roadmap implementado · 64/86 tareas.** Cada casilla tiene el mismo peso.
 <!-- avance:fin -->
 
 Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da nombre al proyecto. Hefesto, el herrero, está en los ajustes, Atlas en el mundo y Faetón en los errores. Hay más figuras repartidas por el launcher, y descubrirlas es parte de usarlo.
@@ -36,7 +38,7 @@ Su nombre y su imagen se inspiran en la mitología. Ícaro, que quiso volar, da 
 Icaro Launcher está en desarrollo. La interfaz ya permite recorrer instancias, servidores, descargas, consola, modpacks, capturas, ajustes y cuenta, con temas claro y oscuro.
 
 > [!NOTE]
-> El ejemplo conecta Microsoft y Modrinth, guarda las instancias, instala Minecraft Vanilla y Fabric con selección de Java por perfil, ejecuta el juego con una cuenta activa, instala y actualiza mods compatibles y exporta instancias en ZIP. Sin cuenta activa muestra la bienvenida; las secciones sin datos aparecen vacías. `ICARO_DEMO=1` permite revisar los datos de muestra. Fabric 26.3 ya fue probado por el usuario con un mod real; Quilt, Forge y NeoForge siguen pendientes.
+> El ejemplo conecta Microsoft y Modrinth, guarda las instancias, instala Minecraft Vanilla y Fabric con selección de Java por perfil, ejecuta el juego con una cuenta activa, instala y actualiza mods compatibles y exporta instancias en ZIP. Permite elegir una cuenta Microsoft o una [cuenta sin conexión](docs/cuentas-sin-conexion.md). Sin cuenta activa muestra la bienvenida; las secciones sin datos aparecen vacías. `ICARO_DEMO=1` permite revisar los datos de muestra. Fabric 26.3 ya fue probado por el usuario con un mod real; Quilt, Forge y NeoForge siguen pendientes.
 
 El núcleo descarga los archivos de Vanilla desde los manifiestos oficiales, comprueba tamaño y SHA-1 y reutiliza la instalación guardada. Java respeta la selección manual y la compatibilidad del perfil. En automático, con descargas habilitadas prepara el runtime gestionado; con descargas deshabilitadas detecta Java local compatible, incluidos runtimes del launcher oficial. Consulta [Vanilla y Java](docs/vanilla-y-java.md) para probar el recorrido.
 
@@ -76,7 +78,7 @@ La herramienta de línea de comandos consulta el manifiesto de Mojang y verifica
 
 ## Roadmap
 
-Actualizado el **14-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
+Actualizado el **16-10-2026**. Las casillas marcadas corresponden a funciones implementadas en el alcance indicado; una pantalla de demostración no cuenta como integración real. El orden de los pendientes representa las prioridades actuales.
 
 La barra cuenta las casillas de este roadmap con el mismo peso para cada una. Al cambiar una casilla o añadir una tarea, ejecuta `python scripts/actualizar_avance.py` para actualizar el porcentaje y la imagen.
 
@@ -105,7 +107,9 @@ El avance de las pantallas y componentes originales se sigue por separado en el 
 - [x] API de código de dispositivo con vencimiento y cancelación; emisión real probada. El código y QR no están disponibles en la interfaz real por la redirección fallida observada.
 - [ ] Validar manualmente renovación, cierre de sesión y funcionamiento del almacén de credenciales en Linux.
 - [x] Conectar la pantalla original de Cuenta y Estudio de skin: textura real, capas, historial y aplicación de skins. La subida está conectada a Minecraft; falta la prueba manual con una cuenta real.
-- [ ] Gestión persistente de varias cuentas.
+- [x] Guardar, restaurar, seleccionar y quitar varias cuentas sin conexión, separadas de las credenciales Microsoft.
+- [x] Skin local por cuenta: PNG validado, modelo, frente/espalda y avatares; preparación de texturas para el juego, pendiente de comprobar en una partida real.
+- [ ] Gestión persistente de varias cuentas Microsoft.
 
 ### Instancias y archivos
 
@@ -233,9 +237,14 @@ Icaro Launcher utiliza los siguientes componentes directos. Las versiones indica
 | [tokio-util](https://github.com/tokio-rs/tokio) | 0.7.20 | Cancelación de autenticación y consultas | [MIT][mit] |
 | [webbrowser](https://github.com/amodm/webbrowser-rs) | 1.2.4 | Apertura del navegador del sistema | [MIT][mit] OR [Apache-2.0][apache] |
 | [keyring](https://github.com/hwchen/keyring-rs) | 3.6.3 | Credential Manager en Windows y Secret Service en Linux | [MIT][mit] OR [Apache-2.0][apache] |
+| [rsa](https://github.com/RustCrypto/RSA) | 0.9.10 | Firma de perfiles de skins locales | [MIT][mit] OR [Apache-2.0][apache] |
+| [rand](https://github.com/rust-random/rand) | 0.8.8 | Generación de claves del servicio local de texturas | [MIT][mit] OR [Apache-2.0][apache] |
+| [md-5 · RustCrypto](https://github.com/RustCrypto/hashes) | 0.10.6 | Identidad local de Minecraft por nombre | [MIT][mit] OR [Apache-2.0][apache] |
 | [windows-sys](https://github.com/microsoft/windows-rs) | 0.61.2 | Cambio de tamaño de la ventana en Windows | [MIT][mit] OR [Apache-2.0][apache] |
 
 `MIT OR Apache-2.0` indica una elección entre esas dos licencias. El árbol completo, incluidas las dependencias transitivas, está registrado en [Cargo.lock](Cargo.lock); los paquetes publicados incluyen sus propios textos de licencia.
+
+El soporte opcional de skins locales descarga **authlib-injector 1.2.8 (compilación 56)** desde su fuente oficial, sin modificaciones y con SHA-256 fijado. Su [código fuente y licencia AGPL-3.0-or-later](https://github.com/yushijinhun/authlib-injector) están disponibles en el proyecto original. Consulta [su integración y alcance](docs/cuentas-sin-conexion.md).
 
 ### Tipografías, iconos e imágenes
 
@@ -257,6 +266,7 @@ Las obras y reproducciones utilizadas en los grabados conservan las condiciones 
 - [Implementación pendiente: loaders, importación y siguientes entregas](docs/pendientes-implementacion.md)
 - [Comparación con el System Design](docs/revision-system-design.md)
 - [Cuenta y estudio de skin](docs/cuenta.md)
+- [Cuentas sin conexión y skins locales](docs/cuentas-sin-conexion.md)
 - [Integración real, autenticación y seguridad](docs/integracion-real.md)
 - [Inicio de sesión y catálogo](docs/login-y-catalogo.md)
 - [Créditos](docs/creditos.md)

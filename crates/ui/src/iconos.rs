@@ -68,6 +68,7 @@ iconos! {
     Pausa => "pause",
     Candado => "lock",
     Info => "circle-info",
+    InfoCaja => "info-box",
     Pincel => "brush",
     Deshacer => "undo",
     Rehacer => "redo",

@@ -30,6 +30,7 @@ pub struct Config {
     pub servidor: Option<String>,
     /// Archivo de preferencias compartidas; el launcher lo sitúa en su raíz de datos.
     pub opciones_compartidas: Option<std::path::PathBuf>,
+    pub cuentas_locales: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -42,6 +43,7 @@ impl Default for Config {
             fullscreen: false,
             servidor: None,
             opciones_compartidas: None,
+            cuentas_locales: None,
         }
     }
 }
@@ -100,6 +102,8 @@ pub enum Error {
     Cancelado,
     #[error("La cuenta necesita renovar su sesión antes de jugar.")]
     Cuenta,
+    #[error("No se pudo preparar la skin local. Revisa la conexión o vuelve a guardar/quitar la skin desde la cuenta.")]
+    Skin,
     #[error("La memoria debe estar entre 256 y 131072 MiB, y la máxima debe ser mayor o igual a la mínima.")]
     Memoria,
     #[error("La resolución debe estar entre 64 y 16384 píxeles por lado.")]
@@ -256,7 +260,7 @@ fn expandir(plantilla: &str, valores: &HashMap<&str, &str>) -> Result<String, Er
 
 // Java no interpreta los prefijos extendidos que devuelve canonicalize en Windows.
 // La conversión se limita a rutas; nunca se aplica a credenciales expandidas.
-fn ruta_java(texto: &str) -> String {
+pub(crate) fn ruta_java(texto: &str) -> String {
     #[cfg(windows)]
     {
         if let Some(unc) = texto.strip_prefix(r"\\?\UNC\") {
@@ -328,7 +332,7 @@ fn preparar(
         ("auth_access_token", token),
         ("auth_session", sesion.as_str()),
         ("user_properties", "{}"),
-        ("user_type", "msa"),
+        ("user_type", if token == "0" { "legacy" } else { "msa" }),
         ("clientid", auth::CLIENT_ID),
         ("auth_client_id", auth::CLIENT_ID),
         ("auth_xuid", xuid),
@@ -866,7 +870,7 @@ pub async fn ejecutar(
     if cancel.is_cancelled() {
         return Err(Error::Cancelado);
     }
-    if !cuenta.has_minecraft_access() || cuenta.needs_refresh() {
+    if !cuenta.puede_jugar() {
         return Err(Error::Cuenta);
     }
     if cuenta.minecraft_token().chars().any(char::is_control) {
@@ -895,11 +899,18 @@ pub async fn ejecutar(
         &juego,
         &cuenta.profile.name,
         &cuenta.profile.id,
-        cuenta.minecraft_token(),
+        if cuenta.es_local() { "0" } else { cuenta.minecraft_token() },
         cuenta.xbox_user_id().unwrap_or(""),
         &config,
     )?;
     let mut comando = Command::new(java);
+    let skin = if cuenta.es_local() {
+        if let Some(raiz)=&config.cuentas_locales {
+            on_event(Evento::Linea {origen:Origen::Stdout,nivel:Nivel::Info,texto:"Preparando la skin local…".into()});
+            crate::skin_local::preparar(raiz,cuenta,cancel.clone()).await.map_err(|_|if cancel.is_cancelled(){Error::Cancelado}else{Error::Skin})?
+        } else {None}
+    } else {None};
+    if let Some(skin)=&skin {comando.args(&skin.argumentos);}
     let opciones = config.opciones_compartidas.as_ref().and_then(|path| {
         match crate::opciones_minecraft::preparar(path, &juego, instalado) {
             Ok(sesion) => Some(sesion),
@@ -1008,6 +1019,20 @@ mod tests {
             "-Djava.library.path={}",
             installed.natives.display()
         )));
+    }
+
+    #[test]
+    fn argumentos_locales_usan_identidad_estable_y_no_credenciales_microsoft() {
+        let mut instalado = instalado();
+        instalado.game_arguments = vec!["${auth_player_name}".into(),"${auth_uuid}".into(),"${auth_access_token}".into(),"${user_type}".into(),"${auth_xuid}".into()];
+        let cuenta = auth::Session::local("Jugador_1").unwrap();
+        let argumentos = preparar(&instalado,Path::new("minecraft"),&cuenta.profile.name,&cuenta.profile.id,"0","",&Config::default()).unwrap();
+        assert!(argumentos.contains(&cuenta.profile.name));
+        assert!(argumentos.contains(&cuenta.profile.id));
+        assert!(argumentos.contains(&"legacy".to_string()));
+        assert!(argumentos.contains(&"0".to_string()));
+        let oficial = preparar(&instalado,Path::new("minecraft"),"Oficial","uuid","token-oficial","xuid",&Config::default()).unwrap();
+        assert!(oficial.contains(&"msa".to_string()) && oficial.contains(&"token-oficial".to_string()));
     }
 
     #[test]

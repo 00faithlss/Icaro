@@ -56,9 +56,9 @@ Referencias: [releases de GitHub](https://docs.github.com/en/rest/releases/relea
 
 ## Flujo de publicación
 
-Prepara código, versión de Cargo, lockfile y notas Markdown/JSON en la rama de mantenimiento, por ejemplo `v0.2.x`. Publica el tag de código `v0.2.1` y espera la compilación, pruebas y empaquetado de GitHub Actions. La release descargable conserva `v0.2.1-build.<compilación>`: no renombres ese tag o la release, porque los launchers anteriores comprueban que coincida con `latest.json`.
+Prepara código, versión de Cargo, lockfile y notas Markdown/JSON en la rama de mantenimiento, por ejemplo `v0.2.x`. Su push activa la compilación, pruebas y empaquetado de GitHub Actions. Espera a que exista la release descargable `v<versión>-build.<compilación>` antes de publicar, si se solicita, el tag fuente `v<versión>` sobre la misma revisión. Así el workflow del tag puede reutilizar la publicación ya verificada. No renombres el tag de la release descargable: los launchers anteriores comprueban que coincida con `latest.json`.
 
-Después integra la misma entrega en `develop` y `main`. Si la release más reciente contiene exactamente el mismo árbol y sus artefactos de actualización, el workflow reutiliza la publicación verificada. Evita así generar otras compilaciones de la misma entrega al subir el tag o hacer el merge. Un cambio de contenido o una ejecución manual sí vuelve a compilar.
+Cuando también se solicite la integración, incorpora la misma entrega en `develop` y `main`. Un push a mantenimiento no autoriza por sí solo esos merges. Si la release más reciente contiene exactamente el mismo árbol y sus artefactos de actualización, el workflow reutiliza la publicación verificada. Evita así generar otras compilaciones de la misma entrega al subir el tag o hacer el merge. Un cambio de contenido o una ejecución manual sí vuelve a compilar.
 
 La verificación pública se ejecuta una vez publicada la release, sin aplicar la actualización:
 

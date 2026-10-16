@@ -29,7 +29,7 @@ El selector de versiones conserva su marco durante hover y selección y usa los 
 
 - **InfoProyecto/PaginaMod nuevos**: la API v2 no entrega recuentos internos del MRPACK ni mínimo del lector/impacto de shaders; no se presentan cifras ni requisitos inventados. Resolución se muestra solo si figura como categoría publicada; tamaño usa el archivo de la versión elegida. Perfil del creador dentro de la tienda no tiene componente entregado: avatar y Ver perfil abren por ahora el perfil público de Modrinth. El motivo textual de una incompatibilidad tampoco se inventa cuando la API solo declara su tipo.
 
-- **Cuenta (`PantallaCuenta`)** recupera la composición original por petición del usuario: Apolo, cuerpo de frente/espalda, perfil y PNG reales, historial local y EstudioSkin. Modelo, capas exteriores, giro, carga/arrastre y subida están conectados. Falta probar la subida con una cuenta real y conectar capes propias/varias cuentas; el cambio de nombre abre el perfil oficial.
+- **Cuenta (`PantallaCuenta`)** recupera la composición original por petición del usuario: Apolo, cuerpo de frente/espalda, perfil y PNG reales, historial local y EstudioSkin. Modelo, capas exteriores, giro, carga/arrastre y subida están conectados. Falta probar la subida con una cuenta real y conectar capes propias/varias cuentas Microsoft; el cambio de nombre abre el perfil oficial.
 - **Inicio de sesión (`CodigoDispositivo`)** usa el flujo por navegador y retorno directo a Ícaro solicitado y probado por el usuario. No muestra código ni QR del flujo que fallaba; conserva la lámina de Hermes y el progreso real.
 - **CurseForge** aparece como fuente deshabilitada, en el lugar definido por el diseño. No hay una conexión simulada en el modo real.
 - **MRPACK** conserva su selector, pero no permite exportar hasta disponer de instalación real de Minecraft y de la versión concreta del loader. No genera un JSON aislado presentado como modpack.
@@ -49,3 +49,7 @@ El selector de versiones conserva su marco durante hover y selección y usa los 
 - Archivos: [editor.rs](../crates/ui/src/editor.rs), [archivos.rs](../crates/ui/examples/launcher_aux/archivos.rs).
 - Exportación ZIP y papelera de mods: [exportar.rs](../crates/core/src/exportar.rs), [mods.rs](../crates/core/src/mods.rs).
 - Capturas aisladas para revisión: [pruebas_diseno.rs](../crates/ui/examples/launcher_aux/pruebas_diseno.rs).
+
+## Cuentas sin conexión (0.2.5)
+
+CuentaSinConexion sustituye Invitado por perfiles locales persistentes. SkinSinConexion conserva el panel entregado: ZonaSoltar rayada, iconos, frente/espalda, modelo, casilla de capa exterior y estados vacío/error/guardando. Los avatares usan el PNG guardado. Se revisaron ambos temas a 1280 × 800 y 940 × 720; la aplicación dentro de una partida y la visibilidad en servidores siguen pendientes. Ver [guía](cuentas-sin-conexion.md).

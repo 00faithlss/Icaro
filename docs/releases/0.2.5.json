@@ -1,0 +1,11 @@
+{
+  "version": "0.2.5",
+  "notas": [
+    {"tipo":"nuevo","texto":"Cuentas sin conexión guardadas: elige un nombre, cambia entre perfiles y recupera la selección al abrir Ícaro."},
+    {"tipo":"nuevo","texto":"Skin local por cuenta: carga o arrastra un PNG, revisa frente y espalda y elige el modelo clásico o delgado."},
+    {"tipo":"mejora","texto":"La skin guardada aparece en los avatares y se prepara para el siguiente inicio de Minecraft. Otros jugadores dependen del soporte de skins del servidor."},
+    {"tipo":"mejora","texto":"Quitar un perfil pide confirmación y conserva mundos, inventarios, mods e instancias; las credenciales Microsoft permanecen separadas."},
+    {"tipo":"correccion","texto":"Los archivos de skin inválidos y los errores de guardado conservan la selección anterior; se bloquean envíos duplicados y resultados antiguos."},
+    {"tipo":"mejora","texto":"Formulario más claro, sin la explicación técnica del UUID, conservando los iconos y temas del diseño original."}
+  ]
+}
