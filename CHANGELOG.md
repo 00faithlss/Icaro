@@ -4,6 +4,9 @@
 
 - Acerca de muestra la versión compilada del workspace en lugar del texto fijo `0.1.0`.
 - Amplía la guía de colaboradores con el estado del hotfix, los pendientes y las prioridades de la investigación de sincronización.
+- La sincronización calcula los hashes de `mods` una vez por revisión en lugar de dos, y al aplicar solo vuelve a leerlos si cambiaron los metadatos de algún archivo. Pulsar Jugar con el conjunto al día pasa de tres lecturas completas a una.
+- La lectura local de mods se ejecuta fuera del executor asíncrono y se detiene al cancelar. El límite de 90 segundos de la revisión ya no incluye el disco, por lo que una carpeta grande no se presenta como un fallo de Modrinth.
+- Las compilaciones de desarrollo optimizan `sha2` y `sha1`; las mediciones de sincronización en debug dejan de estar dominadas por el hashing sin optimizar.
 
 ## [0.2.2] - 2026-10-15
 

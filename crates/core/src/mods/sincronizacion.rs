@@ -144,6 +144,7 @@ pub struct Plan {
     reemplazos_autorizados: bool,
     origen: String,
     huella: Vec<(String, String)>,
+    estado: Vec<EstadoArchivo>,
     actuales: Vec<Instalado>,
     destinos: Vec<Version>,
     quitar: BTreeSet<String>,
@@ -267,12 +268,49 @@ async fn completar_dependencias_propias(source: &impl Fuente, index: &mut Indice
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
-fn huella_dir(
+const CANCELADA: &str = "Revisión de mods cancelada. No se modificó la instancia.";
+
+/// Ejecuta lecturas y hashes fuera del executor asíncrono. Si el futuro se
+/// descarta por cancelación o límite de tiempo, el token detiene el trabajo
+/// entre archivos en lugar de dejarlo leyendo toda la carpeta.
+async fn bloqueante<T: Send + 'static>(
+    trabajo: impl FnOnce(CancellationToken) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let token = CancellationToken::new();
+    let _guardia = token.clone().drop_guard();
+    tokio::task::spawn_blocking(move || trabajo(token))
+        .await
+        .map_err(|_| "Se interrumpió la revisión local de los mods.".to_string())?
+}
+
+/// Metadatos de un archivo de `mods`. Solo detecta cambios ocurridos después
+/// de verificar los hashes; nunca sustituye esa verificación de integridad.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EstadoArchivo {
+    ruta: String,
+    bytes: u64,
+    modificado: Option<std::time::SystemTime>,
+    creado: Option<std::time::SystemTime>,
+    nodo: u64,
+}
+fn estado_archivo(ruta: String, meta: &fs::Metadata) -> EstadoArchivo {
+    #[cfg(unix)]
+    let nodo = std::os::unix::fs::MetadataExt::ino(meta);
+    #[cfg(not(unix))]
+    let nodo = 0;
+    EstadoArchivo {
+        ruta,
+        bytes: meta.len(),
+        modificado: meta.modified().ok(),
+        creado: meta.created().ok(),
+        nodo,
+    }
+}
+fn estado_dir(
     dir: &Path,
     base: &Path,
     depth: usize,
-    result: &mut Vec<(String, String)>,
-    total: &mut u64,
+    result: &mut Vec<EstadoArchivo>,
 ) -> Result<(), String> {
     regular(dir, true).map_err(err)?;
     if depth > 8 {
@@ -285,7 +323,60 @@ fn huella_dir(
             return Err("La carpeta de mods contiene enlaces no permitidos.".into());
         }
         if meta.is_dir() {
-            huella_dir(&path, base, depth + 1, result, total)?;
+            estado_dir(&path, base, depth + 1, result)?;
+        } else {
+            if result.len() >= 2048 {
+                return Err("La carpeta de mods supera los límites de sincronización.".into());
+            }
+            let ruta = path.strip_prefix(base).map_err(err)?.to_string_lossy().into_owned();
+            result.push(estado_archivo(ruta, &meta));
+        }
+    }
+    Ok(())
+}
+/// Comprueba que `mods` sigue como se verificó. Si los metadatos coinciden no
+/// relee nada; si difieren (por ejemplo, un archivo restaurado con el mismo
+/// contenido), decide comparando de nuevo los hashes completos.
+fn sin_cambios(
+    dir: &Path,
+    estado_esperado: &[EstadoArchivo],
+    huella: &[(String, String)],
+    cancel: &CancellationToken,
+) -> Result<bool, String> {
+    Ok(estado(dir)? == estado_esperado || fingerprint_cancelable(dir, cancel)? == huella)
+}
+/// Recorre solo metadatos: cuesta milisegundos aunque la carpeta ocupe cientos de MiB.
+fn estado(dir: &Path) -> Result<Vec<EstadoArchivo>, String> {
+    let mut out = vec![];
+    if dir.exists() {
+        estado_dir(dir, dir, 0, &mut out)?;
+    }
+    out.sort_by(|a, b| a.ruta.cmp(&b.ruta));
+    Ok(out)
+}
+fn huella_dir(
+    dir: &Path,
+    base: &Path,
+    depth: usize,
+    result: &mut Vec<(String, String)>,
+    total: &mut u64,
+    cancel: &CancellationToken,
+) -> Result<(), String> {
+    regular(dir, true).map_err(err)?;
+    if depth > 8 {
+        return Err("La carpeta de mods contiene demasiados niveles.".into());
+    }
+    for entry in fs::read_dir(dir).map_err(err)? {
+        if cancel.is_cancelled() {
+            return Err(CANCELADA.into());
+        }
+        let path = entry.map_err(err)?.path();
+        let meta = fs::symlink_metadata(&path).map_err(err)?;
+        if enlace(&meta) {
+            return Err("La carpeta de mods contiene enlaces no permitidos.".into());
+        }
+        if meta.is_dir() {
+            huella_dir(&path, base, depth + 1, result, total, cancel)?;
         } else {
             regular(&path, false).map_err(err)?;
             *total = total
@@ -312,12 +403,112 @@ pub fn huella(store: &Almacen, id: &str) -> Result<Vec<(String, String)>, String
     fingerprint(&game.join("mods"))
 }
 pub(super) fn fingerprint(dir: &Path) -> Result<Vec<(String, String)>, String> {
+    fingerprint_cancelable(dir, &CancellationToken::new())
+}
+fn fingerprint_cancelable(
+    dir: &Path,
+    cancel: &CancellationToken,
+) -> Result<Vec<(String, String)>, String> {
     let mut out = vec![];
     if dir.exists() {
-        huella_dir(dir, dir, 0, &mut out, &mut 0)?;
+        huella_dir(dir, dir, 0, &mut out, &mut 0, cancel)?;
     }
     out.sort();
     Ok(out)
+}
+
+/// Resultado de leer la instancia una sola vez: hashes verificados, metadatos
+/// para detectar cambios posteriores, registros e identidades Fabric.
+#[derive(Debug, Clone)]
+pub struct AnalisisLocal {
+    instancia: String,
+    huella: Vec<(String, String)>,
+    estado: Vec<EstadoArchivo>,
+    instalados: Vec<Instalado>,
+    identidades: BTreeMap<String, String>,
+}
+
+/// Calcula una vez los hashes de `mods` fuera del executor. Separarlo de
+/// [`preparar_desde`] permite limitar el tiempo de la red sin contar el disco.
+pub async fn analizar(store: &Almacen, instance: &Instancia) -> Result<AnalisisLocal, String> {
+    let store = store.clone();
+    let instance = instance.clone();
+    bloqueante(move |cancel| analizar_bloqueante(&store, &instance, &cancel)).await
+}
+fn analizar_bloqueante(
+    store: &Almacen,
+    instance: &Instancia,
+    cancel: &CancellationToken,
+) -> Result<AnalisisLocal, String> {
+    let game = store.juego(&instance.id).map_err(err)?;
+    let (huella, estado) = {
+        let _lock = guardia(&game).map_err(err)?;
+        recuperar(&game).map_err(err)?;
+        let dir = game.join("mods");
+        // Los metadatos previos y posteriores descartan un archivo que cambió
+        // mientras se calculaba su hash.
+        let antes = estado(&dir)?;
+        let huella = fingerprint_cancelable(&dir, cancel)?;
+        if estado(&dir)? != antes {
+            return Err("Los mods cambiaron durante la revisión. Comprueba de nuevo.".into());
+        }
+        (huella, antes)
+    };
+    let mut instalados = inventario(store, &instance.id).map_err(err)?;
+    for m in &mut instalados {
+        let filename = if m.activo {
+            m.archivo.clone()
+        } else {
+            format!("{}.disabled", m.archivo)
+        };
+        let sha = huella
+            .iter()
+            .find(|(n, _)| n == &filename)
+            .ok_or("Los mods cambiaron durante la consulta.")?
+            .1
+            .clone();
+        if !m.sha512.is_empty() && m.sha512.to_lowercase() != sha {
+            return Err(format!(
+                "{} fue modificado. Revísalo antes de sincronizar.",
+                m.archivo
+            ));
+        }
+        m.sha512 = sha;
+    }
+    let mut identidades = BTreeMap::new();
+    if matches!(instance.loader.as_str(), "fabric" | "quilt") {
+        let dir = game.join("mods");
+        for m in &instalados {
+            if cancel.is_cancelled() {
+                return Err(CANCELADA.into());
+            }
+            if let Some(id) = identidad_fabric(&ruta_mod(&dir, m))? {
+                identidades.insert(m.archivo.clone(), id);
+            }
+        }
+    }
+    if !instancia_sin_cambios(store, &instance.id, &estado, &huella, cancel)? {
+        return Err("Los mods cambiaron durante la revisión. Comprueba de nuevo.".into());
+    }
+    Ok(AnalisisLocal {
+        instancia: instance.id.clone(),
+        huella,
+        estado,
+        instalados,
+        identidades,
+    })
+}
+fn instancia_sin_cambios(
+    store: &Almacen,
+    id: &str,
+    estado_esperado: &[EstadoArchivo],
+    huella: &[(String, String)],
+    cancel: &CancellationToken,
+) -> Result<bool, String> {
+    let game = store.juego(id).map_err(err)?;
+    let _lock = guardia(&game).map_err(err)?;
+    recuperar(&game).map_err(err)?;
+    sin_cambios(&game.join("mods"), estado_esperado, huella, cancel)
 }
 /// Publica solo mods comunes a cliente/servidor identificados por contenido.
 pub async fn publicar(
@@ -419,9 +610,25 @@ pub async fn preparar(
     source: &impl Fuente,
     store: &Almacen,
     instance: &Instancia,
-    mut index: Indice,
+    index: Indice,
     origen: String,
 ) -> Result<Plan, String> {
+    let local = analizar(store, instance).await?;
+    preparar_desde(source, store, instance, index, origen, local).await
+}
+/// Construye el plan con un análisis local ya calculado. Solo vuelve a leer
+/// metadatos al final; los hashes no se recalculan.
+pub async fn preparar_desde(
+    source: &impl Fuente,
+    store: &Almacen,
+    instance: &Instancia,
+    mut index: Indice,
+    origen: String,
+    local: AnalisisLocal,
+) -> Result<Plan, String> {
+    if local.instancia != instance.id {
+        return Err("El análisis local corresponde a otra instancia.".into());
+    }
     index.validar()?;
     let revision_origen = index.revision()?;
     if index.minecraft != instance.minecraft
@@ -431,28 +638,13 @@ pub async fn preparar(
         return Err("La instancia debe usar el mismo Minecraft, loader y versión del loader que el anfitrión. Cámbialos antes de sincronizar.".into());
     }
     let recuperadas = completar_dependencias_propias(source, &mut index).await?;
-    let fingerprint = huella(store, &instance.id)?;
-    let mut installed = inventario(store, &instance.id).map_err(err)?;
-    for m in &mut installed {
-        let filename = if m.activo {
-            m.archivo.clone()
-        } else {
-            format!("{}.disabled", m.archivo)
-        };
-        let sha = fingerprint
-            .iter()
-            .find(|(n, _)| n == &filename)
-            .ok_or("Los mods cambiaron durante la consulta.")?
-            .1
-            .clone();
-        if !m.sha512.is_empty() && m.sha512.to_lowercase() != sha {
-            return Err(format!(
-                "{} fue modificado. Revísalo antes de sincronizar.",
-                m.archivo
-            ));
-        }
-        m.sha512 = sha;
-    }
+    let AnalisisLocal {
+        huella: fingerprint,
+        estado: estado_inicial,
+        instalados: mut installed,
+        identidades,
+        ..
+    } = local;
     let dir = store.juego(&instance.id).map_err(err)?.join("mods");
     // Los JAR importados pueden no tener identidad de catálogo todavía.
     // Una consulta por lote permite reconocer versiones anteriores sin adivinar por nombre.
@@ -469,14 +661,6 @@ pub async fn preparar(
                         m.version = v.version_number.clone();
                     }
                 }
-            }
-        }
-    }
-    let mut identidades = BTreeMap::new();
-    if matches!(instance.loader.as_str(), "fabric" | "quilt") {
-        for m in &installed {
-            if let Some(id) = identidad_fabric(&ruta_mod(&dir, m))? {
-                identidades.insert(m.archivo.clone(), id);
             }
         }
     }
@@ -640,7 +824,13 @@ pub async fn preparar(
         })
         .map(|m| m.nombre.clone())
         .collect();
-    if fingerprint != huella(store, &instance.id)? {
+    let (store_actual, id) = (store.clone(), instance.id.clone());
+    let (esperado, verificada) = (estado_inicial.clone(), fingerprint.clone());
+    if !bloqueante(move |token| {
+        instancia_sin_cambios(&store_actual, &id, &esperado, &verificada, &token)
+    })
+    .await?
+    {
         return Err("Los mods cambiaron durante la consulta. Comprueba de nuevo.".into());
     }
     Ok(Plan {
@@ -652,6 +842,7 @@ pub async fn preparar(
         reemplazos_autorizados: false,
         origen,
         huella: fingerprint,
+        estado: estado_inicial,
         actuales: installed,
         destinos: versions,
         quitar,
@@ -954,7 +1145,12 @@ pub async fn aplicar(
     let _lock = guardia(&game).map_err(err)?;
     recuperar(&game).map_err(err)?;
     let dir = game.join("mods");
-    if cancel.is_cancelled() || fingerprint(&dir)? != plan.huella {
+    // Los hashes del plan se verificaron al revisarlo; aquí basta detectar
+    // cambios posteriores sin volver a leer cientos de MiB.
+    let (carpeta, esperado, verificada) = (dir.clone(), plan.estado.clone(), plan.huella.clone());
+    if cancel.is_cancelled()
+        || !bloqueante(move |token| sin_cambios(&carpeta, &esperado, &verificada, &token)).await?
+    {
         return Err("El plan fue cancelado o los mods cambiaron. Comprueba de nuevo.".into());
     }
     let current = store
@@ -998,7 +1194,10 @@ pub async fn aplicar(
     ));
     fs::create_dir(&stage).map_err(err)?;
     let result = async {
-        if dir.exists() { copiar(&dir,&stage,0,&mut 0,&mut 0).map_err(err)?; }
+        if dir.exists() {
+            let (origen, destino) = (dir.clone(), stage.clone());
+            bloqueante(move |_| copiar(&origen, &destino, 0, &mut 0, &mut 0).map_err(err)).await?;
+        }
         let respaldos: BTreeSet<_> = plan.conflictos.iter().chain(plan.reemplazos.iter()).cloned().collect();
         // El respaldo es independiente de la carpeta temporal de recuperación.
         // Permanece disponible incluso después de otras sincronizaciones.
@@ -1065,8 +1264,10 @@ pub async fn aplicar(
             if cancel.is_cancelled() { return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()); }
             let target=stage.join(&local.archivo);
             let disabled=stage.join(format!("{}.disabled",local.archivo));
-            let same=if target.exists() { hash_archivo(&target).map_err(err)? == local.sha512.to_lowercase() }
-                else if disabled.exists() { hash_archivo(&disabled).map_err(err)? == local.sha512.to_lowercase() } else { false };
+            // La copia conserva los hashes verificados en la revisión del plan.
+            let verificado = |nombre: String| plan.huella.iter().any(|(n, h)| n == &nombre && h.eq_ignore_ascii_case(&local.sha512));
+            let same=if target.exists() { verificado(local.archivo.clone()) }
+                else if disabled.exists() { verificado(format!("{}.disabled",local.archivo)) } else { false };
             if same { if !target.exists() {fs::rename(&disabled,&target).map_err(err)?;} }
             else {
                 let bytes=tokio::select!{_=cancel.cancelled()=>return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()),r=descargar_propio(&plan.origen,local)=>r?};
@@ -1078,28 +1279,37 @@ pub async fn aplicar(
             progress(&local.id,true);
         }
         if matches!(instance.loader.as_str(), "fabric" | "quilt") {
-            let mut requeridos = BTreeSet::new();
-            for local in &plan.locales {
-                if let Some(id) = identidad_fabric(&stage.join(&local.archivo))? { requeridos.insert(id); }
-            }
-            for registro in records.iter().filter(|r| wanted.contains(&r.project_id)) {
-                if let Some(id) = identidad_fabric(&stage.join(&registro.archivo))? { requeridos.insert(id); }
-            }
-            let mut vistos = BTreeSet::new();
-            for entrada in fs::read_dir(&stage).map_err(err)? {
-                let path = entrada.map_err(err)?.path();
-                if path.extension().is_some_and(|e| e == "jar") {
-                    if let Some(id) = identidad_fabric(&path)? {
-                        if requeridos.contains(&id) && !vistos.insert(id.clone()) {
-                            return Err(format!("Quedaron dos versiones activas del mod {id}. No se publicó la sincronización."));
+            let requeridos_archivos: Vec<_> = plan.locales.iter().map(|l| l.archivo.clone())
+                .chain(records.iter().filter(|r| wanted.contains(&r.project_id)).map(|r| r.archivo.clone()))
+                .collect();
+            let carpeta = stage.clone();
+            let cancelado = cancel.clone();
+            bloqueante(move |token| {
+                let mut requeridos = BTreeSet::new();
+                for archivo in &requeridos_archivos {
+                    if let Some(id) = identidad_fabric(&carpeta.join(archivo))? { requeridos.insert(id); }
+                }
+                let mut vistos = BTreeSet::new();
+                for entrada in fs::read_dir(&carpeta).map_err(err)? {
+                    if token.is_cancelled() || cancelado.is_cancelled() {
+                        return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
+                    }
+                    let path = entrada.map_err(err)?.path();
+                    if path.extension().is_some_and(|e| e == "jar") {
+                        if let Some(id) = identidad_fabric(&path)? {
+                            if requeridos.contains(&id) && !vistos.insert(id.clone()) {
+                                return Err(format!("Quedaron dos versiones activas del mod {id}. No se publicó la sincronización."));
+                            }
                         }
                     }
                 }
-            }
+                Ok(())
+            }).await?;
         }
         guardar_archivo(&stage.join(META),&serde_json::to_vec_pretty(&records).map_err(err)?).map_err(err)?;
         guardar_archivo(&stage.join(SYNC),&serde_json::to_vec(&Gestionados {origen:plan.origen.clone(), proyectos:wanted, archivos:plan.locales.clone()}).map_err(err)?).map_err(err)?;
-        if cancel.is_cancelled() || fingerprint(&dir)? != plan.huella { return Err("Los mods cambiaron o se canceló la sincronización. El conjunto anterior se conserva.".into()); }
+        let (carpeta, esperado, verificada) = (dir.clone(), plan.estado.clone(), plan.huella.clone());
+        if cancel.is_cancelled() || !bloqueante(move |token| sin_cambios(&carpeta, &esperado, &verificada, &token)).await? { return Err("Los mods cambiaron o se canceló la sincronización. El conjunto anterior se conserva.".into()); }
         let backup=game.join(".icaro-mods-backup");
         if backup.exists() { borrar_preparacion(&game,&backup).map_err(err)?; }
         if dir.exists() { fs::rename(&dir,&backup).map_err(err)?; }
@@ -1690,6 +1900,58 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(dir.join("example-1.jar")).unwrap(), b"primero");
+    }
+    #[tokio::test]
+    async fn modificar_un_mod_despues_de_revisar_invalida_el_plan_sin_tocarlo() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        super::super::instalar(&f, &store, &i.id, vec![f.versions["v1"].clone()], &i.minecraft, &i.loader, |_| {})
+            .await
+            .unwrap();
+        let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        fs::write(dir.join("example-1.jar"), b"editado por otra herramienta").unwrap();
+        let error = aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {})
+            .await
+            .unwrap_err();
+        assert!(error.contains("cambiaron"), "{error}");
+        assert_eq!(fs::read(dir.join("example-1.jar")).unwrap(), b"editado por otra herramienta");
+        assert!(!dir.join("example-2.jar").exists());
+    }
+    #[tokio::test]
+    async fn analisis_local_previo_detecta_cambios_durante_la_consulta() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        super::super::instalar(&f, &store, &i.id, vec![f.versions["v1"].clone()], &i.minecraft, &i.loader, |_| {})
+            .await
+            .unwrap();
+        let local = analizar(&store, &i).await.unwrap();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        fs::write(dir.join("nuevo-local.jar"), b"nuevo").unwrap();
+        let error = preparar_desde(&f, &store, &i, index(&f, "v2"), "host".into(), local.clone())
+            .await
+            .unwrap_err();
+        assert!(error.contains("cambiaron"), "{error}");
+        let otra = store.crear_con_loader("Otra", "1.20.1", "fabric", 0).unwrap();
+        assert!(preparar_desde(&f, &store, &otra, index(&f, "v2"), "host".into(), local).await.is_err());
+    }
+    #[tokio::test]
+    async fn descartar_la_revision_local_detiene_el_trabajo_bloqueante() {
+        let (aviso, detenido) = std::sync::mpsc::channel();
+        let espera = tokio::time::timeout(
+            Duration::from_millis(50),
+            bloqueante(move |token| {
+                let inicio = std::time::Instant::now();
+                while !token.is_cancelled() && inicio.elapsed() < Duration::from_secs(10) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let _ = aviso.send(token.is_cancelled());
+                Ok(())
+            }),
+        )
+        .await;
+        assert!(espera.is_err());
+        assert!(detenido.recv_timeout(Duration::from_secs(5)).unwrap());
     }
     #[tokio::test]
     async fn apogee_renombrado_y_duplicado_se_actualiza_por_id_y_hash_sin_perder_mods_personales() {

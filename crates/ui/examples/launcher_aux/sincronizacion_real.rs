@@ -175,9 +175,14 @@ pub fn actualizar(app: &mut App, a: Accion) -> Task<Mensaje> {
                     let addr = endpoint?;
                     let catalog = source.map_err(|e| e.to_string())?;
                     let index = sync::consultar(addr, cancel.clone()).await?;
+                    // La lectura local depende del disco y no cuenta para el límite de Modrinth.
+                    let local = tokio::select! {
+                        _ = cancel.cancelled() => return Err("Consulta cancelada.".to_owned()),
+                        r = sync::analizar(&store, &instance) => r?,
+                    };
                     let result = tokio::select! {
                         _ = cancel.cancelled() => Err("Consulta cancelada.".to_owned()),
-                        r = tokio::time::timeout(std::time::Duration::from_secs(90), sync::preparar(&catalog, &store, &instance, index, addr.to_string())) => {
+                        r = tokio::time::timeout(std::time::Duration::from_secs(90), sync::preparar_desde(&catalog, &store, &instance, index, addr.to_string(), local)) => {
                             r.map_err(|_| "Modrinth no respondió a tiempo. Inténtalo de nuevo.".to_owned()).and_then(|r| r)
                         }
                     };
