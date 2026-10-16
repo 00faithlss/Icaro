@@ -476,7 +476,7 @@ pub fn iniciar_con_servidor(app:&mut App,index:usize,jugar:bool,servidor:Option<
         app.avisar("Esta instancia exportada usaba un Java manual. Selecciona una instalación o Automático en su pestaña Java.".into());
         return Task::none();
     }
-    if !matches!(i.loader.as_str(), "vanilla" | "fabric") {
+    if !minecraft::loader_instalable(&i.loader) {
         app.avisar("La instalación de este loader será la siguiente etapa. Puedes seguir gestionando sus mods.".into());
         return Task::none();
     }

@@ -11,7 +11,7 @@ La pantalla **Importar modpack** conserva el grabado y los iconos del diseño en
 - **Prism/MultiMC:** reconoce los componentes Vanilla/Fabric de `mmc-pack.json` y la carpeta de juego incluida.
 - **Manifiesto de CurseForge:** reconoce el perfil y la carpeta de overrides si el archivo contiene el paquete completo. Los ZIP que solo referencian archivos de CurseForge mediante IDs no están admitidos; necesitan esos archivos completos o una exportación MRPACK.
 
-Si el ZIP no indica su perfil, escribe la versión de Minecraft, selecciona Vanilla o Fabric e indica la versión de Fabric correspondiente. Pulsa **Volver a revisar** y comprueba el resumen antes de **Instalar en nueva instancia**. Los instaladores de Quilt, Forge y NeoForge siguen pendientes.
+Si el ZIP no indica su perfil, escribe la versión de Minecraft, selecciona Vanilla o Fabric e indica la versión de Fabric correspondiente. Pulsa **Volver a revisar** y comprueba el resumen antes de **Instalar en nueva instancia**. Los paquetes de Quilt, Forge y NeoForge siguen sin importarse, aunque Quilt ya se instala en instancias propias.
 
 ## Paquetes grandes y recuperación
 

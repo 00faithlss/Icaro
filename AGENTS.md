@@ -83,7 +83,7 @@ El benchmark de hash no usa la instancia. Su modo `io` requiere espacio para una
 
 ## Funciones y validaciones todavía pendientes
 
-- Instalar/ejecutar Quilt, Forge y NeoForge con perfiles oficiales, Java, migración y recuperación; sus catálogos visibles no significan soporte completo.
+- Quilt se instala con su perfil oficial (`minecraft::Familia`, compartido con Fabric); falta jugarlo en una partida real y su compatibilidad de mods (ver [pendientes](docs/pendientes-implementacion.md)). Instalar/ejecutar Forge y NeoForge con perfiles oficiales, Java, migración y recuperación sigue pendiente; sus catálogos visibles no significan soporte completo.
 - Importar ZIP de CurseForge que solo referencian archivos por ID requiere una integración válida; completar exportación MRPACK, descubrimiento de otros launchers y revisión de archivos sin origen verificado. Importación local MRPACK/ZIP completo Vanilla/Fabric e importación de JAR propios ya existen; no duplicarlas.
 - Completar opciones General/Java, mundos y respaldos, orden de resourcepacks, otros motores de shaders, recuperación/papeleras, historial persistente de descargas, cola unificada y tiempo jugado.
 - Completar instalación/permisos, salida y miembros de ZeroTier, traslado de raíz de datos y bandeja; validar cuenta/skins con cuenta real y funciones de varias cuentas/capes según su guía.

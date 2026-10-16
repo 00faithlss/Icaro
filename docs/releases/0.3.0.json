@@ -2,6 +2,8 @@
   "version": "0.3.0",
   "notas": [
     {"tipo":"nuevo","texto":"Canal de actualizaciones: en Ajustes → Acerca de puedes elegir recibir también las versiones beta, que llegan antes y pueden tener errores."},
+    {"tipo":"nuevo","texto":"Quilt ya se instala y se ejecuta como loader: crear la instancia, jugar y cambiar de versión usan su perfil oficial, igual que Fabric."},
+    {"tipo":"mejora","texto":"Al elegir la versión de un loader, las estables aparecen antes que las betas."},
     {"tipo":"mejora","texto":"La sección Capturas ya no se congela al abrirse: las miniaturas se preparan en segundo plano y aparecen a medida que están listas."}
   ]
 }
