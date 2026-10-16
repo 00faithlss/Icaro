@@ -10,6 +10,8 @@ La actualización **0.2.1** añade importación local de MRPACK/ZIP, corrige el 
 
 La versión **0.2.3** acelera la sincronización con servidores: revisa los mods leyéndolos una sola vez, aplica los cambios moviendo solo los archivos afectados con un diario recuperable y registra cada fase en `logs/sincronizacion.log`. Acerca de muestra la versión real y enlaza el repositorio. Consulta las [notas de 0.2.3](docs/releases/0.2.3.md).
 
+La versión **0.2.4** completa la optimización de la sincronización: Jugar con los mods al día ya no relee la carpeta ni consulta Modrinth, las descargas van en paralelo directamente a disco y `icaro-sync-host` solo procesa los mods que cambian, con reanudación de descargas cortadas. Es compatible con servicios y launchers anteriores. Consulta las [notas de 0.2.4](docs/releases/0.2.4.md).
+
 [![Licencia: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-red.svg)](LICENSE)
 
 <!-- avance:inicio -->

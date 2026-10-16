@@ -17,6 +17,8 @@ const SYNC: &str = ".icaro-sync.json";
 const MAX_INDEX: usize = 1024 * 1024;
 pub const RUTA: &str = "/icaro/v1/mods";
 pub mod dedicado;
+mod inventario;
+use inventario::Inventario;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +114,60 @@ impl Indice {
         ))
     }
 }
+/// Última sincronización aplicada con éxito, fuera de `mods` y excluida de la
+/// exportación. Si el anfitrión y la carpeta siguen idénticos, el plan es vacío
+/// y puede confirmarse sin consultar Modrinth.
+const VERIFICADO: &str = ".icaro-sync-verificado.json";
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Verificado {
+    esquema: u32,
+    origen: String,
+    revision: String,
+    /// Índice ya completado con las dependencias recuperadas por el cliente.
+    indice: Indice,
+    locales: Vec<ArchivoPropio>,
+    /// SHA-512 de la huella completa de `mods` tras aplicar.
+    huella: String,
+    /// Segundos desde epoch. Pasadas 24 h se vuelve a confirmar con Modrinth,
+    /// por ejemplo para notar versiones retiradas o dependencias recuperadas nuevas.
+    fecha: u64,
+}
+const VIGENCIA_VERIFICADO: u64 = 24 * 3600;
+fn segundos_ahora() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+fn resumen_huella(huella: &[(String, String)]) -> String {
+    let texto: String = huella.iter().map(|(ruta, sha)| format!("{ruta}\0{sha}\n")).collect();
+    hash(texto.as_bytes())
+}
+fn leer_verificado(game: &Path) -> Option<Verificado> {
+    let ruta = game.join(VERIFICADO);
+    if regular(&ruta, false).ok()?.len() > 4 * 1024 * 1024 {
+        return None;
+    }
+    serde_json::from_slice::<Verificado>(&fs::read(ruta).ok()?)
+        .ok()
+        .filter(|v| {
+            v.esquema == 1
+                && v.huella.len() == 128
+                && segundos_ahora().saturating_sub(v.fecha) < VIGENCIA_VERIFICADO
+        })
+}
+fn guardar_verificado(game: &Path, plan: &Plan, huella: &[(String, String)]) -> Result<(), String> {
+    let registro = Verificado {
+        esquema: 1,
+        origen: plan.origen.clone(),
+        revision: plan.revision_origen.clone(),
+        indice: plan.indice.clone(),
+        locales: plan.locales.clone(),
+        huella: resumen_huella(huella),
+        fecha: segundos_ahora(),
+    };
+    crate::almacenamiento::escribir_json(&game.join(VERIFICADO), &serde_json::to_value(registro).map_err(err)?)
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Gestionados {
     origen: String,
@@ -154,6 +210,8 @@ pub struct Plan {
     quitar_locales: Vec<ArchivoPropio>,
     revision_origen: String,
     recuperadas: BTreeSet<String>,
+    /// Plan vacío confirmado con el registro verificado, sin consultar Modrinth.
+    sin_red: bool,
 }
 impl Plan {
     pub fn revision_origen(&self) -> &str {
@@ -456,6 +514,9 @@ pub struct AnalisisLocal {
     estado: Vec<EstadoArchivo>,
     instalados: Vec<Instalado>,
     identidades: BTreeMap<String, String>,
+    /// Archivos leídos completos y archivos cuyo hash se tomó del inventario.
+    releidos: usize,
+    reutilizados: usize,
 }
 
 /// Calcula una vez los hashes de `mods` fuera del executor. Separarlo de
@@ -468,9 +529,11 @@ pub async fn analizar(store: &Almacen, instance: &Instancia) -> Result<AnalisisL
     let resultado = bloqueante(move |cancel| analizar_bloqueante(&store, &instance, &cancel)).await;
     match &resultado {
         Ok(local) => registrar(format!(
-            "revision-local instancia={id} archivos={} bytes={} ms={}",
+            "revision-local instancia={id} archivos={} bytes={} releidos={} reutilizados={} ms={}",
             local.estado.len(),
             local.estado.iter().map(|e| e.bytes).sum::<u64>(),
+            local.releidos,
+            local.reutilizados,
             ms(inicio)
         )),
         Err(e) => registrar(format!("error fase=revision-local instancia={id} ms={} mensaje={e}", ms(inicio))),
@@ -483,19 +546,22 @@ fn analizar_bloqueante(
     cancel: &CancellationToken,
 ) -> Result<AnalisisLocal, String> {
     let game = store.juego(&instance.id).map_err(err)?;
-    let (huella, estado) = {
+    let mut inventario_previo = Inventario::cargar(&game);
+    let (lectura, estado) = {
         let _lock = guardia(&game).map_err(err)?;
         recuperar(&game).map_err(err)?;
         let dir = game.join("mods");
         // Los metadatos previos y posteriores descartan un archivo que cambió
-        // mientras se calculaba su hash.
+        // mientras se calculaba su hash. Solo se leen los archivos nuevos,
+        // modificados o con la verificación caducada.
         let antes = estado(&dir)?;
-        let huella = fingerprint_cancelable(&dir, cancel)?;
+        let lectura = inventario_previo.leer(&dir, &antes, cancel)?;
         if estado(&dir)? != antes {
             return Err("Los mods cambiaron durante la revisión. Comprueba de nuevo.".into());
         }
-        (huella, antes)
+        (lectura, antes)
     };
+    let huella = lectura.huella;
     let mut instalados = inventario(store, &instance.id).map_err(err)?;
     for m in &mut instalados {
         let filename = if m.activo {
@@ -524,7 +590,17 @@ fn analizar_bloqueante(
             if cancel.is_cancelled() {
                 return Err(CANCELADA.into());
             }
-            if let Some(id) = identidad_fabric(&ruta_mod(&dir, m))? {
+            let nombre = nombre_mod(m);
+            // El descriptor solo se abre si el inventario no lo tiene para este mismo contenido.
+            let id = match inventario_previo.identidad(&nombre, &m.sha512) {
+                Some(id) => id,
+                None => {
+                    let id = identidad_fabric(&ruta_mod(&dir, m))?;
+                    inventario_previo.recordar_identidad(&nombre, id.clone());
+                    id
+                }
+            };
+            if let Some(id) = id {
                 identidades.insert(m.archivo.clone(), id);
             }
         }
@@ -532,12 +608,18 @@ fn analizar_bloqueante(
     if !instancia_sin_cambios(store, &instance.id, &estado, &huella, cancel)? {
         return Err("Los mods cambiaron durante la revisión. Comprueba de nuevo.".into());
     }
+    // Perder el inventario solo obliga a releer; nunca impide sincronizar.
+    if let Err(e) = inventario_previo.guardar(&game) {
+        registrar(format!("aviso fase=inventario instancia={} mensaje={e}", instance.id));
+    }
     Ok(AnalisisLocal {
         instancia: instance.id.clone(),
         huella,
         estado,
         instalados,
         identidades,
+        releidos: lectura.releidos,
+        reutilizados: lectura.reutilizados,
     })
 }
 fn instancia_sin_cambios(
@@ -674,9 +756,10 @@ pub async fn preparar_desde(
         Ok(plan) => {
             let cuenta = |tipo: Tipo| plan.cambios.iter().filter(|c| c.tipo == tipo).count();
             registrar(format!(
-                "plan instancia={} origen={origen} revision={} agregar={} actualizar={} quitar={} conflictos={} reemplazos={} descarga_bytes={} ms={}",
+                "plan instancia={} origen={origen} revision={} sin_red={} agregar={} actualizar={} quitar={} conflictos={} reemplazos={} descarga_bytes={} ms={}",
                 instance.id,
                 corta(&plan.revision_origen),
+                plan.sin_red,
                 cuenta(Tipo::Agregar),
                 cuenta(Tipo::Actualizar),
                 cuenta(Tipo::Quitar),
@@ -708,6 +791,43 @@ async fn construir_plan(
         || index.loader_version != crate::versiones_instancia::leer_loader(store, instance)
     {
         return Err("La instancia debe usar el mismo Minecraft, loader y versión del loader que el anfitrión. Cámbialos antes de sincronizar.".into());
+    }
+    // Mismo anfitrión, misma revisión y `mods` idéntica a la última sincronización
+    // correcta: el resultado sería un plan vacío, así que no se consulta Modrinth.
+    let game = store.juego(&instance.id).map_err(err)?;
+    if let Some(verificado) = leer_verificado(&game).filter(|v| {
+        v.origen == origen && v.revision == revision_origen && v.huella == resumen_huella(&local.huella)
+    }) {
+        let wanted: BTreeSet<_> = verificado.indice.mods.iter().map(|m| m.proyecto.clone()).collect();
+        let conservados = local
+            .instalados
+            .iter()
+            .filter(|m| {
+                !wanted.contains(&m.project_id)
+                    && !verificado.locales.iter().any(|a| a.archivo.eq_ignore_ascii_case(&m.archivo))
+            })
+            .map(|m| m.nombre.clone())
+            .collect();
+        return Ok(Plan {
+            indice: verificado.indice,
+            cambios: vec![],
+            conservados,
+            conflictos: vec![],
+            reemplazos: BTreeSet::new(),
+            reemplazos_autorizados: false,
+            origen,
+            huella: local.huella,
+            estado: local.estado,
+            identidades: local.identidades,
+            actuales: local.instalados,
+            destinos: vec![],
+            quitar: BTreeSet::new(),
+            locales: verificado.locales,
+            quitar_locales: vec![],
+            revision_origen,
+            recuperadas: BTreeSet::new(),
+            sin_red: true,
+        });
     }
     let recuperadas = completar_dependencias_propias(source, &mut index).await?;
     let AnalisisLocal {
@@ -767,10 +887,9 @@ async fn construir_plan(
         .difference(&wanted)
         .cloned()
         .collect::<BTreeSet<_>>();
-    for project in quitar.clone() {
-        if source.solo_cliente(&project).await.map_err(err)? {
-            quitar.remove(&project);
-        }
+    let por_quitar: Vec<_> = quitar.iter().cloned().collect();
+    for project in source.solo_cliente_lote(&por_quitar).await.map_err(err)? {
+        quitar.remove(&project);
     }
     let mut changes = vec![];
     let mut versions = vec![];
@@ -797,6 +916,8 @@ async fn construir_plan(
     });
     let ids = index.mods.iter().map(|m| m.version.clone()).collect::<Vec<_>>();
     let verificadas = source.versiones_exactas(&ids).await.map_err(err)?;
+    // Índices de cambios de Modrinth cuyo nombre se consulta en un solo lote.
+    let mut sin_nombre = vec![];
     for entry in &index.mods {
         let mut v = verificadas.get(&entry.version).cloned().ok_or("Modrinth no confirmó una versión del anfitrión.")?;
         if v.id != entry.version
@@ -830,6 +951,7 @@ async fn construir_plan(
                     .find(|m| m.sha512.eq_ignore_ascii_case(&entry.sha512))
             });
         if old.is_none_or(|m| !m.activo || !m.sha512.eq_ignore_ascii_case(&entry.sha512)) {
+            sin_nombre.push(changes.len());
             changes.push(Cambio {
                 proyecto: entry.proyecto.clone(),
                 tipo: if old.is_some() {
@@ -837,7 +959,8 @@ async fn construir_plan(
                 } else {
                     Tipo::Agregar
                 },
-                nombre: source.nombre(&entry.proyecto).await.map_err(err)?,
+                // Se completa después con una sola consulta por lote.
+                nombre: String::new(),
                 antes: old.map(|m| m.version.clone()).unwrap_or_default(),
                 despues: v.version_number.clone(),
                 bytes: if old.is_some_and(|m| m.sha512.eq_ignore_ascii_case(&entry.sha512)) {
@@ -848,6 +971,17 @@ async fn construir_plan(
             });
         }
         versions.push(v);
+    }
+    if !sin_nombre.is_empty() {
+        let ids: Vec<_> = sin_nombre.iter().map(|&i| changes[i].proyecto.clone()).collect();
+        let nombres = source.nombres(&ids).await.map_err(err)?;
+        for &i in &sin_nombre {
+            let c = &mut changes[i];
+            c.nombre = nombres
+                .get(&c.proyecto)
+                .cloned()
+                .ok_or("Modrinth no devolvió el nombre de un proyecto del anfitrión.")?;
+        }
     }
     // Dependencias obligatorias también deben estar fijadas en el índice, nunca elegir la última.
     let resolved = resolver(
@@ -923,6 +1057,7 @@ async fn construir_plan(
         quitar_locales,
         revision_origen,
         recuperadas,
+        sin_red: false,
     })
 }
 fn identidad_fabric(path: &Path) -> Result<Option<String>, String> {
@@ -1164,45 +1299,140 @@ fn direccion_archivos(origen: &str) -> Result<SocketAddr, String> {
     }
     Ok(addr)
 }
-async fn descargar_propio(origen: &str, file: &ArchivoPropio) -> Result<Vec<u8>, String> {
-    let addr = direccion_archivos(origen)?;
-    let client = reqwest::Client::builder()
+/// Cliente compartido con el anfitrión: reutiliza conexiones entre el índice y
+/// las descargas. Cierra las inactivas antes que el servicio (15 s).
+fn cliente_anfitrion() -> Result<&'static reqwest::Client, String> {
+    static CLIENTE: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(cliente) = CLIENTE.get() {
+        return Ok(cliente);
+    }
+    let cliente = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(120))
+        .connect_timeout(Duration::from_secs(5))
+        .pool_idle_timeout(Duration::from_secs(10))
         .build()
         .map_err(err)?;
-    let mut response = client
-        .get(format!(
-            "http://{addr}/icaro/v1/files/{}",
-            file.sha512.to_lowercase()
-        ))
-        .send()
-        .await
-        .map_err(|_| format!("No se pudo descargar {} del anfitrión.", file.archivo))?;
-    if !response.status().is_success() {
-        return Err(
-            "El archivo del anfitrión cambió o no está disponible. Comprueba de nuevo.".into(),
-        );
-    }
-    if response
-        .content_length()
-        .is_some_and(|n| n != file.bytes || n > MAX_FILE)
-    {
-        return Err("Tamaño de archivo del anfitrión inválido.".into());
-    }
-    let mut bytes = vec![];
-    while let Some(chunk) = response.chunk().await.map_err(err)? {
-        if bytes.len() as u64 + chunk.len() as u64 > file.bytes {
-            return Err("El archivo supera el tamaño publicado.".into());
+    Ok(CLIENTE.get_or_init(|| cliente))
+}
+
+/// Descarga un archivo propio del anfitrión directamente a `destino`,
+/// verificando tamaño y SHA-512 mientras llegan los bloques. Si la conexión se
+/// corta, reanuda hasta dos veces desde lo recibido; si el anfitrión no admite
+/// rangos o el archivo cambió, vuelve a empezar sin mezclar contenidos.
+async fn descargar_propio_a(origen: &str, file: &ArchivoPropio, destino: &Path) -> Result<(), String> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+    let addr = direccion_archivos(origen)?;
+    let cliente = cliente_anfitrion()?;
+    let sha = file.sha512.to_lowercase();
+    let url = format!("http://{addr}/icaro/v1/files/{sha}");
+    let fallo_red = || format!("No se pudo descargar {} del anfitrión.", file.archivo);
+    let mut salida = tokio::fs::File::create(destino).await.map_err(err)?;
+    let (mut hasher, mut recibidos, mut reintentos) = (Sha512::new(), 0u64, 0);
+    loop {
+        let mut solicitud = cliente.get(&url).timeout(Duration::from_secs(120));
+        if recibidos > 0 {
+            solicitud = solicitud
+                .header(reqwest::header::RANGE, format!("bytes={recibidos}-"))
+                .header(reqwest::header::IF_RANGE, format!("\"{sha}\""));
         }
-        bytes.extend_from_slice(&chunk);
+        let mut response = match solicitud.send().await {
+            Ok(r) => r,
+            Err(_) if reintentos < 2 && recibidos > 0 => {
+                reintentos += 1;
+                continue;
+            }
+            Err(_) => return Err(fallo_red()),
+        };
+        let estado = response.status().as_u16();
+        if recibidos > 0 && estado == 206 {
+            // Solo se continúa si el tramo empieza donde quedó y el total coincide.
+            let esperado = format!("bytes {recibidos}-");
+            let rango = response
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !rango.starts_with(&esperado) || !rango.ends_with(&format!("/{}", file.bytes)) {
+                return Err("El anfitrión respondió un tramo inesperado del archivo.".into());
+            }
+        } else if estado == 200 {
+            if recibidos > 0 {
+                salida.set_len(0).await.map_err(err)?;
+                salida.seek(std::io::SeekFrom::Start(0)).await.map_err(err)?;
+                (hasher, recibidos) = (Sha512::new(), 0);
+            }
+            if response.content_length().is_some_and(|n| n != file.bytes || n > MAX_FILE) {
+                return Err("Tamaño de archivo del anfitrión inválido.".into());
+            }
+        } else {
+            return Err("El archivo del anfitrión cambió o no está disponible. Comprueba de nuevo.".into());
+        }
+        let cortada = loop {
+            match response.chunk().await {
+                Ok(Some(bloque)) => {
+                    recibidos = recibidos.saturating_add(bloque.len() as u64);
+                    if recibidos > file.bytes {
+                        return Err("El archivo supera el tamaño publicado.".into());
+                    }
+                    hasher.update(&bloque);
+                    salida.write_all(&bloque).await.map_err(err)?;
+                }
+                Ok(None) => break false,
+                Err(_) => break true,
+            }
+        };
+        if !cortada && recibidos == file.bytes {
+            break;
+        }
+        if reintentos >= 2 {
+            return Err(fallo_red());
+        }
+        reintentos += 1;
     }
-    if bytes.len() as u64 != file.bytes || hash(&bytes) != file.sha512.to_lowercase() {
+    salida.sync_all().await.map_err(err)?;
+    let calculado: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    if calculado != sha {
         return Err("El archivo del anfitrión no coincide con su tamaño o SHA-512.".into());
     }
-    Ok(bytes)
+    Ok(())
 }
+
+type Trabajo<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>;
+
+/// Ejecuta hasta `limite` descargas a la vez. Avisa el inicio y el final de cada
+/// una por su identificador y se detiene con el primer error, descartando el resto.
+async fn en_paralelo<'a>(
+    trabajos: Vec<(String, Trabajo<'a>)>,
+    limite: usize,
+    progress: &(impl Fn(&str, bool) + Send),
+) -> Result<(), String> {
+    let mut pendientes = trabajos.into_iter();
+    let mut activos: Vec<Trabajo<'a>> = vec![];
+    loop {
+        while activos.len() < limite.max(1) {
+            let Some((id, trabajo)) = pendientes.next() else { break };
+            progress(&id, false);
+            activos.push(trabajo);
+        }
+        if activos.is_empty() {
+            return Ok(());
+        }
+        let terminado = std::future::poll_fn(|cx| {
+            for i in 0..activos.len() {
+                if let std::task::Poll::Ready(resultado) = activos[i].as_mut().poll(cx) {
+                    // El trabajo terminó: se descarta su futuro ya completado.
+                    drop(activos.swap_remove(i));
+                    return std::task::Poll::Ready(resultado);
+                }
+            }
+            std::task::Poll::Pending
+        })
+        .await?;
+        progress(&terminado, true);
+    }
+}
+
 pub async fn aplicar(
     source: &impl Fuente,
     store: &Almacen,
@@ -1279,8 +1509,20 @@ async fn aplicar_transaccion(
                 return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
             }
             registrar(format!("al-dia instancia={} sin_movimientos=true", instance.id));
+            // La carpeta coincide con `plan.huella`, verificada al revisar. Un plan
+            // sin red no renueva la fecha: la vigencia cuenta desde la última consulta.
+            if plan.sin_red {
+                return Ok(());
+            }
+            if let Err(e) = guardar_verificado(&game, plan, &plan.huella) {
+                registrar(format!("aviso fase=verificado instancia={} mensaje={e}", instance.id));
+            }
             return Ok(());
         }
+    }
+    // Un plan sin red no contiene destinos: nunca debe ejecutar una transacción.
+    if plan.sin_red {
+        return Err("La carpeta de mods ya no coincide con la última sincronización. Comprueba de nuevo.".into());
     }
     let mut random = [0u8; 16];
     getrandom::fill(&mut random).map_err(err)?;
@@ -1384,42 +1626,43 @@ async fn aplicar_transaccion(
             records.retain(|m| !m.archivo.eq_ignore_ascii_case(&local.archivo));
         }
         // Solo se descarga lo que falta; la carpeta activa no cambia hasta el commit.
+        // Cada archivo va directo a disco con su hash calculado por bloques: hasta
+        // cuatro a la vez desde Modrinth y dos desde el anfitrión.
+        if cancel.is_cancelled() {
+            return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
+        }
+        let mut de_modrinth: Vec<(String, Trabajo<'_>)> = vec![];
+        let mut del_anfitrion: Vec<(String, Trabajo<'_>)> = vec![];
         for (indice, descarga) in &descargas {
-            let id = descarga.id();
-            let inicio_descarga = std::time::Instant::now();
-            progress(&id, false);
-            if cancel.is_cancelled() {
-                return Err("Sincronización cancelada. Los mods anteriores se conservan.".into());
-            }
-            let (bytes, tamano, sha) = match descarga {
+            let (id, destino, instancia) = (descarga.id(), tx.join("nuevos").join(indice.to_string()), instance.id.clone());
+            match descarga {
                 Descarga::Modrinth(_, file) => {
-                    let bytes = tokio::select! { _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()), r = source.archivo(file) => r.map_err(err)? };
-                    (bytes, file.size, file.hashes.sha512.to_lowercase())
+                    let id_registro = id.clone();
+                    de_modrinth.push((id, Box::pin(async move {
+                        let inicio = std::time::Instant::now();
+                        source.descargar_a(file, &destino).await.map_err(err)?;
+                        registrar(format!("descarga instancia={instancia} id={id_registro} archivo={} fuente=modrinth bytes={} ms={}", file.filename, file.size, ms(inicio)));
+                        Ok(id_registro)
+                    })));
                 }
                 Descarga::Propio(local) => {
-                    let bytes = tokio::select! { _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()), r = descargar_propio(&plan.origen, local) => r? };
-                    (bytes, local.bytes, local.sha512.to_lowercase())
+                    let (id_registro, origen) = (id.clone(), plan.origen.clone());
+                    del_anfitrion.push((id, Box::pin(async move {
+                        let inicio = std::time::Instant::now();
+                        descargar_propio_a(&origen, local, &destino).await?;
+                        registrar(format!("descarga instancia={instancia} id={id_registro} archivo={} fuente=anfitrion bytes={} ms={}", local.archivo, local.bytes, ms(inicio)));
+                        Ok(id_registro)
+                    })));
                 }
-            };
-            let destino = tx.join("nuevos").join(indice.to_string());
-            let (archivo, fuente) = match descarga {
-                Descarga::Modrinth(_, file) => (file.filename.clone(), "modrinth"),
-                Descarga::Propio(local) => (local.archivo.clone(), "anfitrion"),
-            };
-            registrar(format!(
-                "descarga instancia={} id={id} archivo={archivo} fuente={fuente} bytes={} ms={}",
-                instance.id,
-                bytes.len(),
-                ms(inicio_descarga)
-            ));
-            bloqueante(move |_| {
-                if bytes.len() as u64 != tamano || hash(&bytes) != sha {
-                    return Err("El mod descargado no coincide con su tamaño o SHA-512.".into());
-                }
-                guardar_archivo(&destino, &bytes).map_err(err)
-            })
-            .await?;
-            progress(&id, true);
+            }
+        }
+        let descargar = async {
+            en_paralelo(de_modrinth, 4, &progress).await?;
+            en_paralelo(del_anfitrion, 2, &progress).await
+        };
+        tokio::select! {
+            _ = cancel.cancelled() => return Err("Sincronización cancelada. Los mods anteriores se conservan.".into()),
+            r = descargar => r?,
         }
         records.retain(|m| !m.project_id.is_empty());
         let meta = serde_json::to_vec_pretty(&records).map_err(err)?;
@@ -1511,6 +1754,18 @@ async fn aplicar_transaccion(
             Ok(())
         })
         .await?;
+        // La sincronización ya está publicada: un fallo aquí solo pierde el atajo sin red.
+        let (juego, carpeta, publicado) = (game.clone(), dir.clone(), plan.clone());
+        let registro = bloqueante(move |token| {
+            let mut inventario = Inventario::cargar(&juego);
+            let lectura = inventario.leer(&carpeta, &estado(&carpeta)?, &token)?;
+            let _ = inventario.guardar(&juego);
+            guardar_verificado(&juego, &publicado, &lectura.huella)
+        })
+        .await;
+        if let Err(e) = registro {
+            registrar(format!("aviso fase=verificado instancia={} mensaje={e}", instance.id));
+        }
         // Los cambios sin descarga (retiradas, activaciones) terminan con el commit.
         for c in &plan.cambios {
             if !descargas.iter().any(|(_, d)| d.id() == c.proyecto) {
@@ -1830,21 +2085,37 @@ pub async fn consultar(addr: SocketAddr, cancel: CancellationToken) -> Result<In
     resultado
 }
 async fn consultar_indice(addr: SocketAddr, cancel: CancellationToken) -> Result<Indice, String> {
+    // Último índice recibido de cada anfitrión con su ETag: si no cambió, el
+    // servicio responde 304 y no se vuelve a descargar ni a decodificar.
+    static RECIBIDOS: std::sync::Mutex<BTreeMap<SocketAddr, (String, Indice)>> =
+        std::sync::Mutex::new(BTreeMap::new());
     if addr.port() < 2 {
         return Err("Puerto de sincronización inválido.".into());
     }
     endpoint(&SocketAddr::new(addr.ip(), addr.port() - 1).to_string())?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(err)?;
+    let client = cliente_anfitrion()?;
+    let previo = RECIBIDOS.lock().ok().and_then(|r| r.get(&addr).cloned());
     let work = async {
-        let mut response=client.get(format!("http://{addr}{RUTA}")).send().await.map_err(|_|format!("No responde el servicio de mods en {addr}. El anfitrión debe ejecutar icaro-sync-host y permitir ese puerto en su cortafuegos. Estar conectado a ZeroTier no inicia este servicio."))?;
+        let mut solicitud = client.get(format!("http://{addr}{RUTA}")).timeout(Duration::from_secs(5));
+        if let Some((etiqueta, _)) = &previo {
+            solicitud = solicitud.header(reqwest::header::IF_NONE_MATCH, etiqueta);
+        }
+        let mut response=solicitud.send().await.map_err(|_|format!("No responde el servicio de mods en {addr}. El anfitrión debe ejecutar icaro-sync-host y permitir ese puerto en su cortafuegos. Estar conectado a ZeroTier no inicia este servicio."))?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            if let Some((_, indice)) = previo {
+                indice.validar()?;
+                return Ok(indice);
+            }
+        }
         if !response.status().is_success() {
             return Err("El anfitrión todavía no tiene un índice de mods disponible.".into());
         }
+        let etiqueta = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| v.len() <= 256)
+            .map(str::to_owned);
         if response
             .content_length()
             .is_some_and(|n| n > MAX_INDEX as u64)
@@ -1861,6 +2132,10 @@ async fn consultar_indice(addr: SocketAddr, cancel: CancellationToken) -> Result
         let index: Indice = serde_json::from_slice(&bytes)
             .map_err(|_| "El servicio no entregó un índice de mods válido.")?;
         index.validar()?;
+        // Un anfitrión antiguo no envía ETag y siempre entrega el índice completo.
+        if let (Some(etiqueta), Ok(mut recibidos)) = (etiqueta, RECIBIDOS.lock()) {
+            recibidos.insert(addr, (etiqueta, index.clone()));
+        }
         Ok(index)
     };
     tokio::select! {_=cancel.cancelled()=>Err("Consulta cancelada.".into()), r=work=>r}
@@ -1879,102 +2154,204 @@ pub async fn servir_archivos(
     cancel: CancellationToken,
     mods: Option<PathBuf>,
 ) -> Result<(), String> {
-    let slots = Arc::new(tokio::sync::Semaphore::new(8));
+    // Las descargas esperan turno en orden de llegada en lugar de cortar la
+    // conexión; el índice no ocupa estos turnos y nunca espera detrás de un JAR.
+    let descargas = Arc::new(tokio::sync::Semaphore::new(8));
+    let conexiones = Arc::new(tokio::sync::Semaphore::new(64));
     loop {
-        let (mut socket, _) = tokio::select! {_=cancel.cancelled()=>return Ok(()), r=listener.accept()=>r.map_err(err)?};
-        let Ok(permit) = slots.clone().try_acquire_owned() else {
+        let (socket, _) = tokio::select! {_=cancel.cancelled()=>return Ok(()), r=listener.accept()=>r.map_err(err)?};
+        let Ok(permiso) = conexiones.clone().try_acquire_owned() else {
             continue;
         };
-        let index = index.clone();
-        let mods = mods.clone();
-        let c = cancel.clone();
+        let (index, mods, c, descargas) = (index.clone(), mods.clone(), cancel.clone(), descargas.clone());
         tokio::spawn(async move {
-            let _permit = permit;
-            let request = async {
-                let mut data = vec![];
-                let mut buf = [0u8; 256];
-                loop {
-                    let n = socket.read(&mut buf).await.map_err(err)?;
-                    if n == 0 || data.len() + n > 2048 {
-                        return Err("Solicitud inválida".to_string());
-                    }
-                    data.extend_from_slice(&buf[..n]);
-                    if data.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let line = std::str::from_utf8(&data)
-                    .map_err(err)?
-                    .lines()
-                    .next()
-                    .unwrap_or("");
-                let valid = line == format!("GET {RUTA} HTTP/1.1")
-                    || line == format!("GET {RUTA} HTTP/1.0");
-                let snapshot = index.read().await.clone();
-                let file_hash = line.strip_prefix("GET /icaro/v1/files/").and_then(|s| {
-                    s.strip_suffix(" HTTP/1.1")
-                        .or_else(|| s.strip_suffix(" HTTP/1.0"))
-                });
-                let (status, body) = if valid {
-                    match &snapshot {
-                        Some(i) => ("200 OK", serde_json::to_vec(i).map_err(err)?),
-                        None => ("503 Service Unavailable", vec![]),
-                    }
-                } else if let (Some(sha), Some(root), Some(snapshot)) =
-                    (file_hash, &mods, &snapshot)
-                {
-                    if sha.len() != 128 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-                        ("404 Not Found", vec![])
-                    } else if let Some(file) = snapshot
-                        .archivos
-                        .iter()
-                        .find(|a| a.sha512.eq_ignore_ascii_case(sha))
-                    {
-                        let path = root.join(&file.archivo);
-                        let bytes = if nombre_valido(&file.archivo)
-                            && regular(root, true).is_ok()
-                            && regular(&path, false)
-                                .is_ok_and(|m| m.len() == file.bytes && m.len() <= MAX_FILE)
-                        {
-                            let mut bytes = vec![];
-                            fs::File::open(&path)
-                                .and_then(|f| {
-                                    std::io::Read::read_to_end(
-                                        &mut std::io::Read::take(f, MAX_FILE + 1),
-                                        &mut bytes,
-                                    )
-                                })
-                                .map(|_| bytes)
-                                .unwrap_or_default()
-                        } else {
-                            vec![]
-                        };
-                        if bytes.len() as u64 == file.bytes
-                            && hash(&bytes) == file.sha512.to_lowercase()
-                        {
-                            ("200 OK", bytes)
-                        } else {
-                            ("410 Gone", vec![])
-                        }
-                    } else {
-                        ("404 Not Found", vec![])
-                    }
-                } else {
-                    ("404 Not Found", vec![])
-                };
-                let content = if file_hash.is_some() {
-                    "application/octet-stream"
-                } else {
-                    "application/json"
-                };
-                let head=format!("HTTP/1.1 {status}\r\nContent-Type: {content}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",body.len());
-                socket.write_all(head.as_bytes()).await.map_err(err)?;
-                socket.write_all(&body).await.map_err(err)?;
-                Ok::<_, String>(())
-            };
-            tokio::select! { _=c.cancelled()=>{}, _=tokio::time::timeout(Duration::from_secs(120),request)=>{} }
+            let _permiso = permiso;
+            tokio::select! { _ = c.cancelled() => {}, _ = atender(socket, index, mods, descargas) => {} }
         });
     }
+}
+
+/// Solicitud HTTP mínima: solo se interpretan las cabeceras que usa el servicio.
+struct Solicitud {
+    linea: String,
+    si_no_coincide: Option<String>,
+    rango: Option<String>,
+    si_rango: Option<String>,
+    cerrar: bool,
+}
+fn leer_solicitud(datos: &[u8]) -> Result<Solicitud, String> {
+    let texto = std::str::from_utf8(datos).map_err(err)?;
+    let mut lineas = texto.split("\r\n");
+    let linea = lineas.next().unwrap_or("").to_owned();
+    let mut solicitud = Solicitud {
+        cerrar: linea.ends_with(" HTTP/1.0"),
+        linea,
+        si_no_coincide: None,
+        rango: None,
+        si_rango: None,
+    };
+    for cabecera in lineas {
+        let Some((nombre, valor)) = cabecera.split_once(':') else { continue };
+        let valor = valor.trim().to_owned();
+        match nombre.trim().to_ascii_lowercase().as_str() {
+            "if-none-match" => solicitud.si_no_coincide = Some(valor),
+            "range" => solicitud.rango = Some(valor),
+            "if-range" => solicitud.si_rango = Some(valor),
+            "connection" => solicitud.cerrar = valor.eq_ignore_ascii_case("close"),
+            _ => {}
+        }
+    }
+    Ok(solicitud)
+}
+/// `bytes=N-` o `bytes=N-M` sobre un archivo de `total` bytes; otro formato se ignora.
+fn rango_pedido(valor: &str, total: u64) -> Option<Result<(u64, u64), ()>> {
+    let (inicio, fin) = valor.strip_prefix("bytes=")?.split_once('-')?;
+    let inicio = inicio.trim().parse::<u64>().ok()?;
+    let fin = match fin.trim() {
+        "" => total.checked_sub(1)?,
+        f => f.parse::<u64>().ok()?.min(total.checked_sub(1)?),
+    };
+    Some(if inicio <= fin && inicio < total { Ok((inicio, fin)) } else { Err(()) })
+}
+
+/// Atiende varias solicitudes por conexión. Solo las respuestas correctas la
+/// mantienen abierta; un error o una solicitud inválida la cierran.
+async fn atender(
+    mut socket: tokio::net::TcpStream,
+    index: Publicacion,
+    mods: Option<PathBuf>,
+    descargas: Arc<tokio::sync::Semaphore>,
+) -> Result<(), String> {
+    let mut pendiente = Vec::new();
+    for _ in 0..100 {
+        let fin_cabeceras = loop {
+            if let Some(fin) = pendiente.windows(4).position(|w| w == b"\r\n\r\n") {
+                break fin + 4;
+            }
+            let mut buf = [0u8; 1024];
+            let leido = tokio::time::timeout(Duration::from_secs(15), socket.read(&mut buf)).await;
+            let n = match leido {
+                Ok(Ok(n)) if n > 0 => n,
+                _ => return Ok(()),
+            };
+            if pendiente.len() + n > 4096 {
+                return Ok(());
+            }
+            pendiente.extend_from_slice(&buf[..n]);
+        };
+        let datos: Vec<u8> = pendiente.drain(..fin_cabeceras).collect();
+        let Ok(solicitud) = leer_solicitud(&datos) else {
+            responder_y_cerrar(&mut socket, "400 Bad Request").await;
+            return Ok(());
+        };
+        let respuesta = tokio::time::timeout(
+            Duration::from_secs(120),
+            responder(&mut socket, &solicitud, &index, mods.as_deref(), &descargas),
+        )
+        .await;
+        if !matches!(respuesta, Ok(Ok(true))) || solicitud.cerrar {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+async fn responder_y_cerrar(socket: &mut tokio::net::TcpStream, estado: &str) {
+    let cabecera = format!("HTTP/1.1 {estado}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+    let _ = socket.write_all(cabecera.as_bytes()).await;
+}
+/// Devuelve si la conexión puede seguir abierta.
+async fn responder(
+    socket: &mut tokio::net::TcpStream,
+    solicitud: &Solicitud,
+    index: &Publicacion,
+    mods: Option<&Path>,
+    descargas: &tokio::sync::Semaphore,
+) -> Result<bool, String> {
+    let linea = solicitud.linea.as_str();
+    let es_indice = linea == format!("GET {RUTA} HTTP/1.1") || linea == format!("GET {RUTA} HTTP/1.0");
+    let file_hash = linea
+        .strip_prefix("GET /icaro/v1/files/")
+        .and_then(|s| s.strip_suffix(" HTTP/1.1").or_else(|| s.strip_suffix(" HTTP/1.0")));
+    let snapshot = index.read().await.clone();
+    let conexion = if solicitud.cerrar { "close" } else { "keep-alive" };
+    if es_indice {
+        let Some(indice) = snapshot else {
+            responder_y_cerrar(socket, "503 Service Unavailable").await;
+            return Ok(false);
+        };
+        // La revisión identifica el contenido: el cliente puede evitar descargarlo otra vez.
+        let etiqueta = format!("\"{}\"", indice.revision()?);
+        if solicitud.si_no_coincide.as_deref() == Some(etiqueta.as_str()) {
+            let cabecera = format!("HTTP/1.1 304 Not Modified\r\nETag: {etiqueta}\r\nCache-Control: no-cache\r\nConnection: {conexion}\r\n\r\n");
+            socket.write_all(cabecera.as_bytes()).await.map_err(err)?;
+            return Ok(true);
+        }
+        let cuerpo = serde_json::to_vec(&indice).map_err(err)?;
+        let cabecera = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nETag: {etiqueta}\r\nCache-Control: no-cache\r\nConnection: {conexion}\r\n\r\n", cuerpo.len());
+        socket.write_all(cabecera.as_bytes()).await.map_err(err)?;
+        socket.write_all(&cuerpo).await.map_err(err)?;
+        return Ok(true);
+    }
+    let (Some(sha), Some(root), Some(snapshot)) = (file_hash, mods, snapshot) else {
+        responder_y_cerrar(socket, "404 Not Found").await;
+        return Ok(false);
+    };
+    let sha = sha.to_ascii_lowercase();
+    let Some(archivo) = (sha.len() == 128 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| snapshot.archivos.iter().find(|a| a.sha512.eq_ignore_ascii_case(&sha)))
+        .flatten()
+        .cloned()
+    else {
+        responder_y_cerrar(socket, "404 Not Found").await;
+        return Ok(false);
+    };
+    let Ok(_turno) = tokio::time::timeout(Duration::from_secs(60), descargas.acquire()).await else {
+        responder_y_cerrar(socket, "503 Service Unavailable").await;
+        return Ok(false);
+    };
+    let ruta = root.join(&archivo.archivo);
+    let valido = nombre_valido(&archivo.archivo)
+        && regular(root, true).is_ok()
+        && regular(&ruta, false).is_ok_and(|m| m.len() == archivo.bytes && m.len() <= MAX_FILE);
+    // Con los metadatos ya verificados se envía por bloques sin releerlo entero;
+    // si cambiaron, se comprueba el contenido antes de servirlo.
+    let (raiz, nombre, esperado) = (root.to_path_buf(), archivo.archivo.clone(), sha.clone());
+    let vigente = valido
+        && tokio::task::spawn_blocking(move || {
+            dedicado::sha_vigente(&raiz, &nombre).as_deref() == Some(esperado.as_str())
+                || hash_archivo(&raiz.join(&nombre)).is_ok_and(|h| h == esperado)
+        })
+        .await
+        .unwrap_or(false);
+    if !vigente {
+        responder_y_cerrar(socket, "410 Gone").await;
+        return Ok(false);
+    }
+    let total = archivo.bytes;
+    let etiqueta = format!("\"{sha}\"");
+    // If-Range distinto de esta etiqueta: se entrega el archivo completo.
+    let rango = solicitud
+        .rango
+        .as_deref()
+        .filter(|_| solicitud.si_rango.as_deref().is_none_or(|v| v == etiqueta))
+        .and_then(|r| rango_pedido(r, total));
+    let (estado, inicio, fin) = match rango {
+        Some(Ok((inicio, fin))) => ("206 Partial Content", inicio, fin),
+        Some(Err(())) => {
+            let cabecera = format!("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = socket.write_all(cabecera.as_bytes()).await;
+            return Ok(false);
+        }
+        None => ("200 OK", 0, total.saturating_sub(1)),
+    };
+    let longitud = if total == 0 { 0 } else { fin - inicio + 1 };
+    let rango_cabecera = if estado.starts_with("206") { format!("Content-Range: bytes {inicio}-{fin}/{total}\r\n") } else { String::new() };
+    let cabecera = format!("HTTP/1.1 {estado}\r\nContent-Type: application/octet-stream\r\nContent-Length: {longitud}\r\nETag: {etiqueta}\r\nAccept-Ranges: bytes\r\n{rango_cabecera}Cache-Control: no-store\r\nConnection: {conexion}\r\n\r\n");
+    let mut origen = tokio::fs::File::open(&ruta).await.map_err(err)?;
+    tokio::io::AsyncSeekExt::seek(&mut origen, std::io::SeekFrom::Start(inicio)).await.map_err(err)?;
+    socket.write_all(cabecera.as_bytes()).await.map_err(err)?;
+    let enviados = tokio::io::copy(&mut tokio::io::AsyncReadExt::take(origen, longitud), socket).await.map_err(err)?;
+    Ok(enviados == longitud)
 }
 
 #[cfg(test)]
@@ -2265,6 +2642,8 @@ mod tests {
         assert!(plan.cambios.is_empty());
         aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_,_| panic!("No copiar un conjunto ya completo")).await.unwrap();
         let anterior = huella(&store, &i.id).unwrap();
+        // El registro verificado caducó: la revisión vuelve a consultar Modrinth.
+        fs::remove_file(store.juego(&i.id).unwrap().join(VERIFICADO)).unwrap();
         let server = jar("biblioteca", "server");
         let v = f.versions.get_mut("biblioteca1").unwrap();
         v.files[0].hashes.sha512 = hash(&server); v.files[0].size = server.len() as u64;
@@ -2460,6 +2839,9 @@ mod tests {
             let mut contenido = bloque.clone();
             contenido[..4].copy_from_slice(&(n as u32).to_le_bytes());
             fs::write(dir.join(format!("personal-{n:03}.jar")), contenido).unwrap();
+            // Una instancia real tiene mods antiguos; los recién escritos no entran en el inventario.
+            let hace = std::time::SystemTime::now() - Duration::from_secs(3600);
+            fs::File::options().write(true).open(dir.join(format!("personal-{n:03}.jar"))).unwrap().set_modified(hace).unwrap();
         }
         let inicio = std::time::Instant::now();
         let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
@@ -2471,7 +2853,11 @@ mod tests {
         let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
         aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
         let sin_cambios = inicio.elapsed();
-        println!("MEDICION revision={revision:?} aplicacion={aplicacion:?} jugar_sin_cambios={sin_cambios:?}");
+        let inicio = std::time::Instant::now();
+        let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let sin_cambios_2 = inicio.elapsed();
+        println!("MEDICION revision={revision:?} aplicacion={aplicacion:?} jugar_sin_cambios={sin_cambios:?} jugar_sin_cambios_2={sin_cambios_2:?}");
     }
     fn transaccion(juego: &Path, confirmada: bool, movimientos: &[(&str, &str)]) -> PathBuf {
         let tx = juego.join(format!("{PREFIJO_TX}prueba"));
@@ -2591,6 +2977,261 @@ mod tests {
         for invalida in ["../a.jar", "mods/../a.jar", "mods/sub/a.jar", "C:/a.jar", "mods/a\\b.jar", "options.txt", "saves/mundo/level.dat", ".icaro-mods-tx-x/nuevos/a", ".icaro-mods-tx-x/otros/1", "/mods/a.jar", ""] {
             assert!(ruta_diario(juego, invalida).is_err(), "{invalida}");
         }
+    }
+    #[tokio::test]
+    async fn la_segunda_revision_reutiliza_el_inventario_y_detecta_mods_modificados() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        fs::write(dir.join("personal.jar"), b"mod personal").unwrap();
+        let envejecer = |nombre: &std::ffi::OsStr| {
+            let hace = std::time::SystemTime::now() - Duration::from_secs(3600);
+            fs::File::options().write(true).open(dir.join(nombre)).unwrap().set_modified(hace).unwrap();
+        };
+        for entrada in fs::read_dir(&dir).unwrap() {
+            envejecer(&entrada.unwrap().file_name());
+        }
+        let primera = analizar(&store, &i).await.unwrap();
+        assert_eq!(primera.reutilizados, 0);
+        let segunda = analizar(&store, &i).await.unwrap();
+        assert_eq!((segunda.releidos, segunda.reutilizados), (0, primera.releidos));
+        assert_eq!(segunda.huella, primera.huella);
+        assert_eq!(segunda.identidades, primera.identidades);
+        // Un mod gestionado editado se relee y la revisión lo rechaza como antes.
+        fs::write(dir.join("example-1.jar"), b"editado").unwrap();
+        envejecer(std::ffi::OsStr::new("example-1.jar"));
+        let error = analizar(&store, &i).await.unwrap_err();
+        assert!(error.contains("fue modificado"), "{error}");
+    }
+    #[tokio::test]
+    async fn las_descargas_respetan_el_limite_y_se_detienen_con_el_primer_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (activas, maximo) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let trabajo = |n: usize, falla: bool| -> (String, Trabajo<'_>) {
+            let (activas, maximo) = (&activas, &maximo);
+            (n.to_string(), Box::pin(async move {
+                let ahora = activas.fetch_add(1, Ordering::SeqCst) + 1;
+                maximo.fetch_max(ahora, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                activas.fetch_sub(1, Ordering::SeqCst);
+                if falla { Err(format!("falló {n}")) } else { Ok(n.to_string()) }
+            }))
+        };
+        let avisos = std::sync::Mutex::new(vec![]);
+        let aviso = |id: &str, hecho: bool| avisos.lock().unwrap().push((id.to_owned(), hecho));
+        en_paralelo((0..10).map(|n| trabajo(n, false)).collect(), 4, &aviso).await.unwrap();
+        assert_eq!(maximo.load(Ordering::SeqCst), 4);
+        let terminados = avisos.lock().unwrap().iter().filter(|(_, hecho)| *hecho).count();
+        assert_eq!(terminados, 10);
+
+        // Con un error, el resto no llega a empezar.
+        avisos.lock().unwrap().clear();
+        let trabajos = (0..10).map(|n| trabajo(n, n == 1)).collect();
+        assert_eq!(en_paralelo(trabajos, 2, &aviso).await.unwrap_err(), "falló 1");
+        assert!(avisos.lock().unwrap().iter().all(|(id, _)| id.parse::<usize>().unwrap() < 3));
+    }
+    /// Envía una solicitud por una conexión ya abierta y lee cabeceras y cuerpo
+    /// según Content-Length, sin esperar a que el servicio cierre la conexión.
+    async fn pedir(conexion: &mut tokio::net::TcpStream, solicitud: &str) -> (String, Vec<u8>) {
+        conexion.write_all(solicitud.as_bytes()).await.unwrap();
+        let mut datos = vec![];
+        let fin = loop {
+            if let Some(fin) = datos.windows(4).position(|w| w == b"\r\n\r\n") { break fin + 4; }
+            let mut buf = [0u8; 4096];
+            let n = conexion.read(&mut buf).await.unwrap();
+            assert!(n > 0, "conexión cerrada antes de las cabeceras");
+            datos.extend_from_slice(&buf[..n]);
+        };
+        let cabeceras = String::from_utf8_lossy(&datos[..fin]).into_owned();
+        let largo = cabeceras.lines().find_map(|l| l.strip_prefix("Content-Length: ")).map_or(0, |v| v.trim().parse::<usize>().unwrap());
+        let mut cuerpo = datos[fin..].to_vec();
+        while cuerpo.len() < largo {
+            let mut buf = [0u8; 4096];
+            let n = conexion.read(&mut buf).await.unwrap();
+            assert!(n > 0);
+            cuerpo.extend_from_slice(&buf[..n]);
+        }
+        (cabeceras, cuerpo)
+    }
+    #[tokio::test]
+    async fn el_indice_responde_304_y_varias_solicitudes_comparten_conexion() {
+        let f = fake();
+        let indice = index(&f, "v2");
+        let etiqueta = format!("\"{}\"", indice.revision().unwrap());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let servicio = tokio::spawn(servir(listener, Arc::new(RwLock::new(Some(indice.clone()))), cancel.clone()));
+        let mut conexion = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (cabeceras, cuerpo) = pedir(&mut conexion, &format!("GET {RUTA} HTTP/1.1\r\nHost: x\r\n\r\n")).await;
+        assert!(cabeceras.starts_with("HTTP/1.1 200") && cabeceras.contains(&format!("ETag: {etiqueta}")), "{cabeceras}");
+        assert_eq!(serde_json::from_slice::<Indice>(&cuerpo).unwrap().revision().unwrap(), indice.revision().unwrap());
+        // Misma conexión, índice sin cambios: 304 sin cuerpo.
+        let (cabeceras, cuerpo) = pedir(&mut conexion, &format!("GET {RUTA} HTTP/1.1\r\nHost: x\r\nIf-None-Match: {etiqueta}\r\n\r\n")).await;
+        assert!(cabeceras.starts_with("HTTP/1.1 304") && cuerpo.is_empty(), "{cabeceras}");
+        // El cliente guarda la etiqueta y reutiliza su copia en la siguiente consulta.
+        assert_eq!(consultar(addr, CancellationToken::new()).await.unwrap().revision().unwrap(), indice.revision().unwrap());
+        assert_eq!(consultar(addr, CancellationToken::new()).await.unwrap().revision().unwrap(), indice.revision().unwrap());
+        cancel.cancel();
+        servicio.await.unwrap().unwrap();
+    }
+    #[tokio::test]
+    async fn los_archivos_propios_admiten_rangos_validados_y_rechazan_rangos_imposibles() {
+        let (_temp, store, _i) = store();
+        let mods = store.datos().unwrap().join("servidor-mods");
+        fs::create_dir_all(&mods).unwrap();
+        let contenido = b"0123456789abcdef".to_vec();
+        fs::write(mods.join("propio.jar"), &contenido).unwrap();
+        let sha = hash(&contenido);
+        let mut indice = index(&fake(), "v1");
+        indice.esquema = 2;
+        indice.archivos.push(ArchivoPropio { id: "icaro-host-propio".into(), nombre: "Propio".into(), version: "1".into(), archivo: "propio.jar".into(), bytes: contenido.len() as u64, sha512: sha.clone() });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let servicio = tokio::spawn(servir_archivos(listener, Arc::new(RwLock::new(Some(indice))), cancel.clone(), Some(mods.clone())));
+        let ruta = format!("/icaro/v1/files/{sha}");
+        let mut conexion = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (cabeceras, cuerpo) = pedir(&mut conexion, &format!("GET {ruta} HTTP/1.1\r\nHost: x\r\nRange: bytes=10-\r\nIf-Range: \"{sha}\"\r\n\r\n")).await;
+        assert!(cabeceras.starts_with("HTTP/1.1 206") && cabeceras.contains("Content-Range: bytes 10-15/16"), "{cabeceras}");
+        assert_eq!(cuerpo, b"abcdef");
+        // Un validador distinto entrega el archivo completo, nunca un tramo de otro contenido.
+        let (cabeceras, cuerpo) = pedir(&mut conexion, &format!("GET {ruta} HTTP/1.1\r\nHost: x\r\nRange: bytes=10-\r\nIf-Range: \"otro\"\r\n\r\n")).await;
+        assert!(cabeceras.starts_with("HTTP/1.1 200"), "{cabeceras}");
+        assert_eq!(cuerpo, contenido);
+        let (cabeceras, _) = pedir(&mut conexion, &format!("GET {ruta} HTTP/1.1\r\nHost: x\r\nRange: bytes=99-\r\n\r\n")).await;
+        assert!(cabeceras.starts_with("HTTP/1.1 416") && cabeceras.contains("Content-Range: bytes */16"), "{cabeceras}");
+        // Un archivo cambiado tras publicar no se entrega con el hash anterior.
+        fs::write(mods.join("propio.jar"), b"0123456789ABCDEF").unwrap();
+        let mut conexion = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (cabeceras, _) = pedir(&mut conexion, &format!("GET {ruta} HTTP/1.1\r\nHost: x\r\n\r\n")).await;
+        assert!(cabeceras.starts_with("HTTP/1.1 410"), "{cabeceras}");
+        cancel.cancel();
+        servicio.await.unwrap().unwrap();
+    }
+    /// Anfitrión de prueba que corta la primera descarga a la mitad. Con `rangos`
+    /// atiende la reanudación con 206; sin ellos responde 200, como un servicio antiguo.
+    async fn anfitrion_que_corta(contenido: Vec<u8>, rangos: bool) -> (SocketAddr, Arc<std::sync::Mutex<Vec<String>>>, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let solicitudes = Arc::new(std::sync::Mutex::new(vec![]));
+        let registro = solicitudes.clone();
+        let tarea = tokio::spawn(async move {
+            for intento in 0.. {
+                let (mut s, _) = listener.accept().await.unwrap();
+                let mut datos = vec![];
+                while !datos.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let mut buf = [0u8; 1024];
+                    let n = s.read(&mut buf).await.unwrap();
+                    if n == 0 { break; }
+                    datos.extend_from_slice(&buf[..n]);
+                }
+                let texto = String::from_utf8_lossy(&datos).into_owned();
+                registro.lock().unwrap().push(texto.clone());
+                let total = contenido.len();
+                let desde = texto.lines().find_map(|l| l.strip_prefix("range: bytes=").or_else(|| l.strip_prefix("Range: bytes=")))
+                    .and_then(|r| r.trim_end_matches('-').parse::<usize>().ok());
+                let (cabecera, cuerpo) = match desde.filter(|_| rangos) {
+                    Some(d) => (format!("HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {d}-{}/{total}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", total - 1, total - d), contenido[d..].to_vec()),
+                    None => (format!("HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nConnection: close\r\n\r\n"), contenido.clone()),
+                };
+                s.write_all(cabecera.as_bytes()).await.unwrap();
+                // La primera respuesta se corta tras la mitad del cuerpo.
+                let enviar = if intento == 0 { &cuerpo[..cuerpo.len() / 2] } else { &cuerpo[..] };
+                s.write_all(enviar).await.unwrap();
+            }
+        });
+        (addr, solicitudes, tarea)
+    }
+    #[tokio::test]
+    async fn una_descarga_cortada_del_anfitrion_se_reanuda_o_reinicia_sin_mezclar() {
+        let contenido: Vec<u8> = (0..200_000u32).map(|n| (n % 251) as u8).collect();
+        let archivo = ArchivoPropio { id: "icaro-host-grande".into(), nombre: "Grande".into(), version: "1".into(), archivo: "grande.jar".into(), bytes: contenido.len() as u64, sha512: hash(&contenido) };
+        let carpeta = std::env::temp_dir().join(format!("icaro-reanudar-{}", hash(&contenido)[..16].to_owned()));
+        fs::create_dir_all(&carpeta).unwrap();
+        for rangos in [true, false] {
+            let (addr, solicitudes, tarea) = anfitrion_que_corta(contenido.clone(), rangos).await;
+            // El origen es el puerto de Minecraft + 1: el del servicio de prueba.
+            let origen = addr.to_string();
+            let destino = carpeta.join(format!("rangos-{rangos}"));
+            descargar_propio_a(&origen, &archivo, &destino).await.unwrap();
+            assert_eq!(fs::read(&destino).unwrap(), contenido);
+            let pedidas = solicitudes.lock().unwrap().clone();
+            assert_eq!(pedidas.len(), 2, "{pedidas:?}");
+            let segunda = pedidas[1].to_ascii_lowercase();
+            assert!(segunda.contains("range: bytes=") && segunda.contains(&format!("if-range: \"{}\"", archivo.sha512)), "{segunda}");
+            tarea.abort();
+        }
+        fs::remove_dir_all(carpeta).unwrap();
+    }
+    #[test]
+    fn el_host_reutiliza_hashes_de_mods_sin_cambios() {
+        let (_temp, store, _i) = store();
+        let carpeta = store.datos().unwrap().join("servidor");
+        let mods = carpeta.join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        fs::write(mods.join("a.jar"), b"uno").unwrap();
+        let hace = std::time::SystemTime::now() - Duration::from_secs(3600);
+        fs::File::options().write(true).open(mods.join("a.jar")).unwrap().set_modified(hace).unwrap();
+        let servidor = dedicado::ServidorDedicado { carpeta, minecraft: "1.20.1".into(), loader: "fabric".into(), loader_version: "0.16.14".into(), excluir: BTreeSet::new() };
+        assert_eq!(servidor.huella().unwrap(), fingerprint(&mods).unwrap());
+        assert_eq!(dedicado::sha_vigente(&mods, "a.jar"), Some(hash(b"uno")));
+        // Un cambio invalida el hash guardado y la siguiente huella lo relee.
+        fs::write(mods.join("a.jar"), b"dos").unwrap();
+        assert_eq!(dedicado::sha_vigente(&mods, "a.jar"), None);
+        assert_eq!(servidor.huella().unwrap(), fingerprint(&mods).unwrap());
+    }
+    /// Fuente que falla ante cualquier consulta: prueba que no se usó la red.
+    struct SinRed;
+    impl Fuente for SinRed {
+        async fn version(&self, _: &str) -> Result<Version, Error> { Err(Error::Datos) }
+        async fn versiones(&self, _: &str, _: &str, _: &str) -> Result<Vec<Version>, Error> { Err(Error::Datos) }
+        async fn nombre(&self, _: &str) -> Result<String, Error> { Err(Error::Datos) }
+        async fn archivo(&self, _: &ModFile) -> Result<Vec<u8>, Error> { Err(Error::Datos) }
+        async fn versiones_por_hash(&self, _: &[String]) -> Result<BTreeMap<String, Version>, Error> { Err(Error::Datos) }
+        async fn solo_cliente(&self, _: &str) -> Result<bool, Error> { Err(Error::Datos) }
+    }
+    #[tokio::test]
+    async fn sincronizacion_verificada_se_confirma_sin_red_hasta_que_cambia_la_carpeta() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let juego = store.juego(&i.id).unwrap();
+        assert!(juego.join(VERIFICADO).exists());
+        let antes = huella(&store, &i.id).unwrap();
+
+        // Mismo anfitrión y misma carpeta: plan vacío sin una sola consulta.
+        let plan = preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        assert!(plan.sin_red && plan.cambios.is_empty());
+        aplicar(&SinRed, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        assert_eq!(huella(&store, &i.id).unwrap(), antes);
+
+        // Otro origen o una revisión distinta vuelven al camino normal.
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "otro".into()).await.is_err());
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v2"), "host".into()).await.is_err());
+
+        // Un mod personal nuevo invalida el atajo y un plan sin red obsoleto se rechaza.
+        let dir = juego.join("mods");
+        fs::write(dir.join("personal.jar"), b"nuevo").unwrap();
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.is_err());
+        let error = aplicar(&SinRed, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap_err();
+        assert!(error.contains("cambiaron") || error.contains("Comprueba de nuevo"), "{error}");
+        assert!(dir.join("personal.jar").exists() && dir.join("example-1.jar").exists());
+
+        // Con la red, el plan normal conserva el mod personal y renueva el registro.
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        assert!(!plan.sin_red && plan.cambios.is_empty());
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.unwrap().sin_red);
+
+        // Pasadas 24 h el registro caduca y se vuelve a confirmar con Modrinth.
+        let mut registro = leer_verificado(&juego).unwrap();
+        registro.fecha -= VIGENCIA_VERIFICADO;
+        fs::write(juego.join(VERIFICADO), serde_json::to_vec(&registro).unwrap()).unwrap();
+        assert!(preparar(&SinRed, &store, &i, index(&f, "v1"), "host".into()).await.is_err());
     }
     #[tokio::test]
     async fn descartar_la_revision_local_detiene_el_trabajo_bloqueante() {
