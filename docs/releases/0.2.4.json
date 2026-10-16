@@ -1,0 +1,11 @@
+{
+  "version": "0.2.4",
+  "notas": [
+    {"tipo":"mejora","texto":"Jugar con los mods al día es casi instantáneo: la revisión solo vuelve a leer los archivos nuevos o modificados."},
+    {"tipo":"mejora","texto":"Si el servidor y tus mods no cambiaron desde la última sincronización, se confirma sin consultar Modrinth."},
+    {"tipo":"mejora","texto":"Menos peticiones a Modrinth: consultas por lotes, caché sin bloqueos y un ritmo que evita agotar el límite de la API."},
+    {"tipo":"mejora","texto":"Las descargas de mods van directamente a disco y se hacen en paralelo, sin cargar cada archivo en memoria."},
+    {"tipo":"mejora","texto":"El servicio del anfitrión solo procesa los mods que cambian, atiende las descargas en cola y mantiene las conexiones abiertas."},
+    {"tipo":"correccion","texto":"Una descarga cortada desde el anfitrión continúa donde quedó en lugar de empezar de nuevo."}
+  ]
+}

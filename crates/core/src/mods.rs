@@ -243,6 +243,29 @@ pub trait Fuente: Sync {
     fn solo_cliente(&self, _project: &str) -> impl std::future::Future<Output = Result<bool, Error>> + Send {
         async { Ok(false) }
     }
+    /// Proyectos exclusivos de cliente entre `projects`. Las fuentes con
+    /// consultas por lote deben sobrescribirlo para no pedir uno a uno.
+    fn solo_cliente_lote(&self, projects: &[String]) -> impl std::future::Future<Output = Result<BTreeSet<String>, Error>> + Send {
+        async move {
+            let mut result = BTreeSet::new();
+            for p in projects {
+                if self.solo_cliente(p).await? {
+                    result.insert(p.clone());
+                }
+            }
+            Ok(result)
+        }
+    }
+    /// Nombre visible de cada proyecto, consultado por lotes cuando la fuente lo permite.
+    fn nombres(&self, projects: &[String]) -> impl std::future::Future<Output = Result<BTreeMap<String, String>, Error>> + Send {
+        async move {
+            let mut result = BTreeMap::new();
+            for p in projects {
+                result.insert(p.clone(), self.nombre(p).await?);
+            }
+            Ok(result)
+        }
+    }
     fn version(&self, id: &str)
         -> impl std::future::Future<Output = Result<Version, Error>> + Send;
     fn versiones(
@@ -259,6 +282,21 @@ pub trait Fuente: Sync {
         &self,
         file: &ModFile,
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Error>> + Send;
+    /// Descarga y verifica tamaño y SHA-512 directamente en `destino`. Por
+    /// defecto usa [`Fuente::archivo`]; las fuentes de red lo hacen por bloques.
+    fn descargar_a(
+        &self,
+        file: &ModFile,
+        destino: &Path,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let bytes = self.archivo(file).await?;
+            if bytes.len() as u64 != file.size || hash(&bytes) != file.hashes.sha512.to_lowercase() {
+                return Err(Error::Hash);
+            }
+            guardar_archivo(destino, &bytes)
+        }
+    }
 }
 impl Fuente for Catalog {
     async fn actualizaciones_por_hash(&self, hashes:&[String], mc:&str, loader:&str) -> Result<Option<BTreeMap<String, Version>>, Error> {
@@ -276,6 +314,29 @@ impl Fuente for Catalog {
         let p = self.project(project).await?;
         Ok(p.server_side == "unsupported" && p.client_side != "unsupported")
     }
+    async fn solo_cliente_lote(&self, projects: &[String]) -> Result<BTreeSet<String>, Error> {
+        let mut result = BTreeSet::new();
+        for lote in projects.chunks(512) {
+            let fichas = self.projects_by_ids(lote).await?;
+            for id in lote {
+                let p = fichas.get(id).ok_or(Error::Datos)?;
+                if p.server_side == "unsupported" && p.client_side != "unsupported" {
+                    result.insert(id.clone());
+                }
+            }
+        }
+        Ok(result)
+    }
+    async fn nombres(&self, projects: &[String]) -> Result<BTreeMap<String, String>, Error> {
+        let mut result = BTreeMap::new();
+        for lote in projects.chunks(512) {
+            let fichas = self.projects_by_ids(lote).await?;
+            for id in lote {
+                result.insert(id.clone(), fichas.get(id).ok_or(Error::Datos)?.title.clone());
+            }
+        }
+        Ok(result)
+    }
     async fn version(&self, id: &str) -> Result<Version, Error> {
         Ok(self.version(id).await?)
     }
@@ -287,6 +348,13 @@ impl Fuente for Catalog {
     }
     async fn archivo(&self, f: &ModFile) -> Result<Vec<u8>, Error> {
         Ok(self.download_mod(f).await?)
+    }
+    async fn descargar_a(&self, f: &ModFile, destino: &Path) -> Result<(), Error> {
+        if self.download_mod_to(f, destino).await? != f.hashes.sha512.to_lowercase() {
+            let _ = fs::remove_file(destino);
+            return Err(Error::Hash);
+        }
+        Ok(())
     }
 }
 pub fn compatible(v: &Version, mc: &str, loader: &str) -> bool {
@@ -1298,6 +1366,15 @@ pub async fn instalar(
         }
         let mut occupied: BTreeSet<String> =
             installed.iter().map(|m| m.archivo.to_lowercase()).collect();
+        // Una consulta por lote en lugar de una ficha por cada mod descargado.
+        let pendientes: Vec<_> = plan
+            .iter()
+            .filter(|v| !installed.iter().any(|m| m.project_id == v.project_id && m.version_id == v.id))
+            .map(|v| v.project_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let nombres = source.nombres(&pendientes).await?;
         for v in plan {
             if let Some(m) = installed
                 .iter_mut()
@@ -1341,7 +1418,7 @@ pub async fn instalar(
             {
                 return Err(Error::Hash);
             }
-            let name = source.nombre(&v.project_id).await?;
+            let name = nombres.get(&v.project_id).cloned().ok_or(Error::Datos)?;
             if let Some(i) = old {
                 occupied.remove(&installed[i].archivo.to_lowercase());
                 fs::remove_file(ruta_mod(&stage, &installed[i])).map_err(|_| Error::Disco)?;
