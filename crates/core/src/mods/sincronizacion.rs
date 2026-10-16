@@ -17,6 +17,8 @@ const SYNC: &str = ".icaro-sync.json";
 const MAX_INDEX: usize = 1024 * 1024;
 pub const RUTA: &str = "/icaro/v1/mods";
 pub mod dedicado;
+mod inventario;
+use inventario::Inventario;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -456,6 +458,9 @@ pub struct AnalisisLocal {
     estado: Vec<EstadoArchivo>,
     instalados: Vec<Instalado>,
     identidades: BTreeMap<String, String>,
+    /// Archivos leídos completos y archivos cuyo hash se tomó del inventario.
+    releidos: usize,
+    reutilizados: usize,
 }
 
 /// Calcula una vez los hashes de `mods` fuera del executor. Separarlo de
@@ -468,9 +473,11 @@ pub async fn analizar(store: &Almacen, instance: &Instancia) -> Result<AnalisisL
     let resultado = bloqueante(move |cancel| analizar_bloqueante(&store, &instance, &cancel)).await;
     match &resultado {
         Ok(local) => registrar(format!(
-            "revision-local instancia={id} archivos={} bytes={} ms={}",
+            "revision-local instancia={id} archivos={} bytes={} releidos={} reutilizados={} ms={}",
             local.estado.len(),
             local.estado.iter().map(|e| e.bytes).sum::<u64>(),
+            local.releidos,
+            local.reutilizados,
             ms(inicio)
         )),
         Err(e) => registrar(format!("error fase=revision-local instancia={id} ms={} mensaje={e}", ms(inicio))),
@@ -483,19 +490,22 @@ fn analizar_bloqueante(
     cancel: &CancellationToken,
 ) -> Result<AnalisisLocal, String> {
     let game = store.juego(&instance.id).map_err(err)?;
-    let (huella, estado) = {
+    let mut inventario_previo = Inventario::cargar(&game);
+    let (lectura, estado) = {
         let _lock = guardia(&game).map_err(err)?;
         recuperar(&game).map_err(err)?;
         let dir = game.join("mods");
         // Los metadatos previos y posteriores descartan un archivo que cambió
-        // mientras se calculaba su hash.
+        // mientras se calculaba su hash. Solo se leen los archivos nuevos,
+        // modificados o con la verificación caducada.
         let antes = estado(&dir)?;
-        let huella = fingerprint_cancelable(&dir, cancel)?;
+        let lectura = inventario_previo.leer(&dir, &antes, cancel)?;
         if estado(&dir)? != antes {
             return Err("Los mods cambiaron durante la revisión. Comprueba de nuevo.".into());
         }
-        (huella, antes)
+        (lectura, antes)
     };
+    let huella = lectura.huella;
     let mut instalados = inventario(store, &instance.id).map_err(err)?;
     for m in &mut instalados {
         let filename = if m.activo {
@@ -524,7 +534,17 @@ fn analizar_bloqueante(
             if cancel.is_cancelled() {
                 return Err(CANCELADA.into());
             }
-            if let Some(id) = identidad_fabric(&ruta_mod(&dir, m))? {
+            let nombre = nombre_mod(m);
+            // El descriptor solo se abre si el inventario no lo tiene para este mismo contenido.
+            let id = match inventario_previo.identidad(&nombre, &m.sha512) {
+                Some(id) => id,
+                None => {
+                    let id = identidad_fabric(&ruta_mod(&dir, m))?;
+                    inventario_previo.recordar_identidad(&nombre, id.clone());
+                    id
+                }
+            };
+            if let Some(id) = id {
                 identidades.insert(m.archivo.clone(), id);
             }
         }
@@ -532,12 +552,18 @@ fn analizar_bloqueante(
     if !instancia_sin_cambios(store, &instance.id, &estado, &huella, cancel)? {
         return Err("Los mods cambiaron durante la revisión. Comprueba de nuevo.".into());
     }
+    // Perder el inventario solo obliga a releer; nunca impide sincronizar.
+    if let Err(e) = inventario_previo.guardar(&game) {
+        registrar(format!("aviso fase=inventario instancia={} mensaje={e}", instance.id));
+    }
     Ok(AnalisisLocal {
         instancia: instance.id.clone(),
         huella,
         estado,
         instalados,
         identidades,
+        releidos: lectura.releidos,
+        reutilizados: lectura.reutilizados,
     })
 }
 fn instancia_sin_cambios(
@@ -2460,6 +2486,9 @@ mod tests {
             let mut contenido = bloque.clone();
             contenido[..4].copy_from_slice(&(n as u32).to_le_bytes());
             fs::write(dir.join(format!("personal-{n:03}.jar")), contenido).unwrap();
+            // Una instancia real tiene mods antiguos; los recién escritos no entran en el inventario.
+            let hace = std::time::SystemTime::now() - Duration::from_secs(3600);
+            fs::File::options().write(true).open(dir.join(format!("personal-{n:03}.jar"))).unwrap().set_modified(hace).unwrap();
         }
         let inicio = std::time::Instant::now();
         let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
@@ -2471,7 +2500,11 @@ mod tests {
         let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
         aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
         let sin_cambios = inicio.elapsed();
-        println!("MEDICION revision={revision:?} aplicacion={aplicacion:?} jugar_sin_cambios={sin_cambios:?}");
+        let inicio = std::time::Instant::now();
+        let plan = preparar(&f, &store, &i, index(&f, "v2"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let sin_cambios_2 = inicio.elapsed();
+        println!("MEDICION revision={revision:?} aplicacion={aplicacion:?} jugar_sin_cambios={sin_cambios:?} jugar_sin_cambios_2={sin_cambios_2:?}");
     }
     fn transaccion(juego: &Path, confirmada: bool, movimientos: &[(&str, &str)]) -> PathBuf {
         let tx = juego.join(format!("{PREFIJO_TX}prueba"));
@@ -2591,6 +2624,33 @@ mod tests {
         for invalida in ["../a.jar", "mods/../a.jar", "mods/sub/a.jar", "C:/a.jar", "mods/a\\b.jar", "options.txt", "saves/mundo/level.dat", ".icaro-mods-tx-x/nuevos/a", ".icaro-mods-tx-x/otros/1", "/mods/a.jar", ""] {
             assert!(ruta_diario(juego, invalida).is_err(), "{invalida}");
         }
+    }
+    #[tokio::test]
+    async fn la_segunda_revision_reutiliza_el_inventario_y_detecta_mods_modificados() {
+        let (_temp, store, i) = store();
+        let f = fake();
+        let plan = preparar(&f, &store, &i, index(&f, "v1"), "host".into()).await.unwrap();
+        aplicar(&f, &store, &i, &plan, CancellationToken::new(), |_, _| {}).await.unwrap();
+        let dir = store.juego(&i.id).unwrap().join("mods");
+        fs::write(dir.join("personal.jar"), b"mod personal").unwrap();
+        let envejecer = |nombre: &std::ffi::OsStr| {
+            let hace = std::time::SystemTime::now() - Duration::from_secs(3600);
+            fs::File::options().write(true).open(dir.join(nombre)).unwrap().set_modified(hace).unwrap();
+        };
+        for entrada in fs::read_dir(&dir).unwrap() {
+            envejecer(&entrada.unwrap().file_name());
+        }
+        let primera = analizar(&store, &i).await.unwrap();
+        assert_eq!(primera.reutilizados, 0);
+        let segunda = analizar(&store, &i).await.unwrap();
+        assert_eq!((segunda.releidos, segunda.reutilizados), (0, primera.releidos));
+        assert_eq!(segunda.huella, primera.huella);
+        assert_eq!(segunda.identidades, primera.identidades);
+        // Un mod gestionado editado se relee y la revisión lo rechaza como antes.
+        fs::write(dir.join("example-1.jar"), b"editado").unwrap();
+        envejecer(std::ffi::OsStr::new("example-1.jar"));
+        let error = analizar(&store, &i).await.unwrap_err();
+        assert!(error.contains("fue modificado"), "{error}");
     }
     #[tokio::test]
     async fn descartar_la_revision_local_detiene_el_trabajo_bloqueante() {
