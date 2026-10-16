@@ -1,7 +1,9 @@
 # Changelog
 
-## [Sin publicar]
+## [0.3.0] - En desarrollo
 
+- Publicación por canales. `develop` publica cada cambio como beta (`v<versión>-beta.<compilación>`, prerelease) y `main` publica la estable (`v<versión>-build.<compilación>`) y crea su tag fuente `v<versión>`. Las ramas `vX.Y.x` y los tags ya no publican. `main` exige una versión de Cargo mayor que la última estable, y `develop` una versión mayor que esa estable para sus betas. Los cambios que solo tocan documentación no compilan.
+- Ajustes → Acerca de añade el canal de actualizaciones Estable/Beta, guardado en la configuración. El canal Estable nunca ofrece una beta; el Beta ofrece la release más nueva entre betas y estables. Una compilación beta se identifica en Acerca de y en la pantalla de actualización. Los launchers anteriores ignoran las prereleases.
 - Capturas ya no congela la interfaz al abrirse. La cuadrícula usa miniaturas de 480 × 270 generadas en segundo plano (hasta cuatro a la vez, de la más reciente a la más antigua), que aparecen a medida que están listas; antes cada PNG se decodificaba y se subía a la GPU a resolución completa en el primer cuadro. El visor sigue abriendo el original sin recodificar, y un PNG dañado deja su hueco vacío sin afectar al resto.
 
 ## [0.2.5] - 2026-10-16
