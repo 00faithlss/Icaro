@@ -1,0 +1,7 @@
+{
+  "version": "0.3.0",
+  "notas": [
+    {"tipo":"nuevo","texto":"Canal de actualizaciones: en Ajustes → Acerca de puedes elegir recibir también las versiones beta, que llegan antes y pueden tener errores."},
+    {"tipo":"mejora","texto":"La sección Capturas ya no se congela al abrirse: las miniaturas se preparan en segundo plano y aparecen a medida que están listas."}
+  ]
+}
