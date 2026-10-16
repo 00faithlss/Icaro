@@ -1,5 +1,9 @@
 # Changelog
 
+## Sin publicar
+
+- Acerca de muestra la versión compilada del workspace en lugar del texto fijo `0.1.0`.
+
 ## [0.2.2] - 2026-10-15
 
 - Identifica versiones anteriores y copias duplicadas de un mod por su ID interno y sus hashes. La sincronización respalda y retira las copias activas del mismo mod del servidor, conserva otros mods personales y verifica que no queden dos versiones activas de un mod requerido.

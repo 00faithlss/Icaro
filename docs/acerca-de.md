@@ -2,6 +2,8 @@
 
 Icaro Launcher es un launcher de Minecraft escrito en Rust, ligero y optimizado, para Windows y Arch Linux.
 
+La pantalla **Ajustes → Acerca de** muestra la versión compilada de `icaro-ui`, heredada de `workspace.package.version` en `Cargo.toml`. No mantener números de versión escritos directamente en la interfaz; el actualizador usa la misma fuente. Los ejecutables ya distribuidos requieren recompilarse y publicarse para incorporar esta corrección.
+
 ## Funciones previstas
 
 - Inicio de sesión con cuenta de Microsoft.
